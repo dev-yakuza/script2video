@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.yarn/*
+!.yarn/releases
+.venv/
+__pycache__/
+*.pyc
+.s2v-cache/
+out/
+experiments/m0a/out/
+.DS_Store
+.ruff_cache/

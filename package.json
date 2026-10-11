@@ -1,0 +1,33 @@
+{
+  "name": "script2video",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Markdown script to narrated explainer video (KO/EN/JA) with local open-source TTS",
+  "license": "MIT",
+  "packageManager": "yarn@4.14.1",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "yarn workspaces foreach -At run build",
+    "typecheck": "yarn workspaces foreach -At run typecheck",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.5",
+    "eslint": "^10.12.0",
+    "prettier": "^3.9.9",
+    "typescript": "~6.0.0",
+    "typescript-eslint": "^8.71.1",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3"
+  },
+  "type": "module"
+}

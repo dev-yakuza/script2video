@@ -1,0 +1,32 @@
+{
+  "name": "@script2video/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Script parser, schema and timeline for script2video (renderer independent)",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "mdast-util-directive": "^3.1.1",
+    "mdast-util-frontmatter": "^2.0.1",
+    "remark-directive": "^4.0.0",
+    "remark-frontmatter": "^5.0.0",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/mdast": "^4.0.4",
+    "typescript": "~6.0.0"
+  }
+}

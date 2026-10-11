@@ -1,0 +1,363 @@
+{
+  "version": 1,
+  "lang": "ko",
+  "entries": {
+    "dc6ecdbe3e9c445b3a8cc59f": {
+      "src": "dc6ecdbe3e9c445b3a8cc59f.wav",
+      "duration": 4.1226,
+      "words": [
+        {
+          "text": "오늘",
+          "start": 0,
+          "end": 0.32
+        },
+        {
+          "text": "은",
+          "start": 0.32,
+          "end": 0.64
+        },
+        {
+          "text": "스크립트",
+          "start": 0.96,
+          "end": 1.6
+        },
+        {
+          "text": "투",
+          "start": 1.6,
+          "end": 1.84
+        },
+        {
+          "text": "비디오",
+          "start": 1.84,
+          "end": 2.24
+        },
+        {
+          "text": "로",
+          "start": 2.24,
+          "end": 2.48
+        },
+        {
+          "text": "대화",
+          "start": 2.56,
+          "end": 2.8
+        },
+        {
+          "text": "영상",
+          "start": 2.8,
+          "end": 3.12
+        },
+        {
+          "text": "을",
+          "start": 3.12,
+          "end": 3.2
+        },
+        {
+          "text": "만들",
+          "start": 3.2,
+          "end": 3.52
+        },
+        {
+          "text": "어",
+          "start": 3.52,
+          "end": 3.52
+        },
+        {
+          "text": "볼게요",
+          "start": 3.52,
+          "end": 4.08
+        }
+      ],
+      "heard": "오늘은 스크립트 투 비디오로 대화 영상을 만들어 볼게요.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "7130137745956765000",
+      "attempt": 0,
+      "pauseRemoved": 0.07,
+      "checks": [],
+      "f0": 216.7
+    },
+    "278212b6f65352f980246453": {
+      "src": "278212b6f65352f980246453.wav",
+      "duration": 1.8,
+      "words": [
+        {
+          "text": "대본만",
+          "start": 0,
+          "end": 0.4
+        },
+        {
+          "text": "쓰면",
+          "start": 0.4,
+          "end": 0.72
+        },
+        {
+          "text": "영상",
+          "start": 0.72,
+          "end": 1.04
+        },
+        {
+          "text": "이",
+          "start": 1.04,
+          "end": 1.12
+        },
+        {
+          "text": "나온다고",
+          "start": 1.12,
+          "end": 1.6
+        },
+        {
+          "text": "요",
+          "start": 1.6,
+          "end": 1.76
+        }
+      ],
+      "heard": "대본만 쓰면 영상이 나온다고요?",
+      "cer": 0,
+      "engine": "persona",
+      "model": "qwen3-tts-1.7b-base",
+      "seed": "7929486761510086000",
+      "attempt": 0,
+      "pauseRemoved": 0,
+      "checks": [],
+      "f0": 145.9
+    },
+    "4994602d1acff9b4f7f0e6be": {
+      "src": "4994602d1acff9b4f7f0e6be.wav",
+      "duration": 4.924,
+      "words": [
+        {
+          "text": "대본에",
+          "start": 0,
+          "end": 0.56
+        },
+        {
+          "text": "설정",
+          "start": 0.56,
+          "end": 1.04
+        },
+        {
+          "text": "버튼",
+          "start": 1.04,
+          "end": 1.36
+        },
+        {
+          "text": "을",
+          "start": 1.36,
+          "end": 1.44
+        },
+        {
+          "text": "누른다고",
+          "start": 1.44,
+          "end": 2
+        },
+        {
+          "text": "쓰면",
+          "start": 2,
+          "end": 2.72
+        },
+        {
+          "text": "그",
+          "start": 3.04,
+          "end": 3.2
+        },
+        {
+          "text": "단어",
+          "start": 3.2,
+          "end": 3.6
+        },
+        {
+          "text": "에서",
+          "start": 3.6,
+          "end": 3.76
+        },
+        {
+          "text": "화면",
+          "start": 3.84,
+          "end": 4.16
+        },
+        {
+          "text": "이",
+          "start": 4.16,
+          "end": 4.24
+        },
+        {
+          "text": "확대",
+          "start": 4.24,
+          "end": 4.64
+        },
+        {
+          "text": "돼요",
+          "start": 4.64,
+          "end": 4.88
+        }
+      ],
+      "heard": "대본의 설정 버튼을 누른다고 쓰면 그 단어에서 화면이 확대돼요.",
+      "cer": 0.038,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "3677354912874501600",
+      "attempt": 1,
+      "pauseRemoved": 0.31,
+      "checks": [],
+      "f0": 226.3
+    },
+    "b0f9ad1fc99b26aaae422223": {
+      "src": "b0f9ad1fc99b26aaae422223.wav",
+      "duration": 2.64,
+      "words": [
+        {
+          "text": "목소리",
+          "start": 0,
+          "end": 0.56
+        },
+        {
+          "text": "와",
+          "start": 0.56,
+          "end": 0.72
+        },
+        {
+          "text": "표정",
+          "start": 0.72,
+          "end": 1.12
+        },
+        {
+          "text": "도",
+          "start": 1.12,
+          "end": 1.36
+        },
+        {
+          "text": "대본에서",
+          "start": 1.36,
+          "end": 1.92
+        },
+        {
+          "text": "정하",
+          "start": 1.92,
+          "end": 2.24
+        },
+        {
+          "text": "는",
+          "start": 2.24,
+          "end": 2.32
+        },
+        {
+          "text": "거죠",
+          "start": 2.32,
+          "end": 2.56
+        }
+      ],
+      "heard": "목소리와 표정도 대본에서 정하는 거죠.",
+      "cer": 0,
+      "engine": "persona",
+      "model": "qwen3-tts-1.7b-base",
+      "seed": "1221115263305817000",
+      "attempt": 0,
+      "pauseRemoved": 0,
+      "checks": [],
+      "f0": 119.2
+    },
+    "c971e247ac19e5d28975201d": {
+      "src": "c971e247ac19e5d28975201d.wav",
+      "duration": 3.3412,
+      "words": [
+        {
+          "text": "네",
+          "start": 0,
+          "end": 0.48
+        },
+        {
+          "text": "캐릭터",
+          "start": 0.72,
+          "end": 1.2
+        },
+        {
+          "text": "와",
+          "start": 1.2,
+          "end": 1.52
+        },
+        {
+          "text": "자막",
+          "start": 1.52,
+          "end": 1.92
+        },
+        {
+          "text": "도",
+          "start": 1.92,
+          "end": 2
+        },
+        {
+          "text": "자동",
+          "start": 2.08,
+          "end": 2.4
+        },
+        {
+          "text": "으로",
+          "start": 2.4,
+          "end": 2.56
+        },
+        {
+          "text": "맞춰져",
+          "start": 2.56,
+          "end": 3.28
+        },
+        {
+          "text": "요",
+          "start": 3.28,
+          "end": 3.28
+        }
+      ],
+      "heard": "네, 캐릭터와 자막도 자동으로 맞춰져요.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "5503873389671917000",
+      "attempt": 0,
+      "pauseRemoved": 0.58,
+      "checks": [],
+      "f0": 227
+    }
+  },
+  "sentences": {
+    "intro:1:0": "dc6ecdbe3e9c445b3a8cc59f",
+    "intro:2:0": "278212b6f65352f980246453",
+    "how:1:0": "4994602d1acff9b4f7f0e6be",
+    "how:2:0": "b0f9ad1fc99b26aaae422223",
+    "how:3:0": "c971e247ac19e5d28975201d"
+  },
+  "env": {
+    "tts": {
+      "id": "script2video-tts",
+      "wrapper_version": "0.2.0",
+      "lock_hash": "1833f658cbb515eb",
+      "models": {
+        "qwen3-tts-1.7b-customvoice": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+        "qwen3-tts-0.6b-customvoice": "85e237c12c027371202489a0ec509ded67b5e4b5",
+        "qwen3-tts-1.7b-voicedesign": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+        "qwen3-tts-1.7b-base": "fd4b254389122332181a7c3db7f27e918eec64e3",
+        "qwen3-asr-0.6b": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+        "qwen3-forcedaligner-0.6b": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+        "supertonic-3": "3cadd1ee6394adea1bd021217a0e650ede09a323"
+      },
+      "loaded": [],
+      "device": "mps",
+      "torch": "2.14.1",
+      "transformers": "4.57.3",
+      "uptime_s": 1.3
+    },
+    "aligner": {
+      "id": "script2video-aligner",
+      "wrapper_version": "0.2.0",
+      "lock_hash": "fa35472df4f8f6d3",
+      "models": {
+        "qwen3-forcedaligner-0.6b": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+        "qwen3-asr-0.6b": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0"
+      },
+      "loaded": [],
+      "device": "mps",
+      "torch": "2.14.1",
+      "transformers": "4.57.6",
+      "uptime_s": 1.4
+    }
+  }
+}

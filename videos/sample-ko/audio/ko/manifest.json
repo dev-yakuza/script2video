@@ -1,0 +1,329 @@
+{
+  "version": 1,
+  "lang": "ko",
+  "entries": {
+    "2d2045420a99fcc4ae9009be": {
+      "src": "2d2045420a99fcc4ae9009be.wav",
+      "duration": 0.8483,
+      "words": [
+        {
+          "text": "안녕",
+          "start": 0,
+          "end": 0.32
+        },
+        {
+          "text": "하세요",
+          "start": 0.32,
+          "end": 0.8
+        }
+      ],
+      "heard": "안녕하세요.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "6417032713728555000",
+      "attempt": 1,
+      "pauseRemoved": 0,
+      "checks": [],
+      "f0": 234.3
+    },
+    "b4e7bfbf35bccb09be43aed2": {
+      "src": "b4e7bfbf35bccb09be43aed2.wav",
+      "duration": 3.7176,
+      "words": [
+        {
+          "text": "오늘",
+          "start": 0,
+          "end": 0.4
+        },
+        {
+          "text": "은",
+          "start": 0.4,
+          "end": 0.64
+        },
+        {
+          "text": "씨엘아이",
+          "start": 0.8,
+          "end": 1.36
+        },
+        {
+          "text": "하나",
+          "start": 1.36,
+          "end": 1.6
+        },
+        {
+          "text": "로",
+          "start": 1.6,
+          "end": 1.76
+        },
+        {
+          "text": "해설",
+          "start": 1.76,
+          "end": 2.08
+        },
+        {
+          "text": "영상",
+          "start": 2.08,
+          "end": 2.48
+        },
+        {
+          "text": "을",
+          "start": 2.48,
+          "end": 2.56
+        },
+        {
+          "text": "만들",
+          "start": 2.56,
+          "end": 2.88
+        },
+        {
+          "text": "어",
+          "start": 2.88,
+          "end": 2.96
+        },
+        {
+          "text": "보겠습니다",
+          "start": 2.96,
+          "end": 3.68
+        }
+      ],
+      "heard": "오늘은 CLI 하나로 해설 영상을 만들어 보겠습니다.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "2012199161628977000",
+      "attempt": 0,
+      "pauseRemoved": 0,
+      "checks": [],
+      "f0": 261.5
+    },
+    "526ac2fed8a56bbd782ec46f": {
+      "src": "526ac2fed8a56bbd782ec46f.wav",
+      "duration": 1.5001,
+      "words": [
+        {
+          "text": "정말",
+          "start": 0,
+          "end": 0.32
+        },
+        {
+          "text": "대본만",
+          "start": 0.32,
+          "end": 0.72
+        },
+        {
+          "text": "쓰면",
+          "start": 0.72,
+          "end": 1.04
+        },
+        {
+          "text": "되나요",
+          "start": 1.04,
+          "end": 1.44
+        }
+      ],
+      "heard": "정말 대본만 쓰면 되나요?",
+      "cer": 0,
+      "engine": "supertonic",
+      "model": "supertonic-3",
+      "seed": "1849396813658560300",
+      "attempt": 0,
+      "pauseRemoved": 0,
+      "checks": [],
+      "f0": 200.5
+    },
+    "1f103d64e399f6a68d529241": {
+      "src": "1f103d64e399f6a68d529241.wav",
+      "duration": 2.4285,
+      "words": [
+        {
+          "text": "오른쪽",
+          "start": 0,
+          "end": 0.64
+        },
+        {
+          "text": "위의",
+          "start": 0.64,
+          "end": 0.88
+        },
+        {
+          "text": "설정",
+          "start": 0.88,
+          "end": 1.36
+        },
+        {
+          "text": "버튼",
+          "start": 1.36,
+          "end": 1.68
+        },
+        {
+          "text": "을",
+          "start": 1.68,
+          "end": 1.76
+        },
+        {
+          "text": "누르",
+          "start": 1.76,
+          "end": 2
+        },
+        {
+          "text": "면",
+          "start": 2,
+          "end": 2.4
+        }
+      ],
+      "heard": "오른쪽 위에 설정 버튼을 누르면",
+      "cer": 0.077,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "1697423996628482600",
+      "attempt": 0,
+      "pauseRemoved": 0,
+      "checks": [],
+      "f0": 285.2
+    },
+    "a5837b08980246d7e2fa25d1": {
+      "src": "a5837b08980246d7e2fa25d1.wav",
+      "duration": 2.1144,
+      "words": [
+        {
+          "text": "새",
+          "start": 0,
+          "end": 0.24
+        },
+        {
+          "text": "프로젝트",
+          "start": 0.24,
+          "end": 0.8
+        },
+        {
+          "text": "를",
+          "start": 0.8,
+          "end": 0.88
+        },
+        {
+          "text": "만들",
+          "start": 0.88,
+          "end": 1.2
+        },
+        {
+          "text": "수",
+          "start": 1.2,
+          "end": 1.36
+        },
+        {
+          "text": "있습니다",
+          "start": 1.36,
+          "end": 1.76
+        }
+      ],
+      "heard": "새 프로젝트를 만들 수 있습니다.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "1241664396950385000",
+      "attempt": 0,
+      "pauseRemoved": 0,
+      "checks": [],
+      "f0": 273.9
+    },
+    "0e1d300529da6b3085ae544f": {
+      "src": "0e1d300529da6b3085ae544f.wav",
+      "duration": 3.0729,
+      "words": [
+        {
+          "text": "영상",
+          "start": 0,
+          "end": 0.4
+        },
+        {
+          "text": "이",
+          "start": 0.4,
+          "end": 0.48
+        },
+        {
+          "text": "도움",
+          "start": 0.48,
+          "end": 0.8
+        },
+        {
+          "text": "이",
+          "start": 0.8,
+          "end": 0.88
+        },
+        {
+          "text": "됐다면",
+          "start": 0.88,
+          "end": 1.76
+        },
+        {
+          "text": "구독",
+          "start": 2.08,
+          "end": 2.32
+        },
+        {
+          "text": "부탁",
+          "start": 2.32,
+          "end": 2.64
+        },
+        {
+          "text": "드려요",
+          "start": 2.64,
+          "end": 3.04
+        }
+      ],
+      "heard": "영상에 도움이 됐다면 구독 부탁드려요.",
+      "cer": 0.063,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "2545510686864215600",
+      "attempt": 0,
+      "pauseRemoved": 0.08,
+      "checks": [],
+      "f0": 237
+    }
+  },
+  "sentences": {
+    "intro:1:0": "2d2045420a99fcc4ae9009be",
+    "intro:1:1": "b4e7bfbf35bccb09be43aed2",
+    "intro:2:0": "526ac2fed8a56bbd782ec46f",
+    "settings:1:0": "1f103d64e399f6a68d529241",
+    "settings:1:1": "a5837b08980246d7e2fa25d1",
+    "settings:2:0": "0e1d300529da6b3085ae544f"
+  },
+  "env": {
+    "tts": {
+      "id": "script2video-tts",
+      "wrapper_version": "0.2.0",
+      "lock_hash": "1833f658cbb515eb",
+      "models": {
+        "qwen3-tts-1.7b-customvoice": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+        "qwen3-tts-0.6b-customvoice": "85e237c12c027371202489a0ec509ded67b5e4b5",
+        "qwen3-tts-1.7b-voicedesign": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+        "qwen3-tts-1.7b-base": "fd4b254389122332181a7c3db7f27e918eec64e3",
+        "qwen3-asr-0.6b": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+        "qwen3-forcedaligner-0.6b": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+        "supertonic-3": "3cadd1ee6394adea1bd021217a0e650ede09a323"
+      },
+      "loaded": [],
+      "device": "mps",
+      "torch": "2.14.1",
+      "transformers": "4.57.3",
+      "uptime_s": 1.1
+    },
+    "aligner": {
+      "id": "script2video-aligner",
+      "wrapper_version": "0.2.0",
+      "lock_hash": "fa35472df4f8f6d3",
+      "models": {
+        "qwen3-forcedaligner-0.6b": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+        "qwen3-asr-0.6b": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0"
+      },
+      "loaded": [],
+      "device": "mps",
+      "torch": "2.14.1",
+      "transformers": "4.57.6",
+      "uptime_s": 1.2
+    }
+  }
+}

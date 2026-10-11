@@ -1,0 +1,40 @@
+{
+  "$comment": "Hugging Face snapshots pinned by commit SHA. Fetch with: uv run --project tts-server python tts-server/scripts/fetch_models.py <name>...",
+  "models": {
+    "qwen3-tts-1.7b-customvoice": {
+      "repo": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+      "revision": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+      "license": "Apache-2.0"
+    },
+    "qwen3-tts-0.6b-customvoice": {
+      "repo": "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+      "revision": "85e237c12c027371202489a0ec509ded67b5e4b5",
+      "license": "Apache-2.0"
+    },
+    "qwen3-tts-1.7b-voicedesign": {
+      "repo": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+      "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+      "license": "Apache-2.0"
+    },
+    "qwen3-tts-1.7b-base": {
+      "repo": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "revision": "fd4b254389122332181a7c3db7f27e918eec64e3",
+      "license": "Apache-2.0"
+    },
+    "qwen3-asr-0.6b": {
+      "repo": "Qwen/Qwen3-ASR-0.6B",
+      "revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+      "license": "Apache-2.0"
+    },
+    "qwen3-forcedaligner-0.6b": {
+      "repo": "Qwen/Qwen3-ForcedAligner-0.6B",
+      "revision": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+      "license": "Apache-2.0"
+    },
+    "supertonic-3": {
+      "repo": "Supertone/supertonic-3",
+      "revision": "3cadd1ee6394adea1bd021217a0e650ede09a323",
+      "license": "OpenRAIL-M"
+    }
+  }
+}

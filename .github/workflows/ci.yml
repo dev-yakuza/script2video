@@ -1,0 +1,94 @@
+name: ci
+
+on:
+  pull_request:
+    paths:
+      - 'packages/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - 'tsconfig.base.json'
+      - 'eslint.config.js'
+      - 'vitest.config.ts'
+      - 'tts-server/**'
+      - 'aligner/**'
+      - 'ruff.toml'
+      - 'videos/**'
+      - 'models.lock.json'
+      - 'fonts.lock.json'
+      - '.github/workflows/ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - 'tts-server/**'
+      - 'aligner/**'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn workspace @script2video/core build
+      - run: yarn workspace @script2video/renderer-remotion build
+      - run: yarn workspace @script2video/cli build
+      - run: yarn typecheck
+      - run: yarn lint
+      - run: yarn test
+
+  # End to end without models: render the sample from its locked audio (--frozen-audio).
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: ffmpeg and headless Chrome libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libnss3 libdbus-1-3 \
+            libatk1.0-0t64 libatk-bridge2.0-0t64 libgbm1 libxrandr2 libxkbcommon0 libxfixes3 \
+            libxcomposite1 libxdamage1 libpango-1.0-0 libcairo2 libcups2t64 libasound2t64
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn build
+      - run: node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output youtube --frozen-audio
+      - run: node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output shorts --frozen-audio
+      - run: test -s out/sample-ko/youtube.ko.mp4 && test -s out/sample-ko/youtube.ko.srt && test -s out/sample-ko/youtube.ko.thumbnail.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sample-render
+          path: out/sample-ko/
+          retention-days: 7
+
+  # Static checks only: installing torch and the models is too heavy for CI.
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - run: uvx ruff@0.17.0 check .
+      - run: uvx ruff@0.17.0 format --check .
+      - run: python -m py_compile tts-server/server.py tts-server/helpers.py tts-server/scripts/*.py aligner/server.py
+      - run: python -m unittest discover -s tts-server -p 'test_*.py'
+      - run: uv lock --check
+        working-directory: tts-server
+      - run: uv lock --check
+        working-directory: aligner

@@ -1,0 +1,472 @@
+{
+  "version": 1,
+  "lang": "en",
+  "entries": {
+    "71f6f82fa08e11f6d70e683a": {
+      "src": "71f6f82fa08e11f6d70e683a.wav",
+      "duration": 0.366,
+      "words": [
+        {
+          "text": "Hi",
+          "start": 0,
+          "end": 0.32
+        }
+      ],
+      "heard": "Hi.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "5089920602953623000",
+      "attempt": 2,
+      "pauseRemoved": 0,
+      "checks": [
+        "speech rate 6.3 chars/s is too slow"
+      ],
+      "f0": 194.8
+    },
+    "f8025735eeeba57c6aae2f17": {
+      "src": "f8025735eeeba57c6aae2f17.wav",
+      "duration": 3.9401,
+      "words": [
+        {
+          "text": "This",
+          "start": 0,
+          "end": 0.24
+        },
+        {
+          "text": "whole",
+          "start": 0.24,
+          "end": 0.8
+        },
+        {
+          "text": "video",
+          "start": 0.8,
+          "end": 1.28
+        },
+        {
+          "text": "was",
+          "start": 1.28,
+          "end": 1.52
+        },
+        {
+          "text": "made",
+          "start": 1.52,
+          "end": 1.92
+        },
+        {
+          "text": "from",
+          "start": 1.92,
+          "end": 2.24
+        },
+        {
+          "text": "one",
+          "start": 2.24,
+          "end": 2.48
+        },
+        {
+          "text": "Markdown",
+          "start": 2.48,
+          "end": 3.2
+        },
+        {
+          "text": "file",
+          "start": 3.2,
+          "end": 3.92
+        }
+      ],
+      "heard": "This whole video was made from one markdown file.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "4292469656296760300",
+      "attempt": 0,
+      "pauseRemoved": 0,
+      "checks": [],
+      "f0": 144.2
+    },
+    "5dd11e8472b1be81fd07eff0": {
+      "src": "5dd11e8472b1be81fd07eff0.wav",
+      "duration": 4.1517,
+      "words": [
+        {
+          "text": "The",
+          "start": 0.08,
+          "end": 0.16
+        },
+        {
+          "text": "narration",
+          "start": 0.16,
+          "end": 0.96
+        },
+        {
+          "text": "subtitles",
+          "start": 1.12,
+          "end": 1.92
+        },
+        {
+          "text": "and",
+          "start": 1.92,
+          "end": 2
+        },
+        {
+          "text": "visuals",
+          "start": 2,
+          "end": 2.56
+        },
+        {
+          "text": "all",
+          "start": 2.64,
+          "end": 2.88
+        },
+        {
+          "text": "come",
+          "start": 2.88,
+          "end": 3.2
+        },
+        {
+          "text": "from",
+          "start": 3.2,
+          "end": 3.44
+        },
+        {
+          "text": "the",
+          "start": 3.44,
+          "end": 3.52
+        },
+        {
+          "text": "script",
+          "start": 3.52,
+          "end": 4.08
+        }
+      ],
+      "heard": "The narration, subtitles, and visuals all come from the script.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "3456706742528848400",
+      "attempt": 2,
+      "pauseRemoved": 0.03,
+      "checks": [],
+      "f0": 142.6
+    },
+    "8b6fbffdec47245de68bdc5b": {
+      "src": "8b6fbffdec47245de68bdc5b.wav",
+      "duration": 4.4467,
+      "words": [
+        {
+          "text": "Synthesizing",
+          "start": 0.08,
+          "end": 1.04
+        },
+        {
+          "text": "the",
+          "start": 1.04,
+          "end": 1.12
+        },
+        {
+          "text": "voice",
+          "start": 1.12,
+          "end": 1.76
+        },
+        {
+          "text": "is",
+          "start": 1.92,
+          "end": 2.16
+        },
+        {
+          "text": "the",
+          "start": 2.16,
+          "end": 2.24
+        },
+        {
+          "text": "slowest",
+          "start": 2.24,
+          "end": 2.88
+        },
+        {
+          "text": "part",
+          "start": 2.88,
+          "end": 3.2
+        },
+        {
+          "text": "at",
+          "start": 3.44,
+          "end": 3.68
+        },
+        {
+          "text": "about",
+          "start": 3.68,
+          "end": 4
+        },
+        {
+          "text": "a",
+          "start": 4,
+          "end": 4
+        },
+        {
+          "text": "minute",
+          "start": 4,
+          "end": 4.4
+        }
+      ],
+      "heard": "Synthesizing the voice is the slowest part, at about a minute.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "2267899756298825000",
+      "attempt": 2,
+      "pauseRemoved": 0,
+      "checks": [],
+      "f0": 166.7
+    },
+    "a7457657400fe8f0cbd4a1f6": {
+      "src": "a7457657400fe8f0cbd4a1f6.wav",
+      "duration": 6.697,
+      "words": [
+        {
+          "text": "Rendering",
+          "start": 0.08,
+          "end": 0.56
+        },
+        {
+          "text": "takes",
+          "start": 0.56,
+          "end": 0.96
+        },
+        {
+          "text": "under",
+          "start": 1.04,
+          "end": 1.36
+        },
+        {
+          "text": "twenty",
+          "start": 1.36,
+          "end": 1.84
+        },
+        {
+          "text": "seconds",
+          "start": 1.84,
+          "end": 2.56
+        },
+        {
+          "text": "and",
+          "start": 2.72,
+          "end": 3.04
+        },
+        {
+          "text": "a",
+          "start": 3.12,
+          "end": 3.28
+        },
+        {
+          "text": "rerender",
+          "start": 3.36,
+          "end": 4.24
+        },
+        {
+          "text": "reuses",
+          "start": 4.32,
+          "end": 5.28
+        },
+        {
+          "text": "every",
+          "start": 5.36,
+          "end": 5.84
+        },
+        {
+          "text": "finished",
+          "start": 6,
+          "end": 6.24
+        },
+        {
+          "text": "scene",
+          "start": 6.24,
+          "end": 6.64
+        }
+      ],
+      "heard": "Rendering takes under 20 seconds, and a re-render reuses every finished scene.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "8265458301451773000",
+      "attempt": 1,
+      "pauseRemoved": 0.15,
+      "checks": [],
+      "f0": 154.6
+    },
+    "d63953eb9e3da8e24dad537b": {
+      "src": "d63953eb9e3da8e24dad537b.wav",
+      "duration": 3.6363,
+      "words": [
+        {
+          "text": "With",
+          "start": 0,
+          "end": 0.16
+        },
+        {
+          "text": "a",
+          "start": 0.16,
+          "end": 0.24
+        },
+        {
+          "text": "video",
+          "start": 0.24,
+          "end": 0.64
+        },
+        {
+          "text": "editor",
+          "start": 0.64,
+          "end": 1.2
+        },
+        {
+          "text": "a",
+          "start": 1.44,
+          "end": 1.52
+        },
+        {
+          "text": "small",
+          "start": 1.52,
+          "end": 1.84
+        },
+        {
+          "text": "fix",
+          "start": 1.84,
+          "end": 2.32
+        },
+        {
+          "text": "means",
+          "start": 2.32,
+          "end": 2.72
+        },
+        {
+          "text": "another",
+          "start": 2.72,
+          "end": 3.12
+        },
+        {
+          "text": "session",
+          "start": 3.12,
+          "end": 3.6
+        }
+      ],
+      "heard": "With a video editor, a small fix means another session.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "1892307719309796000",
+      "attempt": 0,
+      "pauseRemoved": 0,
+      "checks": [],
+      "f0": 149.3
+    },
+    "c99f1598cf30b1859e71b3ad": {
+      "src": "c99f1598cf30b1859e71b3ad.wav",
+      "duration": 3.0768,
+      "words": [
+        {
+          "text": "With",
+          "start": 0,
+          "end": 0.16
+        },
+        {
+          "text": "a",
+          "start": 0.24,
+          "end": 0.24
+        },
+        {
+          "text": "script",
+          "start": 0.24,
+          "end": 0.8
+        },
+        {
+          "text": "you",
+          "start": 1.04,
+          "end": 1.2
+        },
+        {
+          "text": "change",
+          "start": 1.2,
+          "end": 1.44
+        },
+        {
+          "text": "a",
+          "start": 1.44,
+          "end": 1.52
+        },
+        {
+          "text": "sentence",
+          "start": 1.52,
+          "end": 2.08
+        },
+        {
+          "text": "and",
+          "start": 2.08,
+          "end": 2.24
+        },
+        {
+          "text": "render",
+          "start": 2.24,
+          "end": 2.56
+        },
+        {
+          "text": "again",
+          "start": 2.56,
+          "end": 3.04
+        }
+      ],
+      "heard": "With a script, you change a sentence and render again.",
+      "cer": 0,
+      "engine": "qwen",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "4722474503206797000",
+      "attempt": 0,
+      "pauseRemoved": 0,
+      "checks": [],
+      "f0": 150.2
+    }
+  },
+  "sentences": {
+    "intro:1:0": "71f6f82fa08e11f6d70e683a",
+    "intro:1:1": "f8025735eeeba57c6aae2f17",
+    "intro:1:2": "5dd11e8472b1be81fd07eff0",
+    "numbers:1:0": "8b6fbffdec47245de68bdc5b",
+    "numbers:1:1": "a7457657400fe8f0cbd4a1f6",
+    "compare:1:0": "d63953eb9e3da8e24dad537b",
+    "compare:1:1": "c99f1598cf30b1859e71b3ad"
+  },
+  "env": {
+    "tts": {
+      "id": "script2video-tts",
+      "wrapper_version": "0.2.0",
+      "lock_hash": "1833f658cbb515eb",
+      "models": {
+        "qwen3-tts-1.7b-customvoice": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+        "qwen3-tts-0.6b-customvoice": "85e237c12c027371202489a0ec509ded67b5e4b5",
+        "qwen3-tts-1.7b-voicedesign": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+        "qwen3-tts-1.7b-base": "fd4b254389122332181a7c3db7f27e918eec64e3",
+        "qwen3-asr-0.6b": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+        "qwen3-forcedaligner-0.6b": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+        "supertonic-3": "3cadd1ee6394adea1bd021217a0e650ede09a323"
+      },
+      "loaded": [],
+      "device": "mps",
+      "torch": "2.14.1",
+      "transformers": "4.57.3",
+      "uptime_s": 1.3
+    },
+    "aligner": {
+      "id": "script2video-aligner",
+      "wrapper_version": "0.2.0",
+      "lock_hash": "fa35472df4f8f6d3",
+      "models": {
+        "qwen3-forcedaligner-0.6b": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+        "qwen3-asr-0.6b": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0"
+      },
+      "loaded": [],
+      "device": "mps",
+      "torch": "2.14.1",
+      "transformers": "4.57.6",
+      "uptime_s": 1.5
+    }
+  }
+}

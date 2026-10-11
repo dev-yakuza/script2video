@@ -1,0 +1,13 @@
+.git
+**/node_modules
+**/dist
+.s2v-cache
+out
+experiments
+docs
+.venv
+**/.venv
+**/__pycache__
+.ruff_cache
+.yarn/cache
+.yarn/install-state.gz

@@ -1,0 +1,9 @@
+docs/
+experiments/m0a/out/
+**/.venv/
+*.lock
+experiments/
+videos/
+out/
+.s2v-cache/
+.claude/

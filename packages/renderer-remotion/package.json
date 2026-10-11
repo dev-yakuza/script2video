@@ -1,0 +1,38 @@
+{
+  "name": "@script2video/renderer-remotion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Remotion renderer adapter for script2video: renders silent scene chunks from a core Timeline",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src/remotion"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.remotion.json"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.534",
+    "@remotion/fonts": "4.0.534",
+    "@remotion/renderer": "4.0.534",
+    "@script2video/core": "workspace:*",
+    "mermaid": "12.1.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.534"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "^19",
+    "typescript": "~6.0.0"
+  }
+}
