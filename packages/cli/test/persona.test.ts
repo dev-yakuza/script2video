@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { DEFAULT_REFERENCE, parsePersona, parseScript } from '@script2video/core';
 import { describe, expect, it } from 'vitest';
 import { lintCast } from '../src/lint-assets.js';
-import { genderMismatch, resolvePersona } from '../src/persona.js';
+import { genderMismatch, personaSearchDirs, resolvePersona } from '../src/persona.js';
 
 const DESC = '30대 남성, 차분한 목소리';
 
@@ -42,6 +42,23 @@ describe('persona files', () => {
     const ref = resolvePersona('minsu', 'ko', video);
     expect(typeof ref).toBe('object');
     expect(ref).toMatchObject({ id: 'minsu', text: DEFAULT_REFERENCE.ko });
+  });
+
+  it('searches up to the repository root, and only one level outside a repository', () => {
+    const root = mkdtempSync(join(tmpdir(), 's2v-persona-repo-'));
+    const video = join(root, 'studio', 'videos', 'intro');
+    mkdirSync(video, { recursive: true });
+    mkdirSync(join(root, 'studio', 'voices'), { recursive: true });
+    writeFileSync(join(root, 'studio', 'voices', 'minsu.yaml'), `description: ${DESC}\n`);
+    expect(resolvePersona('minsu', 'ko', video)).toMatch(/not found/);
+    mkdirSync(join(root, '.git'));
+    expect(personaSearchDirs(video)).toEqual([
+      join(video, 'voices'),
+      join(root, 'studio', 'videos', 'voices'),
+      join(root, 'studio', 'voices'),
+      join(root, 'voices'),
+    ]);
+    expect(resolvePersona('minsu', 'ko', video)).toMatch(/s2v voice create/);
   });
 
   it('says what to run when the clip is missing or stale', () => {

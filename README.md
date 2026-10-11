@@ -94,7 +94,7 @@ gets a colored name tag; with 5 or more, only name tags are shown.
 A persona is a voice designed from a description, for extra speakers beyond the preset ones:
 
 ```sh
-# voices/minsu.yaml  (next to the script, or in its parent folder to share it between videos)
+# voices/minsu.yaml  (next to the script, or in any folder above it up to the repository root to share it)
 #   description: 30대 남성, 차분하고 약간 낮은 목소리, 또렷한 발음, 친근한 말투
 node packages/cli/dist/main.js voice create voices/minsu.yaml --lang ko --candidates 4
 # → candidates with pitch / speed / misread hints and a listening page; then pick one:

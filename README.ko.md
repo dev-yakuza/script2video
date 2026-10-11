@@ -94,7 +94,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 페르소나는 설명문으로 설계한 목소리로, 기본 제공 화자 외에 화자를 더 늘릴 때 씁니다.
 
 ```sh
-# voices/minsu.yaml  (대본 옆, 또는 여러 영상이 함께 쓰도록 상위 폴더에)
+# voices/minsu.yaml  (대본 옆, 또는 여러 영상이 함께 쓰도록 레포 루트까지의 상위 폴더 어디든)
 #   description: 30대 남성, 차분하고 약간 낮은 목소리, 또렷한 발음, 친근한 말투
 node packages/cli/dist/main.js voice create voices/minsu.yaml --lang ko --candidates 4
 # → 음높이 / 속도 / 오독 표시가 붙은 후보와 청취 페이지. 그중 하나를 고릅니다:

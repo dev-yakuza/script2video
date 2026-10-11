@@ -94,7 +94,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 ペルソナは説明文から設計した音声で、プリセットの話者以外に話者を増やすときに使います。
 
 ```sh
-# voices/minsu.yaml  （台本の隣、または複数の動画で共有するなら親フォルダに）
+# voices/minsu.yaml  （台本の隣、または複数の動画で共有するならリポジトリのルートまでの親フォルダのどこかに）
 #   description: 30대 남성, 차분하고 약간 낮은 목소리, 또렷한 발음, 친근한 말투
 node packages/cli/dist/main.js voice create voices/minsu.yaml --lang ko --candidates 4
 # → 音の高さ / 速さ / 読み間違いの目安付きの候補と試聴ページ。その中から 1 つ選びます:

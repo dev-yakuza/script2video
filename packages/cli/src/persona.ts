@@ -1,8 +1,9 @@
 /**
  * Persona voices on disk (PLAN 5.8) and `s2v voice create | pick`.
  *
- * A persona is looked up as `voices/<id>.yaml` next to the script, then in the parent folder, so
- * one persona can be shared by every video in a folder of videos.
+ * A persona is looked up as `voices/<id>.yaml` next to the script, then in each folder above it up
+ * to the repository root (the folder holding `.git`), so one persona can be shared by every video
+ * in a repository. Outside a repository only the script's folder and its parent are searched.
  */
 
 import { spawn } from 'node:child_process';
@@ -37,7 +38,13 @@ export interface PersonaRef {
 const sha256File = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
 
 export function personaSearchDirs(scriptDir: string): string[] {
-  return [join(scriptDir, 'voices'), join(dirname(scriptDir), 'voices')];
+  const dirs: string[] = [];
+  for (let dir = resolve(scriptDir); ; dir = dirname(dir)) {
+    dirs.push(join(dir, 'voices'));
+    if (existsSync(join(dir, '.git'))) return dirs;
+    if (dirname(dir) === dir) break;
+  }
+  return dirs.slice(0, 2);
 }
 
 export function findPersonaYaml(id: string, scriptDir: string): string | null {
