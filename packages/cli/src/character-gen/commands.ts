@@ -386,18 +386,37 @@ function frameContext(dir: string, g: Graph, it: Item, round: Item[]) {
     const p = x.kind === 'frame' && x.group === it.group && x.id !== it.id ? image(x) : undefined;
     if (p) frames[x.frame!] = p;
   }
-  // As derive: a blink of the same head first, then any blink of the view.
+  // Borrowed blinks are approved ones only, as derive has them.
   const blinks = [...g.items.values()].filter(
     (x) =>
       x.frame === 'blink' &&
       x.set === it.set &&
       x.view === it.view &&
       x.group !== it.group &&
-      image(x),
+      status(g, x.id) === 'approved' &&
+      existsSync(srcPath(dir, x)),
   );
-  const blink = blinks.find((x) => x.head === it.head) ?? blinks[0];
-  const eyes = blink ? { still: stillPath(dir, g, blink), blink: image(blink) } : undefined;
-  return { frames, ...(eyes ? { eyes } : {}) };
+  // Python takes the first that shows two eyes, in derive's order (character.py eye_order):
+  // the same head's blinks, then the others, each sorted as Python sorts (head, expr) tuples.
+  const byName = (a: Item, b: Item) =>
+    a.head! < b.head! ? -1 : a.head! > b.head! ? 1 : a.expr! < b.expr! ? -1 : 1;
+  const eyes = [
+    ...blinks.filter((x) => x.head === it.head).sort(byName),
+    ...blinks.filter((x) => x.head !== it.head).sort(byName),
+  ].map((x) => ({ still: stillPath(dir, g, x), blink: srcPath(dir, x) }));
+  // Split views: derive finds parts in the head region cut below pivot y + 4, so post does too.
+  const p = it.set === 'full' ? '' : `${it.set}:`;
+  const region = headRegionPath(dir, it.set, it.view);
+  const split = g.items.has(`${p}${it.view}/headless`);
+  // The pivot derive cut the head layer at (the yaml's may be hand-edited).
+  const pivot = (g.prov.derive?.[`${it.set}|${it.view}`] as { pivot?: number[] } | undefined)
+    ?.pivot;
+  return {
+    frames,
+    eyes,
+    ...(split && existsSync(region) ? { head_region: region } : {}),
+    ...(split && pivot ? { pivot_y: pivot[1] } : {}),
+  };
 }
 
 export interface RoundPlan {
@@ -685,7 +704,12 @@ export async function reviewCharacter(dir: string, opts: GenOptions): Promise<vo
     await previews(
       dir,
       g,
-      [...g.items.values()].filter((it) => it.kind === 'frame' && groups.has(it.group)),
+      [...g.items.values()].filter(
+        (it) =>
+          it.kind === 'frame' &&
+          groups.has(it.group) &&
+          ['generated', 'failed', 'approved'].includes(status(g, it.id)),
+      ),
       log,
     );
   }
@@ -903,6 +927,7 @@ export async function deriveLayers(
       out: join(root, 'views', v.view),
       split,
       bottom_open: v.set !== 'full',
+      framing: v.set,
       bodies: v.bodies,
       groups,
       region_out: headRegionPath(dir, v.set, v.view),

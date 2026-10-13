@@ -10,6 +10,7 @@ The CLI builds the job files (which images, which parents) and reads the JSON pr
 
 from __future__ import annotations
 
+import itertools
 import json
 import sys
 from pathlib import Path
@@ -25,6 +26,9 @@ SHADOW_CHROMA, SHADOW_MIN_LUM = 14.0, 110.0
 SHADOW_BAND = 0.15  # shadows are removed only in the lowest 15 % of the character
 # Difference masks (4.3 step 1).
 DIFF_T, MIN_BLOB = 24, 150
+# Smallest change that counts as a part, per framing: a full-length figure's face is small (a
+# half-open mouth of a seven-heads-tall figure is under 150 px at 640x800).
+PART_MIN_BLOB = {"full": 40, "upper": 80, "head": 150}
 CROSS = ndimage.generate_binary_structure(2, 1)
 
 
@@ -163,7 +167,7 @@ def grayish_rest(rgb: np.ndarray, bg: np.ndarray, alpha: np.ndarray, bottom_open
 # ---------- difference masks ----------
 
 
-def diff_mask(a: np.ndarray, b: np.ndarray, inside: np.ndarray) -> np.ndarray:
+def diff_mask(a: np.ndarray, b: np.ndarray, inside: np.ndarray, min_blob: int = MIN_BLOB) -> np.ndarray:
     """Pixels that changed between two RGB images, as solid areas (4.3 step 1)."""
     d = np.abs(a - b).max(axis=2) > DIFF_T
     m = (feather(d, 2) > 0.6) & inside
@@ -171,7 +175,7 @@ def diff_mask(a: np.ndarray, b: np.ndarray, inside: np.ndarray) -> np.ndarray:
     if n == 0:
         return m
     sizes = ndimage.sum(m, lab, index=np.arange(n + 1))
-    return sizes[lab] >= MIN_BLOB
+    return sizes[lab] >= min_blob
 
 
 def part_region(mask: np.ndarray, limit: np.ndarray) -> np.ndarray:
@@ -179,17 +183,68 @@ def part_region(mask: np.ndarray, limit: np.ndarray) -> np.ndarray:
     return feather(fill_holes(grow(mask, 6)), 3) * limit
 
 
-def eye_blobs(still: np.ndarray, blink: np.ndarray, inside: np.ndarray) -> list[np.ndarray]:
-    """The two eyes a blink closed: the two largest changed blobs, of comparable size; else []."""
-    bl = sorted(blobs(diff_mask(still, blink, inside)), key=lambda b: -int(b.sum()))[:2]
-    return bl if len(bl) == 2 and bl[1].sum() >= 0.3 * bl[0].sum() else []
+def eye_blobs(
+    still: np.ndarray, blink: np.ndarray, inside: np.ndarray, min_blob: int = MIN_BLOB, top: float = 1.0
+) -> list[np.ndarray]:
+    """The two eyes a blink closed: of the six largest changed blobs (within the top `top` share
+    of `inside`), the best pair side by side: farther apart across than up and down and than half
+    an eye's width (not an eye and its eyebrow), level (a tilted head allowed), and alike in size, scored by the smaller
+    size times the size ratio (a hair lock or a hand beside the face at eye height is not alike
+    an eye); else []."""
+    rows = np.nonzero(inside.any(axis=1))[0]
+    if top < 1 and rows.size:
+        inside = inside.copy()
+        inside[int(rows[0] + top * (rows[-1] - rows[0])) + 1 :] = False
+    bl = sorted(blobs(diff_mask(still, blink, inside, min_blob)), key=lambda b: -int(b.sum()))[:6]
+    best: list[np.ndarray] = []
+    score = 0.0
+    for i, a in enumerate(bl):
+        for b in bl[i + 1 :]:
+            ratio = b.sum() / a.sum()  # b is the smaller
+            if ratio < 0.4 or b.sum() * ratio <= score:
+                continue
+            (y1, x1), (y2, x2) = (np.argwhere(x).mean(axis=0) for x in (a, b))
+            width = np.mean([np.ptp(np.nonzero(x)[1]) + 1 for x in (a, b)])
+            height = np.mean([np.ptp(np.nonzero(x)[0]) + 1 for x in (a, b)])
+            dx, dy = abs(x2 - x1), abs(y2 - y1)
+            if dx > max(1.2 * dy, 0.5 * width) and dy < max(0.5 * height, 0.35 * dx):
+                best, score = [a, b], float(b.sum() * ratio)
+    return best
+
+
+# Without a head region, the eyes are looked for in this top share of the drawing (a full-length
+# figure's hands and hem stay out; a head close-up is all head).
+# Measured: a two-heads-tall figure's eyes reach 33 % of its height (test r6), so not less.
+EYE_TOP = {"full": 0.45, "upper": 0.6, "head": 1.0}
+
+
+def eye_inside(
+    img: np.ndarray, bo: bool, head: np.ndarray | None = None, framing: str = "full"
+) -> tuple[np.ndarray, float]:
+    """Where post and derive look for the eyes: the drawing 2 px in from its outline, within the
+    head region when there is one, else its top share (EYE_TOP)."""
+    m = shrink(cutout(img, bo)[0][..., 3] > 128, 2)
+    return (m & grow(head, 8), 1.0) if head is not None else (m, EYE_TOP[framing])
+
+
+def first_eyes(pairs, inside_of, min_blob: int = MIN_BLOB) -> tuple[list[np.ndarray], bool]:
+    """The eyes of the first (still, blink) pair that has them, and whether that is the first pair
+    (the group's own blink, when it has one). The caller orders the pairs: own, the same head,
+    the rest of the view (a closed-eye smile has no blink of its own)."""
+    for i, (still, blink) in enumerate(pairs):
+        inside, top = inside_of(still)
+        eyes = eye_blobs(still, blink, inside, min_blob, top)
+        if eyes:
+            return eyes, i == 0
+    return [], False
 
 
 def mouth_box(eyes: list[np.ndarray], shape: tuple[int, ...]) -> np.ndarray:
     """Where the mouth can be: below the eyes, up to one eye distance down, as wide as the face.
     Keeps eyebrows, the chin line, the collar and hands out of the mouth part."""
     (y1, x1), (y2, x2) = (np.argwhere(b).mean(axis=0) for b in eyes)
-    d = max(abs(x2 - x1), 8.0)
+    # Eye distance, at least an eye and a half wide (a turned face brings the eyes close).
+    d = max(abs(x2 - x1), 1.5 * np.mean([np.ptp(np.nonzero(b)[1]) + 1 for b in eyes]))
     ey, cx = (y1 + y2) / 2, (x1 + x2) / 2
     box = np.zeros(shape[:2], bool)
     box[max(0, int(ey + 0.25 * d)) : int(ey + 1.0 * d) + 1, max(0, int(cx - 0.8 * d)) : int(cx + 0.8 * d) + 1] = True
@@ -197,16 +252,21 @@ def mouth_box(eyes: list[np.ndarray], shape: tuple[int, ...]) -> np.ndarray:
 
 
 def mouth_mask(
-    still: np.ndarray, frames: list[np.ndarray], inside: np.ndarray, box: np.ndarray | None = None
+    still: np.ndarray,
+    frames: list[np.ndarray],
+    inside: np.ndarray,
+    box: np.ndarray | None = None,
+    min_blob: int = MIN_BLOB,
 ) -> np.ndarray:
     """The mouth over the mouth frames (shared by half/open), plus blobs within 12 px.
 
-    With a mouth box (from the eyes): the blob overlapping it most; nothing when none does.
-    Without: the lowest blob of at least 20 % of the biggest. Not simply the biggest: the edit may
-    also move the eyebrows, which can outweigh a half-open mouth (test r6)."""
+    With a mouth box (from the eyes): the blob overlapping it most, joined only by blobs near the
+    box (not a chin or collar change next to it); nothing when none overlaps. Without: the lowest
+    blob of at least 20 % of the biggest. Not simply the biggest: the edit may also move the
+    eyebrows, which can outweigh a half-open mouth (test r6)."""
     m = np.zeros(inside.shape, bool)
     for f in frames:
-        m |= diff_mask(still, f, inside)
+        m |= diff_mask(still, f, inside, min_blob)
     bl = blobs(m)
     if not bl:
         return m
@@ -215,6 +275,7 @@ def mouth_mask(
         if not hit:
             return np.zeros(inside.shape, bool)
         first = max(hit, key=lambda b: int((b & box).sum()))
+        bl = [b for b in bl if (b & grow(box, 6)).any()]
     else:
         big = max(int(b.sum()) for b in bl)
         first = max((b for b in bl if b.sum() >= 0.2 * big), key=lambda b: float(np.nonzero(b)[0].mean()))
@@ -230,17 +291,40 @@ def mouth_mask(
 
 
 def group_parts(
-    still: np.ndarray, frames: dict[str, np.ndarray], inside: np.ndarray, eyes: list[np.ndarray]
+    still: np.ndarray,
+    frames: dict[str, np.ndarray],
+    inside: np.ndarray,
+    eyes: list[np.ndarray],
+    min_blob: int = MIN_BLOB,
+    own_eyes: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """The mouth mask (half/open) and the eye mask (blink and every gaze) of a group, as derive
-    pastes them; post judges frames with the same masks. `eyes`: eye blobs placing the mouth."""
+    pastes them; post judges frames with the same masks. `eyes` place the mouth and keep the eye
+    mask on the eyes: tightly when they are the group's own (`own_eyes`), loosely when borrowed
+    from another expression or head. Without eyes, the eye mask is every change away from the
+    mouth."""
     box = mouth_box(eyes, still.shape) if eyes else None
     mouth_src = [frames[f] for f in ("half", "open") if f in frames]
-    m = mouth_mask(still, mouth_src, inside, box) if mouth_src else np.zeros(inside.shape, bool)
+    m = mouth_mask(still, mouth_src, inside, box, min_blob) if mouth_src else np.zeros(inside.shape, bool)
     eyes_all = np.zeros(inside.shape, bool)
     for f, img in frames.items():
         if f == "blink" or f.startswith("gaze-"):
-            eyes_all |= diff_mask(still, img, inside) & ~grow(m, 10)
+            eyes_all |= diff_mask(still, img, inside, min_blob) & ~grow(m, 10)
+    if eyes:
+        (_, x1), (_, x2) = (np.argwhere(b).mean(axis=0) for b in eyes)
+        d = abs(x2 - x1)
+        # Whole changes only, kept or dropped: cutting a change at a mask edge leaves a sliver
+        # (an eyebrow piece under the still's eyebrow, test r6 turn).
+        if own_eyes:
+            # Changes mostly on the eyes: a blink edit may also lower the eyebrows (test r6, turn),
+            # which would then jump at every blink. Gaze pupils move inside the eyes.
+            on = grow(eyes[0] | eyes[1], 4)
+            kept = [b for b in blobs(eyes_all) if (b & on).sum() >= 0.3 * b.sum()]
+        else:
+            # Borrowed eyes sit a little elsewhere: changes near them, not hair, collar or hands.
+            near = grow(eyes[0] | eyes[1], max(4, int(0.25 * d)))
+            kept = [b for b in blobs(eyes_all) if (b & near).any()]
+        eyes_all = np.logical_or.reduce(kept) if kept else np.zeros(inside.shape, bool)
     return m, eyes_all
 
 
@@ -346,8 +430,9 @@ PART_AREA = {"full": (0.002, 0.08), "upper": (0.005, 0.15), "head": (0.01, 0.30)
 def post_item(item: dict) -> dict:
     """Cutout and checks for one generated image. item: id, kind, image, cutout, bottom_open,
     input (the edited image: noise), and by kind: ref (headless, body), still (stills, frames),
-    plus for frames: frames {name: image} of the group, eyes {still, blink} (a blink placing the
-    mouth when the group has none), composite (output)."""
+    plus for frames: frames {name: image} of the group, eyes [{still, blink}] (approved blinks of
+    other groups, in eye_order, placing the mouth when the group's own has no eyes), head_region
+    and pivot_y (split views), composite (output)."""
     if item["kind"] == "frame":
         return post_frame(item)
     rgb = load_rgb(item["image"])
@@ -400,22 +485,28 @@ def post_frame(item: dict) -> dict:
     raw = load_rgb(item["image"])
     still = load_rgb(item["still"])
     bo = item.get("bottom_open", False)
+    mb = PART_MIN_BLOB[item.get("framing", "full")]
     still_alpha = cutout(still, bo)[0][..., 3] > 128
-    interior = shrink(still_alpha, 6)
+    body = shrink(still_alpha, 6)
+    # Parts are found where derive finds them: in the head region of a split view.
+    head = np.asarray(Image.open(item["head_region"])) > 0 if item.get("head_region") else None
+    interior = body & grow(head, 8) if head is not None else body
+    if item.get("pivot_y") is not None:  # derive cuts the head layer below pivot y + 4
+        interior = interior.copy()
+        interior[int(item["pivot_y"]) + 5 :] = False
     name = item.get("frame", "")
     frames = {f: load_rgb(p) for f, p in item.get("frames", {}).items() if f != name}
     frames[name] = raw
-    eyes: list[np.ndarray] = []
-    if "blink" in frames:
-        eyes = eye_blobs(still, frames["blink"], interior)
-    if not eyes and item.get("eyes"):
-        e_still = load_rgb(item["eyes"]["still"])
-        eyes = eye_blobs(e_still, load_rgb(item["eyes"]["blink"]), shrink(cutout(e_still, bo)[0][..., 3] > 128, 6))
-    m, eyes_all = group_parts(still, frames, interior, eyes)
+    own_pair = [(still, frames["blink"])] if "blink" in frames else []
+    # Borrowed pairs load only when needed (each is two full images).
+    pairs = itertools.chain(own_pair, ((load_rgb(e["still"]), load_rgb(e["blink"])) for e in item.get("eyes", [])))
+    framing = item.get("framing", "full")
+    eyes, first = first_eyes(pairs, lambda img: eye_inside(img, bo, head, framing), mb)
+    m, eyes_all = group_parts(still, frames, interior, eyes, mb, first and "blink" in frames)
     mouth = name in ("half", "open")
     used = m if mouth else eyes_all
-    changed = diff_mask(still, raw, interior)
-    own = changed & (grow(m, 1) if mouth else ~grow(m, 10))  # what this frame changes in its part
+    own = diff_mask(still, raw, interior, mb) & grow(used, 1)  # what this frame changes in its part
+    changed = diff_mask(still, raw, body)  # the usual blob size: specks stay "outside the part"
     a = part_region(used, still_alpha.astype(np.float32))[..., None]
     comp = still * (1 - a) + raw * a
     if item.get("composite"):
@@ -433,11 +524,11 @@ def post_frame(item: dict) -> dict:
     if mouth and not m.any():
         checks["mouth_found"] = check(0, False, "a change below the eyes")
     part = grow(fill_holes(grow(changed, 6)), 3)
-    rest = interior & ~part
+    rest = body & ~part
     d = float(np.abs(raw - still).mean(axis=2)[rest].mean()) if rest.any() else 0.0
     checks["outside_part"] = check(round(d, 2), d <= 5, "≤ 5")
     region = grow(fill_holes(grow(used, 6)), 3) & still_alpha
-    gr, n = part_grain(raw, still, region, changed)
+    gr, n = part_grain(raw, still, region, changed | own)
     # Too few flat pixels around a small part: report the value, do not judge it.
     checks["part_grain"] = check(round(gr, 2), gr <= 0.5 or n < 200, "≤ 0.5")
     pa = float(region.sum() / area)
@@ -492,23 +583,33 @@ def still_name(h: str, e: str) -> str:
     return "ref.png" if (h, e) == ("base", "neutral") else f"still-{h}-{e}.png"
 
 
-def view_eyes(src: Path, groups: list[dict], bo: bool):
-    """Eye blobs per group, for placing the mouth: the group's own blink, else a blink of the same
-    head, else any blink of the view (a closed-eye smile has no blink of its own)."""
-    found: dict[tuple[str, str], list[np.ndarray]] = {}
-    for g in groups:
-        if "blink" in g.get("frames", []):
-            still = load_rgb(src / still_name(g["head"], g["expr"]))
-            inside = cutout(still, bo)[0][..., 3] > 128
-            eyes = eye_blobs(still, load_rgb(src / f"frame-{g['head']}-{g['expr']}-blink.png"), inside)
-            if eyes:
-                found[(g["head"], g["expr"])] = eyes
+def eye_order(groups: list[tuple[str, str]], h: str, e: str) -> list[tuple[str, str]]:
+    """Blinks to find a group's eyes in, in order: its own, the same head's, the rest (each sorted
+    by name). TS (frameContext) passes post the same order."""
+    own = [k for k in groups if k == (h, e)]
+    same = sorted(k for k in groups if k[0] == h and k != (h, e))
+    return own + same + sorted(k for k in groups if k[0] != h)
 
-    def of(h: str, e: str) -> list[np.ndarray]:
-        if (h, e) in found:
-            return found[(h, e)]
-        same = [v for (hh, _), v in found.items() if hh == h]
-        return same[0] if same else next(iter(found.values()), [])
+
+def view_eyes(src: Path, groups: list[dict], bo: bool, framing: str, head: np.ndarray | None):
+    """Eyes per group for derive, as post finds them (`first_eyes` over `eye_order`)."""
+    blinks = [(g["head"], g["expr"]) for g in groups if "blink" in g.get("frames", [])]
+    found: dict[tuple[str, str], list[np.ndarray]] = {}  # eyes per blink (not the images)
+
+    def eyes_in(k: tuple[str, str]) -> list[np.ndarray]:
+        if k not in found:
+            still = load_rgb(src / still_name(*k))
+            blink = load_rgb(src / f"frame-{k[0]}-{k[1]}-blink.png")
+            inside, top = eye_inside(still, bo, head, framing)
+            found[k] = eye_blobs(still, blink, inside, PART_MIN_BLOB[framing], top)
+        return found[k]
+
+    def of(h: str, e: str) -> tuple[list[np.ndarray], bool]:
+        # As first_eyes over eye_order.
+        for i, k in enumerate(eye_order(blinks, h, e)):
+            if eyes := eyes_in(k):
+                return eyes, i == 0 and k == (h, e)
+        return [], False
 
     return of
 
@@ -554,7 +655,11 @@ def derive_view(job: dict) -> dict:
                 save_rgba(np.dstack([e_rgba[..., :3], feather(fr, 1) * e_rgba[..., 3]]), out / "front" / f"{b}.png")
             elif str(out / "front" / f"{b}.png") not in PROTECT:
                 (out / "front" / f"{b}.png").unlink(missing_ok=True)
-    eyes_of = view_eyes(src, job.get("groups", []), bo)
+    mb = PART_MIN_BLOB[job.get("framing", "full")]
+    eyes_of = view_eyes(src, job.get("groups", []), bo, job.get("framing", "full"), region)
+    if region is None and job.get("region_out"):
+        # A view that became single (one image) has no head region: post must not use an old one.
+        Path(job["region_out"]).unlink(missing_ok=True)
     for g in job.get("groups", []):
         h, e = g["head"], g["expr"]
         still_p = src / still_name(h, e)
@@ -605,7 +710,16 @@ def derive_view(job: dict) -> dict:
             for old in face.glob("*.png"):
                 if old.name not in keep and str(old) not in PROTECT:
                     old.unlink()
-        m, eyes_all = group_parts(still, frames, limit > 0.5, eyes_of(h, e))
+        eyes, own = eyes_of(h, e)
+        m, eyes_all = group_parts(still, frames, limit > 0.5, eyes, mb, own)
+        # Empty parts would never move: say so (post fails such frames; approving one by name
+        # is the only way here).
+        if ("half" in frames or "open" in frames) and not m.any():
+            result["checks"].setdefault(key, {})["mouth_found"] = check(0, False, "a change below the eyes")
+        eye_frames = [img for f, img in frames.items() if f == "blink" or f.startswith("gaze-")]
+        away = ~grow(m, 10)  # as group_parts: part-size changes away from the mouth
+        if any((diff_mask(still, img, limit > 0.5, mb) & away).any() for img in eye_frames) and not eyes_all.any():
+            result["checks"].setdefault(key, {})["eyes_found"] = check(0, False, "the blink / gaze change on the eyes")
         a_m = part_region(m, limit) * 255
         seams = []
         for f, name in (("open", "mouth.png"), ("half", "mouth.1.png")):

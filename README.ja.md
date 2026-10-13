@@ -13,6 +13,7 @@ Markdown で台本を書くと、ナレーション付きの解説動画がで�
 
 - script2video 自体は **MIT** です。
 - レンダリングに使う **[Remotion](https://www.remotion.dev/)** は独自のライセンスです。個人と 3 人以下の組織は無料で、**それより大きい営利組織には Remotion Company License が必要です。** [remotion.dev/license](https://www.remotion.dev/docs/license) を確認してください。
+- キャラクター生成（任意）: **Qwen-Image-Edit-2511** と Lightning LoRA（Apache-2.0）を mflux / MLX（MIT）で実行します。`create` が作る yaml にモデルとライセンスが記録されます。
 - 音声: **Qwen3-TTS**（Apache-2.0）、**Supertonic-3**（コード MIT、重み OpenRAIL-M）。Supertonic-3 で作った音声を公開するときは、ライセンスにより機械生成コンテンツであることを明示する必要があります。
 - 一部の依存関係はコピーレフトです。利用者のマシンにインストールされるだけで、このプロジェクトは再配布しません。
   - `soynlp`（GPL-3.0）: aligner 環境の `qwen-asr` が必要とする
@@ -25,6 +26,7 @@ Markdown で台本を書くと、ナレーション付きの解説動画がで�
 - macOS（Apple Silicon）または Linux
 - Node.js 22+、Yarn 4、[uv](https://docs.astral.sh/uv/)、ffmpeg
 - モデル用のディスク約 15 GB
+- 任意、キャラクター生成用: メモリ 48 GB 以上の Apple Silicon と追加のディスク約 85 GB
 
 ## クイックスタート
 
@@ -49,24 +51,25 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 
 ## コマンド
 
-| コマンド                                                     | 内容                                                         |
-| ------------------------------------------------------------ | ------------------------------------------------------------ |
-| `doctor`                                                     | Node、ffmpeg、uv、Python 環境、モデル、フォントをチェック    |
-| `new <dir> [--lang ko]`                                      | 最初の台本が入った新しい動画フォルダを作る                   |
-| `lint <script>`                                              | 静的チェック: 文法、素材、読み、字幕の分量、長さ             |
-| `check <script>`                                             | すべての字幕を実際のレンダラーで配置し、はみ出しを確認       |
-| `sentences <script>`                                         | 文の id 一覧（`tts --retry` 用）                             |
-| `say "<text>" --script <script>`                             | 1 文を合成して再生（読みの確認）                             |
-| `tts <script> [--retry id]`                                  | オーディオロックに合成（変わった部分だけ）                   |
-| `render <script> --output <name> [--draft] [--frozen-audio]` | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル  |
-| `snapshot <script> --output <name>`                          | シーンごとの静止画を並べて数秒で確認                         |
-| `dev <script> [--video]`                                     | 編集ループ: 保存のたびに lint → tts → snapshot               |
-| `pick <image>`                                               | スクリーンショットをクリック / ドラッグして cue の座標を得る |
-| `voice create / pick`                                        | ペルソナ音声を設計し、候補から選ぶ                           |
-| `audio prune <script>`                                       | 台本で使わなくなった音声を削除                               |
-| `export-script <script>`                                     | ナレーションを自分で録音するための読み原稿を作る             |
-| `import-recording <script> <take.wav> [--write]`             | 通しで録音したファイルを段落ごとに分ける（`:audio`）         |
-| `tts-server start`                                           | コマンドの間も TTS サーバーを起動したままにする              |
+| コマンド                                                                               | 内容                                                         |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `doctor`                                                                               | Node、ffmpeg、uv、Python 環境、モデル、フォントをチェック    |
+| `new <dir> [--lang ko]`                                                                | 最初の台本が入った新しい動画フォルダを作る                   |
+| `lint <script>`                                                                        | 静的チェック: 文法、素材、読み、字幕の分量、長さ             |
+| `check <script>`                                                                       | すべての字幕を実際のレンダラーで配置し、はみ出しを確認       |
+| `sentences <script>`                                                                   | 文の id 一覧（`tts --retry` 用）                             |
+| `say "<text>" --script <script>`                                                       | 1 文を合成して再生（読みの確認）                             |
+| `tts <script> [--retry id]`                                                            | オーディオロックに合成（変わった部分だけ）                   |
+| `render <script> --output <name> [--draft] [--frozen-audio]`                           | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル  |
+| `snapshot <script> --output <name>`                                                    | シーンごとの静止画を並べて数秒で確認                         |
+| `dev <script> [--video]`                                                               | 編集ループ: 保存のたびに lint → tts → snapshot               |
+| `pick <image>`                                                                         | スクリーンショットをクリック / ドラッグして cue の座標を得る |
+| `voice create / pick`                                                                  | ペルソナ音声を設計し、候補から選ぶ                           |
+| `audio prune <script>`                                                                 | 台本で使わなくなった音声を削除                               |
+| `export-script <script>`                                                               | ナレーションを自分で録音するための読み原稿を作る             |
+| `import-recording <script> <take.wav> [--write]`                                       | 通しで録音したファイルを段落ごとに分ける（`:audio`）         |
+| `tts-server start`                                                                     | コマンドの間も TTS サーバーを起動したままにする              |
+| `character import / setup / create / pick / build / review / approve / redo / missing` | キャラクターの絵: YMM4 の取り込みと生成（下記）              |
 
 `node packages/cli/dist/main.js <command> …` の形で実行します。`S2V_TTS=mock` を付けると、モデルなしで
 合成した仮の音声で全体を動かせるので、レイアウト作業や CI に便利です。
@@ -117,7 +120,19 @@ cast:
   joon: { voice: 'persona:joon', character: { dir: characters/joon, facing: right } }
 ```
 
-キャラクターのフォルダには、**同じキャンバス**（同じサイズ、同じ体の位置）に描いた透過 PNG を表情ごとに入れます。
+表情は段落ごとに選びます: `mina{face=happy}: 정말요?`。表情が変わると短い動きも付きます
+（surprised → jump、happy → bounce、angry → shake、sad → sink）。`motion=nod` で動きを選ぶ
+（jump、shake、nod、bounce、shiver、sink、lean）、`motion=none` で外す、または出演者に `motion: off` を
+指定できます。聞き手は特定の単語からリアクションさせられます:
+`mina: :react{joon=surprised}와, 정말요?`（段落の終わりまで続く）。リアクションするキャラクターは
+同じ側でも舞台に上がります。同じ側に複数いる場合は、リアクションの間だけ小さくなって並びます
+（`:react{joon=surprised yuna=surprised}`）。
+
+キャラクターのフォルダは次の 2 つの形式のどちらかです。
+
+**一枚絵。** **同じキャンバス**（同じサイズ、同じ体の位置）に描いた透過 PNG を表情ごとに入れます。
+`facing` は絵が向いている方向（`left` / `right` / `front`）で、画面の外側を向いた絵は中央を向くように
+左右反転されます。
 
 | ファイル                                                  |                                            |
 | --------------------------------------------------------- | ------------------------------------------ |
@@ -127,14 +142,80 @@ cast:
 | `neutral-blink.png`                                       | 目を閉じる（任意）                         |
 | `happy.png`, `sad.png`, `surprised.png`, … (+ `-talk`, …) | ほかの表情                                 |
 
-表情は段落ごとに選びます: `mina{face=happy}: 정말요?`。表情が変わると短い動きも付きます
-（surprised → jump、happy → bounce、angry → shake、sad → sink）。`motion=nod` で動きを選ぶ
-（jump、shake、nod、bounce、shiver、sink、lean）、`motion=none` で外す、または出演者に `motion: off` を
-指定できます。聞き手は特定の単語からリアクションさせられます:
-`mina: :react{joon=surprised}와, 정말요?`（段落の終わりまで続く）。リアクションするキャラクターは
-同じ側でも舞台に上がります。同じ側に複数いる場合は、リアクションの間だけ小さくなって並びます
-（`:react{joon=surprised yuna=surprised}`）。`facing` は絵が向いている方向（`left` / `right` / `front`）で、
-画面の外側を向いた絵は中央を向くように左右反転されます。
+**レイヤー部品**（フォルダに `character.yaml` がある場合）。体、頭、口・目の部品をレンダリング時に
+合成します。face は yaml で名前を付けた組み合わせです: view（体の角度）、任意のポーズ、任意の頭の向き、
+表情。頭が別に動くので（`head-nod`、`head-tilt`）、聞いている様子や考えている様子が生きてきます。
+生成したキャラクターと手描きのキャラクターがこの形式です。YMM4 の素材も `character.yaml` を持ち、
+face が部品フォルダごとに画像を 1 つ選びます。全身（full）だけで描かれ、頭のモーションはありません:
+
+```sh
+# YMM4 の「動く立ち絵」素材（フォルダまたは zip）。利用規約のファイルも一緒にコピーします
+node packages/cli/dist/main.js character import ~/Downloads/zundamon.zip --out characters/zunda
+# → characters/zunda/character.yaml（下書き。parts.html で全部品を見ながら face を作ります）
+```
+
+**フレーミング。** 生成または手描きのレイヤーキャラクターは、全身（`full`、デフォルト）、腰から上
+（`upper`）、顔のアップ（`head`）で描け、シーンごとに選びます。シーンの最初の段落の前に `::shot` を
+置きます。名前を書かなかったキャラクターは直前のシーンのフレーミングを引き継ぎます:
+
+```markdown
+# アップ {#how}
+
+::shot{mina=head joon=upper}
+```
+
+`::shot{mina=full}` で戻します。出力に `shot: full` を指定すると（`outputs.shorts.shot: full`）、
+その出力では `::shot` を無視します。フレーミングごとに画像が別に必要です（yaml の `sets.upper` /
+`sets.head` セット）。シーンで使う face をそのフレーミングが持っていなければ `lint` が知らせます。
+
+### キャラクターの生成（任意、Apple Silicon）
+
+script2video はローカルの画像編集モデル（Qwen-Image-Edit-2511 と 8 ステップの Lightning LoRA、どちらも
+Apache-2.0、MLX で実行）でオリジナルのレイヤーキャラクターを描けます。すべての画像は**自分で選んだ
+正面画像 1 枚**を編集して作るので、キャラクターが変わりません。ラウンドごとに確認して承認すると、次の
+ラウンドが始まります。
+
+Apple Silicon の Mac、**メモリ 48 GB 以上**（推奨 64 GB: モデルの準備で約 32 GB、生成で約 22 GB まで
+使います）、**ディスク約 85 GB** が必要です（`S2V_MODELS_DIR` でモデルを別のディスクに置けます）。
+画像 1 枚に約 4 分かかります。
+
+```sh
+node packages/cli/dist/main.js character setup        # 環境、ダウンロード、4 ビットモデル（1 回だけ）
+
+# 1. character.yaml のあるフォルダ: `kind` にデザインを書きます
+node packages/cli/dist/main.js character create characters/mina --candidates 4
+#    → 選ぶための正面画像 4 枚（確認ページが開きます）
+node packages/cli/dist/main.js character pick characters/mina 2
+
+# 2. 残りはラウンドごとに: 基準 → 体 → ポーズ → 表情 → 口・目のフレーム
+node packages/cli/dist/main.js character build characters/mina --dry-run   # 次のラウンドで作るもの
+node packages/cli/dist/main.js character build characters/mina
+#    → 確認ページ: 画像ごとのチェック結果と口の動きのプレビュー
+node packages/cli/dist/main.js character approve characters/mina --all     # チェックを通ったものだけ
+node packages/cli/dist/main.js character redo characters/mina front/base/happy   # 別のシードで
+```
+
+`preset: standard@1`（`create` が作る yaml に入っています）は用意済みの face のセットです:
+
+- `neutral`、`happy`、`sad`、`angry`、`surprised`、`anxious`、`excited`、`calm`、`serious`、
+  `puzzled`、`moved`、`playful`: 相手の話者のほうへ少し向いた姿勢（会話の基本の姿勢）
+- `front-<表情>`: 視聴者のほうを向く（視聴者に話しかけるとき）
+- `glance-neutral`、`glance-surprised`、`glance-happy`、`glance-puzzled`: 頭だけ向ける
+- `wave`、`point`、`akimbo`、`cheer`、`arms-crossed`、`hands-together`: ポーズ
+- 顔のアップのセット: `neutral`、`happy`、`sad`、`surprised`、`moved`、`serious`
+
+`exclude: [angry, point]` で一部を外し、自分で書いた `faces:`、`expressions:`、`sets:` で preset に
+追加したり置き換えたりします。セット全体は約 150 枚（10–11 時間、1 回だけ）で、その後キャラクターは
+ライブラリになります。台本にライブラリにない face が必要になったら:
+
+```sh
+node packages/cli/dist/main.js character missing videos/demo/script.ko.md [--apply]
+# → 定義されていないもの、フレーミングのセットにないもの（--apply が追加）、まだ承認されていないもの
+```
+
+変わったものだけを作り直します。画像ごとに作ったときの定義を記録するので（`provenance.json`）、止まった
+ラウンドは続きから進み、プロンプトを直せばその画像だけを作り直します。TTS サーバーや整列サーバーが
+起動していると生成を始めず（それぞれ数十 GB を使います）、メモリが尽きる前に監視プロセスが止めます。
 
 ## 再現可能なレンダリング（Docker）
 

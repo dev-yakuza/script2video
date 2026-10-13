@@ -20,7 +20,7 @@ cast:                                     # speakers, in order (the first is the
     avatar: assets/sohee.png              # circle avatar when there is no character art
 outputs:
   youtube: { aspect: "16:9", layout: presenter }        # presenter | dialogue | shorts
-  shorts: { aspect: "9:16", layout: shorts, scenes: [problem], maxDuration: 60 }
+  shorts: { aspect: "9:16", layout: shorts, scenes: [problem], maxDuration: 60 }   # shot: full ignores ::shot here
   # subtitles: sentence | word   (word is the default for the shorts layout)
 pronounce:                                # display text → what TTS reads (ko/ja)
   Preload: 프리로드
@@ -97,6 +97,30 @@ translationOf: script.ko.md               # translations only
 ::video{src=assets/clip.mp4 start=2}
 
 :::markdown
+## Character framing
+
+A layered character (a folder with `character.yaml`, generated or hand-drawn) can be drawn
+full-length (`full`, the default), from the waist up (`upper`) or as a head close-up (`head`).
+`::shot` on its own line before the scene's first paragraph sets it for that scene; cast members
+not named keep the previous scene's framing (the video starts full):
+
+```markdown
+# 만드는 법 {#how}
+
+::shot{mina=head joon=upper}
+```
+
+`::shot{mina=full}` goes back. Not inside paragraphs. A framing shows only the faces of its set
+(`sets.upper` / `sets.head` in the yaml; `s2v character missing <script> --apply` adds them).
+Imported YMM4 characters have only `full`.
+
+Faces of a layered character are the names under `faces:` in its yaml. With
+`preset: standard@1`: `neutral happy sad angry surprised anxious excited calm serious puzzled
+moved playful` (turned toward the other speaker), `front-<expression>` (to the viewer),
+`glance-neutral glance-surprised glance-happy glance-puzzled` (head turn only), and the poses
+`wave point akimbo cheer arms-crossed hands-together`; in the head close-up `neutral happy sad
+surprised moved serious`.
+
 ## A text card
 Paragraphs with **bold** and `code`.
 - list items
@@ -150,6 +174,9 @@ narration shown over it.
   bounce, angry → shake, sad → sink. Pick another with `key{face=… motion=nod}:` (jump, shake,
   nod, bounce, shiver, sink, lean) or `motion=none`; `motion: off` on a cast member turns the
   automatic ones off for that character.
+  Layered characters also have `head-nod` and `head-tilt` (the head only); a face's motion can
+  be set in its yaml. Where there is no separate head (YMM4 material, the head close-up) they play
+  as `nod` and `lean`.
 
 ## Commands
 
@@ -168,5 +195,6 @@ node packages/cli/dist/main.js tts    <script> --retry problem:2:0   # new takes
 node packages/cli/dist/main.js new    videos/<id> --lang ko          # starter folder + script
 node packages/cli/dist/main.js doctor                                # environment check
 node packages/cli/dist/main.js voice create voices/<id>.yaml --lang ko --candidates 4
+node packages/cli/dist/main.js character missing <script> [--apply]   # faces the characters lack
 node packages/cli/dist/main.js voice pick   voices/<id>.yaml <n> --lang ko
 ```

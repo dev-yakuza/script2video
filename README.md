@@ -14,6 +14,7 @@ dialogue line), `videos/sample-dialogue-ko` (two characters, reactions, sound ef
 
 - script2video itself is **MIT**.
 - Rendering uses **[Remotion](https://www.remotion.dev/)**, which has its own license: free for individuals and organizations of up to 3 people; **larger for-profit organizations need a Remotion Company License**. See [remotion.dev/license](https://www.remotion.dev/docs/license).
+- Character generation (optional): **Qwen-Image-Edit-2511** and its Lightning LoRA (Apache-2.0), run with mflux / MLX (MIT). The yaml from `create` records the model and its license.
 - Voices: **Qwen3-TTS** (Apache-2.0) and **Supertonic-3** (code MIT, weights OpenRAIL-M). If you publish audio made with Supertonic-3, its license requires disclosing that the content is machine-generated.
 - Some dependencies are copyleft. They are installed on your machine and not redistributed by this project:
   - `soynlp` (GPL-3.0), required by `qwen-asr` in the aligner environment
@@ -26,6 +27,7 @@ dialogue line), `videos/sample-dialogue-ko` (two characters, reactions, sound ef
 - macOS (Apple Silicon) or Linux
 - Node.js 22+, Yarn 4, [uv](https://docs.astral.sh/uv/), ffmpeg
 - ~15 GB of disk for models
+- Optional, for generating characters: Apple silicon with 48 GB+ of memory and ~85 GB more disk
 
 ## Quick start
 
@@ -50,24 +52,25 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 
 ## Commands
 
-| command                                                      | what it does                                                          |
-| ------------------------------------------------------------ | --------------------------------------------------------------------- |
-| `doctor`                                                     | checks Node, ffmpeg, uv, Python environments, models, fonts           |
-| `new <dir> [--lang ko]`                                      | a new video folder with a starter script                              |
-| `lint <script>`                                              | static checks: syntax, assets, pronunciation, subtitle budget, length |
-| `check <script>`                                             | lays every subtitle out in the real renderer and reports overflow     |
-| `sentences <script>`                                         | sentence ids (for `tts --retry`)                                      |
-| `say "<text>" --script <script>`                             | synthesize and play one sentence (pronunciation check)                |
-| `tts <script> [--retry id]`                                  | synthesize into the audio lock (only what changed)                    |
-| `render <script> --output <name> [--draft] [--frozen-audio]` | video + `.srt` `.vtt` chapters, description draft, thumbnail          |
-| `snapshot <script> --output <name>`                          | one still per scene, tiled, in seconds                                |
-| `dev <script> [--video]`                                     | edit loop: lint → tts → snapshot on every save                        |
-| `pick <image>`                                               | click / drag on a screenshot to get cue coordinates                   |
-| `voice create / pick`                                        | design a persona voice and pick a candidate                           |
-| `audio prune <script>`                                       | remove audio the script no longer uses                                |
-| `export-script <script>`                                     | a reading script for recording the narration yourself                 |
-| `import-recording <script> <take.wav> [--write]`             | split one recorded take into paragraphs (`:audio`)                    |
-| `tts-server start`                                           | keep the TTS server running between commands                          |
+| command                                                                                | what it does                                                          |
+| -------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `doctor`                                                                               | checks Node, ffmpeg, uv, Python environments, models, fonts           |
+| `new <dir> [--lang ko]`                                                                | a new video folder with a starter script                              |
+| `lint <script>`                                                                        | static checks: syntax, assets, pronunciation, subtitle budget, length |
+| `check <script>`                                                                       | lays every subtitle out in the real renderer and reports overflow     |
+| `sentences <script>`                                                                   | sentence ids (for `tts --retry`)                                      |
+| `say "<text>" --script <script>`                                                       | synthesize and play one sentence (pronunciation check)                |
+| `tts <script> [--retry id]`                                                            | synthesize into the audio lock (only what changed)                    |
+| `render <script> --output <name> [--draft] [--frozen-audio]`                           | video + `.srt` `.vtt` chapters, description draft, thumbnail          |
+| `snapshot <script> --output <name>`                                                    | one still per scene, tiled, in seconds                                |
+| `dev <script> [--video]`                                                               | edit loop: lint → tts → snapshot on every save                        |
+| `pick <image>`                                                                         | click / drag on a screenshot to get cue coordinates                   |
+| `voice create / pick`                                                                  | design a persona voice and pick a candidate                           |
+| `audio prune <script>`                                                                 | remove audio the script no longer uses                                |
+| `export-script <script>`                                                               | a reading script for recording the narration yourself                 |
+| `import-recording <script> <take.wav> [--write]`                                       | split one recorded take into paragraphs (`:audio`)                    |
+| `tts-server start`                                                                     | keep the TTS server running between commands                          |
+| `character import / setup / create / pick / build / review / approve / redo / missing` | character art: YMM4 import and generation (see below)                 |
 
 Run them as `node packages/cli/dist/main.js <command> …`. `S2V_TTS=mock` runs everything with
 synthetic audio (no models), useful for layout work and CI.
@@ -117,8 +120,19 @@ cast:
   joon: { voice: 'persona:joon', character: { dir: characters/joon, facing: right } }
 ```
 
-A character folder holds transparent PNGs on **one shared canvas** (same size, same body
-position), per face:
+Pick a face per paragraph: `mina{face=happy}: 정말요?`. A face change also plays a short
+motion (surprised → jump, happy → bounce, angry → shake, sad → sink); choose one with
+`motion=nod` (jump, shake, nod, bounce, shiver, sink, lean), skip it with `motion=none`, or set
+`motion: off` on the cast member. Make listeners react from a word on:
+`mina: :react{joon=surprised}와, 정말요?` (held to the end of the paragraph). Reacting
+characters come on stage even when they share a side: several of a side stand together, smaller,
+for as long as the reaction lasts (`:react{joon=surprised yuna=surprised}`).
+
+A character folder comes in one of two forms.
+
+**Whole images.** Transparent PNGs on **one shared canvas** (same size, same body position), per
+face. `facing` is the way the art looks (`left` / `right` / `front`); art facing the frame edge is
+mirrored to face the center.
 
 | file                                                      |                                                  |
 | --------------------------------------------------------- | ------------------------------------------------ |
@@ -128,14 +142,84 @@ position), per face:
 | `neutral-blink.png`                                       | eyes closed (optional)                           |
 | `happy.png`, `sad.png`, `surprised.png`, … (+ `-talk`, …) | other faces                                      |
 
-Pick a face per paragraph: `mina{face=happy}: 정말요?`. A face change also plays a short
-motion (surprised → jump, happy → bounce, angry → shake, sad → sink); choose one with
-`motion=nod` (jump, shake, nod, bounce, shiver, sink, lean), skip it with `motion=none`, or set
-`motion: off` on the cast member. Make listeners react from a word on:
-`mina: :react{joon=surprised}와, 정말요?` (held to the end of the paragraph). Reacting
-characters come on stage even when they share a side: several of a side stand together, smaller,
-for as long as the reaction lasts (`:react{joon=surprised yuna=surprised}`). `facing` is the way the art looks
-(`left` / `right` / `front`); art facing the frame edge is mirrored to face the center.
+**Layered parts** (a `character.yaml` in the folder). A body, a head and mouth / eye parts,
+composed at render time. A face is a combination you name in the yaml: a view (body angle), an
+optional pose, an optional head turn and an expression. The head moves on its own
+(`head-nod`, `head-tilt`), so listening and thinking look alive. Generated and hand-drawn
+characters use this form. YMM4 material also gets a `character.yaml`, where a face picks one
+image per part folder; it is drawn full-length and without head motions:
+
+```sh
+# YMM4 "動く立ち絵" material (a folder or a zip); the files are copied with their terms of use
+node packages/cli/dist/main.js character import ~/Downloads/zundamon.zip --out characters/zunda
+# → characters/zunda/character.yaml (a draft; parts.html shows every part to build faces from)
+```
+
+**Framing.** A generated or hand-drawn layered character can be drawn full-length (`full`, the
+default), from the waist up (`upper`) or as a head close-up (`head`), chosen per scene. Put
+`::shot` before the scene's first paragraph; characters not named keep the previous scene's
+framing:
+
+```markdown
+# Close-up {#how}
+
+::shot{mina=head joon=upper}
+```
+
+`::shot{mina=full}` goes back. `shot: full` on an output (`outputs.shorts.shot: full`) ignores
+`::shot` there. Each framing needs its own images (a `sets.upper` / `sets.head` set in the yaml);
+`lint` reports a face a scene uses that its framing does not have.
+
+### Generating a character (optional, Apple silicon)
+
+script2video can draw an original layered character with a local image-editing model
+(Qwen-Image-Edit-2511 with an 8-step Lightning LoRA, both Apache-2.0, run with MLX). Everything
+is made from **one front image you choose**, as edits of it, so the character stays the same. You
+approve each round before the next one starts.
+
+Needs a Mac with Apple silicon, **48 GB of memory or more** (64 GB recommended: preparing the
+model peaks near 32 GB, generating near 22 GB) and **about 85 GB of disk** (`S2V_MODELS_DIR`
+moves the models to another disk). About 4 minutes per image.
+
+```sh
+node packages/cli/dist/main.js character setup        # environment, download, 4-bit model (once)
+
+# 1. a folder with character.yaml: describe the design in `kind`
+node packages/cli/dist/main.js character create characters/mina --candidates 4
+#    → four front images to choose from (a review page opens)
+node packages/cli/dist/main.js character pick characters/mina 2
+
+# 2. the rest, round by round: references → body → poses → expressions → mouth and eye frames
+node packages/cli/dist/main.js character build characters/mina --dry-run   # what the next round makes
+node packages/cli/dist/main.js character build characters/mina
+#    → a review page: every image with its checks and a lip-sync preview
+node packages/cli/dist/main.js character approve characters/mina --all     # passed checks only
+node packages/cli/dist/main.js character redo characters/mina front/base/happy   # another seed
+```
+
+`preset: standard@1` (in the yaml from `create`) is a ready set of faces:
+
+- `neutral`, `happy`, `sad`, `angry`, `surprised`, `anxious`, `excited`, `calm`, `serious`,
+  `puzzled`, `moved`, `playful`: turned a little toward the other speaker (the usual stance in a
+  dialogue)
+- `front-<expression>`: facing the viewer (talking to the audience)
+- `glance-neutral`, `glance-surprised`, `glance-happy`, `glance-puzzled`: only the head turns
+- `wave`, `point`, `akimbo`, `cheer`, `arms-crossed`, `hands-together`: poses
+- a head close-up set with `neutral`, `happy`, `sad`, `surprised`, `moved`, `serious`
+
+`exclude: [angry, point]` leaves parts out; your own `faces:`, `expressions:` and `sets:` add to
+or replace the preset's. Generating the whole set takes about 150 images (10–11 hours, once); the
+character is then a library. When a script needs a face the library lacks:
+
+```sh
+node packages/cli/dist/main.js character missing videos/demo/script.ko.md [--apply]
+# → what is not defined, not in a framing's set (--apply adds it) or not approved yet
+```
+
+Only what changed is made again: images are recorded with the definition they were made for
+(`provenance.json`), so a stopped round resumes and an edited prompt remakes only its images.
+Generation refuses to start while the TTS or aligner server is running (each needs tens of GB),
+and a watchdog stops it before memory runs out.
 
 ## Reproducible renders (Docker)
 

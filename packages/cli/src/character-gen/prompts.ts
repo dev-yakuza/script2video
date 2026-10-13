@@ -13,6 +13,12 @@ import type { Facing, Framing } from '@script2video/renderer-remotion';
 
 export const LINE_ART =
   'crisp sharp clean dark line art with uniform thick outlines, no blur, flat colors with minimal shading';
+/**
+ * The resting face. "Neutral calm expression" came out slightly sulky on turned views and
+ * glances (test r6); a soft smile reads as neutral in a dialogue. Keep it the
+ * same everywhere the resting face is drawn: candidates, close-ups and neutral groups.
+ */
+export const NEUTRAL = 'Calm, relaxed and friendly expression with a soft gentle smile';
 const BACKGROUND =
   'Plain solid light gray background, no shadow at all, no text, no other objects.';
 
@@ -34,14 +40,17 @@ const side = (f: Facing | undefined) => (f === 'left' ? 'left' : 'right');
 
 /** View presets (C9): `{side}` is the viewer's side the character turns toward. */
 export const VIEW_PRESETS: Record<string, (s: string) => string> = {
+  // "About 30 degrees ... still mostly facing the viewer" came out almost frontal (test r6).
   'turn-slight': (s) =>
-    `The character turns the head and upper body slightly, about 30 degrees, toward the viewer's ${s} side of the image, as if listening to someone standing there. Both eyes stay clearly visible; still mostly facing the viewer.`,
+    `The character turns the head and body about 45 degrees toward the viewer's ${s} side of the image, a three-quarter view, as if talking to someone standing there. Both eyes stay visible; the far side of the face looks a little narrower.`,
   back: () =>
     'Show the character from behind (back view), so we see the back of the head and body, not the face.',
 };
 export const HEAD_PRESETS: Record<string, (s: string) => string> = {
+  // "Only the head slightly, about 20 degrees" barely turned it: with a smiling resting face the
+  // glance was the front reference again (change 0.08 %, test r6).
   glance: (s) =>
-    `The character turns only the head slightly, about 20 degrees, toward the viewer's ${s} side of the image. The body keeps facing the viewer. Both eyes stay clearly visible.`,
+    `The character turns the head about 30 degrees toward the viewer's ${s} side of the image, looking at someone standing there: the face is clearly turned and the nose points to that side, while the shoulders and body keep facing the viewer. Both eyes stay visible.`,
 };
 
 export type Frame =
@@ -93,7 +102,7 @@ export function posePrefix(pose: Pose): string {
  * ignored on the front reference (change 0.12 %), the imperative form changed it (0.88 %, test r5).
  */
 export function expressionText(name: string, prompt: string | undefined): string {
-  if (name === 'neutral' && !prompt) return 'Neutral calm expression';
+  if (name === 'neutral' && !prompt) return NEUTRAL;
   const word = name.replace(/-/g, ' ');
   return `Make the character look ${word}: ${prompt ?? `${word} expression`}`;
 }
@@ -113,7 +122,7 @@ export function candidatePrompt(kind: string, style: string | undefined): string
   const s = style ? (STYLES[style] ?? style) : STYLES.chibi!;
   return (
     `Draw ${kind}. ${s}, ${LINE_ART}, 2D standing illustration for a video, full body, facing the viewer, ` +
-    `standing straight, arms at the sides. Neutral calm expression, mouth closed, eyes open. ${BACKGROUND}`
+    `standing straight, arms at the sides. ${NEUTRAL}, mouth closed, eyes open. ${BACKGROUND}`
   );
 }
 
@@ -122,8 +131,8 @@ export function closeupPrompt(framing: 'upper' | 'head'): string {
   const same =
     'Exactly the same character design, face, hair, colors, outfit and line art style; plain light gray background, no shadow, no other objects.';
   return framing === 'upper'
-    ? `Zoom in: show the same character from the waist up, larger, cut off by the bottom edge of the image, facing the viewer. Neutral calm expression, mouth closed. ${same}`
-    : `Zoom in close: show only the same character's head and the top of the shoulders, large and filling most of the image, cut off at the shoulders by the bottom edge, facing the viewer. Neutral calm expression, mouth closed. ${same}`;
+    ? `Zoom in: show the same character from the waist up, larger, cut off by the bottom edge of the image, facing the viewer. ${NEUTRAL}, mouth closed. ${same}`
+    : `Zoom in close: show only the same character's head and the top of the shoulders, large and filling most of the image, cut off at the shoulders by the bottom edge, facing the viewer. ${NEUTRAL}, mouth closed. ${same}`;
 }
 
 /** Headless body (P1 exception: an edit of the view's closed reference). */
