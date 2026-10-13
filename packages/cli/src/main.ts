@@ -17,6 +17,7 @@
  *   s2v audio prune <script.md>   (drop locked audio the script no longer uses)
  *   s2v dev <script.md> [--video]  (edit loop: lint → tts → snapshot on every save)
  *   s2v doctor                    (is this machine ready?)
+ *   s2v character setup [--max-memory-gb N]   (optional: character image generation, Apple silicon)
  *   s2v new <dir> [--lang ko]     (a new video folder with a starter script)
  *   s2v snapshot <script.md> [--output youtube] [--draft]
  *   s2v pick <image>
@@ -58,6 +59,7 @@ import { writePublishFiles, writeThumbnail } from './publish.js';
 import { timelineMouths } from './mouth.js';
 import { checkSubtitles } from './check.js';
 import { importCharacter } from './character-import.js';
+import { defaultMemoryLimitGb, ExitError, setupImagegen } from './imagegen.js';
 import { dev } from './dev.js';
 import { importRecording } from './import-recording.js';
 import { doctor } from './doctor.js';
@@ -84,6 +86,7 @@ function usage(): never {
       '       s2v voice create <voices/id.yaml> [--lang ko] [--candidates 3] [--play]\n' +
       '       s2v voice pick <voices/id.yaml> <n> [--lang ko]\n' +
       '       s2v character import <ymm4 folder|zip> --out <characters/id> [--name <character>]\n' +
+      '       s2v character setup [--max-memory-gb N]   (image generation models; Apple silicon)\n' +
       '       s2v audio prune <script.md>\n' +
       '       s2v export-script <script.md>   (reading script for recording)\n' +
       '       s2v import-recording <script.md> <take.wav> [--write]\n' +
@@ -150,6 +153,17 @@ function injectFaceMotions(script: Script, scriptDir: string): void {
   }
 }
 
+/** `--max-memory-gb` (default: max(24 GB, 60 % of RAM)). */
+function memoryLimit(value: string | undefined): number {
+  if (value === undefined) return defaultMemoryLimitGb();
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 8) {
+    console.error('--max-memory-gb must be a number of GB, at least 8');
+    process.exit(2);
+  }
+  return n;
+}
+
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   const { values, positionals } = parseArgs({
@@ -176,6 +190,7 @@ async function main(): Promise<void> {
       candidates: { type: 'string', default: '3' },
       out: { type: 'string' },
       name: { type: 'string' },
+      'max-memory-gb': { type: 'string' },
     },
   });
   const file = positionals[0];
@@ -263,6 +278,14 @@ async function main(): Promise<void> {
   }
   if (command === 'character') {
     const [sub, src] = positionals;
+    if (sub === 'setup' && !src) {
+      await setupImagegen(REPO_ROOT, {
+        maxGb: memoryLimit(values['max-memory-gb']),
+        explicit: values['max-memory-gb'] !== undefined,
+        log: (m) => console.error(m),
+      });
+      return;
+    }
     if (sub === 'import' && src && values.out) {
       const r = importCharacter(resolve(src), resolve(values.out), {
         ...(values.name ? { name: values.name } : {}),
@@ -598,5 +621,5 @@ async function main(): Promise<void> {
 
 main().catch((e: unknown) => {
   console.error(e instanceof Error ? e.message : e);
-  process.exit(1);
+  process.exit(e instanceof ExitError ? e.exitCode : 1);
 });

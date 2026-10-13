@@ -8,6 +8,15 @@ import { existsSync, readFileSync, statfsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import {
+  imagegenPython,
+  imagegenSupported,
+  MIN_RAM_GB,
+  modelsDir,
+  modelStates,
+  ramGb,
+  readImagegenLock,
+} from './imagegen.js';
 import { fontsDir } from './media.js';
 import { ALIGNER, Service, TTS_SERVER } from './services.js';
 
@@ -93,10 +102,11 @@ export async function doctor(repoRoot: string): Promise<Check[]> {
       models: Record<string, { revision: string }>;
     }
   ).models;
-  const modelsDir =
-    process.env.S2V_MODELS_DIR ?? join(homedir(), '.cache', 'script2video', 'models');
   for (const [name, { revision }] of Object.entries(models)) {
-    const dir = join(modelsDir, `${name.replace(/[^0-9A-Za-z_]/g, '_')}__${revision.slice(0, 12)}`);
+    const dir = join(
+      modelsDir(),
+      `${name.replace(/[^0-9A-Za-z_]/g, '_')}__${revision.slice(0, 12)}`,
+    );
     const ok = existsSync(dir);
     const required = REQUIRED_MODELS.has(name);
     add({
@@ -113,6 +123,8 @@ export async function doctor(repoRoot: string): Promise<Check[]> {
         : { fix: `(cd tts-server && uv run --frozen python scripts/fetch_models.py ${name})` }),
     });
   }
+
+  checks.push(imagegenCheck(repoRoot));
 
   const fontLock = JSON.parse(readFileSync(join(repoRoot, 'fonts.lock.json'), 'utf8')) as {
     fonts: Record<string, unknown>;
@@ -147,4 +159,40 @@ export async function doctor(repoRoot: string): Promise<Check[]> {
     });
   }
   return checks;
+}
+
+/** Character generation is optional: never a failure, only "not installed" or "not supported". */
+export function imagegenCheck(repoRoot: string, supported = imagegenSupported()): Check {
+  const name = 'character generation (optional)';
+  if (!supported)
+    return {
+      name,
+      ok: true,
+      optional: true,
+      detail: 'not supported on this platform (macOS on Apple silicon only)',
+    };
+  const ram = ramGb();
+  if (ram < MIN_RAM_GB - 0.5)
+    return {
+      name,
+      ok: true,
+      optional: true,
+      detail: `not supported on this Mac: needs ${MIN_RAM_GB} GB of RAM (${ram.toFixed(0)} GB)`,
+    };
+  const lock = readImagegenLock(repoRoot);
+  const s = modelStates(lock);
+  const missing = [
+    ...(existsSync(imagegenPython(repoRoot)) ? [] : ['imagegen/.venv']),
+    ...(s.quantized.complete ? [] : [s.quantized.name]),
+    ...(s.lora.complete && existsSync(join(s.lora.path, lock.lora.file)) ? [] : [s.lora.name]),
+  ];
+  return missing.length === 0
+    ? { name, ok: true, optional: true, detail: 'installed' }
+    : {
+        name,
+        ok: false,
+        optional: true,
+        detail: `not installed: ${missing.join(', ')}`,
+        fix: 's2v character setup',
+      };
 }

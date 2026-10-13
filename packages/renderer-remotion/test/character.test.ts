@@ -233,7 +233,8 @@ describe('resolveFace (flip rule, pivots, offsets)', () => {
   });
 });
 
-describe.skipIf(!hasFfmpeg)('composition (ffmpeg)', () => {
+// Many ffmpeg runs per test: slow on loaded machines and CI runners.
+describe.skipIf(!hasFfmpeg)('composition (ffmpeg)', { timeout: 30_000 }, () => {
   it('composites straight alpha exactly, including over transparent pixels', () => {
     const d = mkdtempSync(join(tmpdir(), 's2v-comp-'));
     writePng(join(d, 'a.png'), 4, 1, (x) => (x < 2 ? [255, 0, 0, 255] : T));

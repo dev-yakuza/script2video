@@ -1,4 +1,4 @@
-# Python lint for the local servers (tts-server/, aligner/). Experiments are throwaway scripts.
+# Python lint for the local servers (tts-server/, aligner/) and imagegen/. Experiments are throwaway scripts.
 target-version = "py312"
 line-length = 120
 extend-exclude = ["experiments"]

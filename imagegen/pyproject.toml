@@ -1,0 +1,18 @@
+[project]
+name = "s2v-imagegen"
+version = "0.0.1"
+description = "script2video character generation: Qwen-Image-Edit-2511 (4-bit, Lightning LoRA) on MLX"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+dependencies = [
+    "mflux==0.22.0",
+    "mlx==0.32.3",
+    "numpy",
+    "pillow",
+    "ruamel.yaml>=0.18",
+]
+
+[tool.uv]
+package = false
+# MLX runs on Apple silicon only.
+environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]

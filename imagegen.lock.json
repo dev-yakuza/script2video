@@ -1,0 +1,29 @@
+{
+  "$comment": "Character image generation (optional; macOS on Apple silicon). Hugging Face snapshots pinned by commit SHA, kept apart from models.lock.json so `fetch_models.py --all` never downloads them. Install with: s2v character setup. Folders: $S2V_MODELS_DIR/<name>__<revision[:12]> (the name as is).",
+  "models": {
+    "qwen-image-edit-2511": {
+      "repo": "Qwen/Qwen-Image-Edit-2511",
+      "revision": "6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9",
+      "license": "Apache-2.0",
+      "size_gb": 54
+    },
+    "qwen-image-edit-2511-lightning": {
+      "repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+      "revision": "d74eba145674fd7e31b949324e148e21e7118abd",
+      "license": "Apache-2.0",
+      "allow_patterns": ["Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"],
+      "size_gb": 0.9
+    }
+  },
+  "quantized": {
+    "name": "qwen-image-edit-2511-q4",
+    "from": "qwen-image-edit-2511",
+    "bits": 4,
+    "size_gb": 27
+  },
+  "lora": {
+    "model": "qwen-image-edit-2511-lightning",
+    "file": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+    "steps": 8
+  }
+}
