@@ -1303,6 +1303,8 @@ __metadata:
     react-dom: "npm:19.3.0"
     remotion: "npm:4.0.534"
     typescript: "npm:~6.0.0"
+    yaml: "npm:^2.9.1"
+    zod: "npm:^4.6.5"
   languageName: unknown
   linkType: soft
 

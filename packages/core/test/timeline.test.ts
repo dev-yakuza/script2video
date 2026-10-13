@@ -301,3 +301,87 @@ describe('character motions', () => {
     expect(diagnostics.items.map((d) => d.code)).toContain('motion-name');
   });
 });
+
+describe('::shot framings', () => {
+  const src = (outputs: string, body: string) =>
+    `---\nlang: ko\ncast:\n  a: { voice: "qwen:Sohee" }\n  b: { voice: "qwen:Ryan" }\noutputs:\n${outputs}---\n\n${body}`;
+  const manifestOf = (script: Script) =>
+    Object.fromEntries(
+      script.scenes.flatMap((sc) =>
+        sc.blocks.flatMap((b, bi) =>
+          b.kind === 'paragraph'
+            ? b.sentences.map((s, si) => [
+                sentenceId(sc.id, bi, si),
+                { src: 'x.wav', duration: 1, words: [{ text: s.text, start: 0, end: 1 }] },
+              ])
+            : [],
+        ),
+      ),
+    );
+  const body =
+    '# 하나 {#one}\n\na: 안녕하세요.\n\n# 둘 {#two}\n\n::shot{a=head}\n\na: 반갑습니다.\n\n# 셋 {#three}\n\nb: 그렇군요.\n\n# 넷 {#four}\n\n::shot{a=full b=upper}\n\na: 끝입니다.\n';
+
+  it('sets framings per scene and inherits them into later scenes', () => {
+    const { script, diagnostics } = parseScript(src('  youtube: { aspect: "16:9" }\n', body));
+    expect(diagnostics.items.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(script!.scenes.map((s) => s.shot)).toEqual([
+      undefined,
+      { a: 'head' },
+      undefined,
+      { a: 'full', b: 'upper' },
+    ]);
+    const { timeline } = buildTimeline(script!, 'youtube', manifestOf(script!), 10);
+    expect(timeline.scenes.map((s) => s.framing)).toEqual([
+      { a: 'full', b: 'full' },
+      { a: 'head', b: 'full' },
+      { a: 'head', b: 'full' },
+      { a: 'full', b: 'upper' },
+    ]);
+  });
+
+  it('resolves inheritance over the scenes an output plays, and `shot: full` turns it off', () => {
+    const outputs =
+      '  youtube: { aspect: "16:9" }\n  part: { aspect: "16:9", scenes: [three, four] }\n  plain: { aspect: "16:9", shot: full }\n';
+    const { script } = parseScript(src(outputs, body));
+    const m = manifestOf(script!);
+    // "three" inherits head from "two" in the full video, but `part` starts at "three".
+    expect(buildTimeline(script!, 'part', m, 10).timeline.scenes.map((s) => s.framing)).toEqual([
+      { a: 'full', b: 'full' },
+      { a: 'full', b: 'upper' },
+    ]);
+    expect(
+      buildTimeline(script!, 'plain', m, 10).timeline.scenes.every((s) =>
+        Object.values(s.framing).every((f) => f === 'full'),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects a shot after the first paragraph, unknown cast and unknown framings', () => {
+    const codes = (b: string) =>
+      parseScript(src('  youtube: { aspect: "16:9" }\n', b)).diagnostics.items.map((d) => d.code);
+    expect(codes('# 하나\n\na: 안녕.\n\n::shot{a=head}\n')).toContain('shot-placement');
+    expect(codes('# 하나\n\n::shot{z=head}\n\na: 안녕.\n')).toContain('shot-cast');
+    expect(codes('# 하나\n\n::shot{a=close}\n\na: 안녕.\n')).toContain('shot-framing');
+    expect(codes('# 하나\n\na: 안녕 :shot{a=head} 하세요.\n')).toContain('shot-placement');
+  });
+});
+
+describe('faceMotions (parts characters)', () => {
+  it('replaces the name-based face motions and cannot be written in a script', () => {
+    const { script } = parseScript(
+      '---\nlang: ko\ncast:\n  a: { voice: "qwen:Sohee" }\n---\n\n# 하나 {#one}\n\na{face=gasp}: 안녕하세요.\n\na{face=surprised}: 반갑습니다.\n',
+    );
+    script!.meta.cast.a!.faceMotions = { gasp: 'head-nod', surprised: 'none' };
+    const manifest = {
+      'one:0:0': { src: 'x.wav', duration: 1, words: [{ text: '안녕하세요.', start: 0, end: 1 }] },
+      'one:1:0': { src: 'x.wav', duration: 1, words: [{ text: '반갑습니다.', start: 0, end: 1 }] },
+    };
+    const motions = buildTimeline(script!, 'youtube', manifest, 10).timeline.scenes[0]!.motions;
+    // `gasp` brings head-nod; `surprised` (yaml motion: none) brings nothing, not even the built-in jump.
+    expect(motions.map((m) => m.motion)).toEqual(['head-nod']);
+    const { diagnostics } = parseScript(
+      '---\nlang: ko\ncast:\n  a: { voice: "qwen:Sohee", faceMotions: { x: jump } }\n---\n\n# 하나\n\na: 안녕.\n',
+    );
+    expect(diagnostics.items.map((d) => d.code)).toContain('frontmatter-schema');
+  });
+});

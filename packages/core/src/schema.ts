@@ -37,11 +37,31 @@ export const castMemberSchema = z.object({
   motion: z.enum(['auto', 'off']).default('auto'),
   color: z.string().optional(),
   side: z.enum(['left', 'right']).optional(),
+  /**
+   * Internal: face → motion, filled from a parts character's `character.yaml` by the CLI. When
+   * present, faces bring these motions instead of the name-based FACE_MOTION. Not for scripts.
+   */
+  faceMotions: z.record(z.string(), z.string()).optional(),
 });
 export type CastMember = z.infer<typeof castMemberSchema>;
 
+/** Character framings (shot sizes) a parts character can be drawn in; chosen per scene by `::shot`. */
+export const FRAMINGS = ['full', 'upper', 'head'] as const;
+export type Framing = (typeof FRAMINGS)[number];
+
 /** Character motions (PLAN 5.8). `sink` and `lean` hold while their face lasts. */
-export const MOTIONS = ['jump', 'shake', 'nod', 'bounce', 'shiver', 'sink', 'lean'] as const;
+export const MOTIONS = [
+  'jump',
+  'shake',
+  'nod',
+  'bounce',
+  'shiver',
+  'sink',
+  'lean',
+  /** Head only (parts characters with a head layer); others fall back to nod / lean. */
+  'head-nod',
+  'head-tilt',
+] as const;
 /** Motion a face brings by itself (cast `motion: auto`). */
 export const FACE_MOTION: Record<string, string> = {
   surprised: 'jump',
@@ -116,6 +136,8 @@ export const outputProfileSchema = z.object({
   subtitleStyle: subtitleStyleSchema.optional(),
   /** Scene boundaries: `fade` dips to the background color. */
   transition: z.enum(['none', 'fade']).optional(),
+  /** `full`: ignore `::shot` and draw every character full-length in this output. */
+  shot: z.literal('full').optional(),
 });
 export type OutputProfile = z.infer<typeof outputProfileSchema>;
 
@@ -232,6 +254,8 @@ export interface Scene {
   id: string;
   title: string;
   line: number;
+  /** `::shot{mina=head}` at the start of the scene: framings set here (others are inherited). */
+  shot?: Record<string, Framing>;
   blocks: Block[];
 }
 

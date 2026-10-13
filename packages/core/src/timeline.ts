@@ -15,6 +15,7 @@
 import {
   FACE_MOTION,
   type Cue,
+  type Framing,
   type Lang,
   type OutputProfile,
   type Paragraph,
@@ -104,6 +105,11 @@ export interface TimelineScene {
   subtitles: TimelineSubtitle[];
   reactions: TimelineReaction[];
   motions: TimelineMotion[];
+  /**
+   * Framing of every cast member in this scene: the scene's `::shot`, else inherited from the
+   * previous scene of this output (the first starts full). All full when the output sets `shot: full`.
+   */
+  framing: Record<string, Framing>;
 }
 
 export interface Timeline {
@@ -246,8 +252,29 @@ function motionFor(
 ): string | undefined {
   if (explicit === 'none') return undefined;
   if (explicit) return explicit;
-  if (!face || meta.cast[cast]?.motion === 'off') return undefined;
+  const member = meta.cast[cast];
+  if (!face || member?.motion === 'off') return undefined;
+  // Parts characters bring their own face → motion table (from character.yaml).
+  if (member?.faceMotions) {
+    const m = member.faceMotions[face];
+    return m === 'none' ? undefined : m;
+  }
   return FACE_MOTION[face];
+}
+
+/** Framing per cast member for each selected scene: `::shot` sets, later scenes inherit. */
+export function sceneFramings(
+  meta: Script['meta'],
+  scenes: Script['scenes'],
+  profile: OutputProfile,
+): Record<string, Framing>[] {
+  const current: Record<string, Framing> = Object.fromEntries(
+    Object.keys(meta.cast).map((k) => [k, 'full' as Framing]),
+  );
+  return scenes.map((scene) => {
+    if (profile.shot !== 'full') Object.assign(current, scene.shot ?? {});
+    return { ...current };
+  });
 }
 
 export function buildTimeline(
@@ -265,6 +292,7 @@ export function buildTimeline(
 
   const scenes: TimelineScene[] = [];
   const selected = selectScenes(script, outputName, profile);
+  const framings = sceneFramings(meta, selected, profile);
   let sceneStart = 0;
 
   selected.forEach((scene, sceneIndex) => {
@@ -284,6 +312,7 @@ export function buildTimeline(
       subtitles: [],
       reactions: [],
       motions: [],
+      framing: framings[sceneIndex]!,
     };
     const pendingVisuals: Visual[] = [];
 

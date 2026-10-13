@@ -3,10 +3,30 @@
  * screenshots that will look soft because they are enlarged too much on screen.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { bgmOf, logoOf, type Diagnostic, type Script } from '@script2video/core';
-import { characterFaces, imageSize, MAX_AVATARS } from '@script2video/renderer-remotion';
+import {
+  bgmOf,
+  logoOf,
+  MOTIONS,
+  sceneFramings,
+  type Diagnostic,
+  type Framing,
+  type Script,
+} from '@script2video/core';
+import {
+  CHARACTER_YAML,
+  characterFaces,
+  characterSource,
+  FaceError,
+  IMPORTED_PARTS,
+  isSingle,
+  imageSize,
+  loadCharacterSpec,
+  MAX_AVATARS,
+  resolveFace,
+  type CharacterSpec,
+} from '@script2video/renderer-remotion';
 import { resolvePersona } from './persona.js';
 
 const FRAME: Record<string, [number, number]> = {
@@ -234,6 +254,10 @@ export function lintCast(script: Script, scriptDir: string): Diagnostic[] {
       err(`cast.${key}.character folder not found: ${rel}`);
       continue;
     }
+    if (characterSource(dir) === 'parts') {
+      out.push(...lintPartsCharacter(script, key, rel, dir));
+      continue;
+    }
     const faces = characterFaces(dir);
     const used = new Set([m.face]);
     for (const scene of script.scenes)
@@ -300,5 +324,256 @@ export function lintCast(script: Script, scriptDir: string): Diagnostic[] {
         message: `"${name}" has ${n} speakers: avatars are hidden above ${MAX_AVATARS}, only name tags tell them apart`,
       });
   }
+  return out;
+}
+
+/** Selection keys of imported YMM4 faces (folders; 後 / 他 take slots 1–3). */
+const YMM4_SLOTS = [
+  '後',
+  '後1',
+  '後2',
+  '後3',
+  '体',
+  '顔色',
+  '髪',
+  '口',
+  '目',
+  '眉',
+  '他',
+  '他1',
+  '他2',
+  '他3',
+];
+
+/** README / terms files that come with downloaded material. */
+const TERMS_FILE = /^(readme|terms|license|licence|利用規約|規約)/i;
+
+/** Small, best-effort list of well-known character IPs that must not be imitated (plan C20). */
+const IP_NAMES = [
+  'line friends',
+  'kakao friends',
+  'pikachu',
+  'pokemon',
+  'hello kitty',
+  'sanrio',
+  'doraemon',
+  'mickey mouse',
+  'snoopy',
+  'rilakkuma',
+];
+
+/** Faces a cast member shows, per framing, over every output (both sides are checked). */
+function usedFaces(script: Script, key: string): Map<Framing, Set<string>> {
+  const used = new Map<Framing, Set<string>>();
+  const add = (f: Framing, face: string) =>
+    (used.get(f) ?? used.set(f, new Set()).get(f)!).add(face);
+  const member = script.meta.cast[key]!;
+  for (const [name, profile] of Object.entries(script.meta.outputs)) {
+    const scenes = script.scenes.filter((s) => !profile.scenes || profile.scenes.includes(s.id));
+    const framings = sceneFramings(script.meta, scenes, profile);
+    scenes.forEach((scene, i) => {
+      const framing = framings[i]![key] ?? 'full';
+      add(framing, member.face);
+      for (const b of scene.blocks)
+        if (b.kind === 'paragraph' && (!b.only || b.only.includes(name))) {
+          if (b.cast === key && b.face) add(framing, b.face);
+          for (const s of b.sentences)
+            for (const r of s.reacts ?? []) if (r.faces[key]) add(framing, r.faces[key]);
+        }
+    });
+  }
+  return used;
+}
+
+/** Parts characters (character.yaml): schema, faces per framing and side, files, names (plan 6). */
+export function lintPartsCharacter(
+  script: Script,
+  key: string,
+  rel: string,
+  dir: string,
+): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  const err = (message: string) =>
+    out.push({ severity: 'error', code: 'character', message: `cast.${key}: ${message}` });
+  const warn = (message: string) =>
+    out.push({ severity: 'warning', code: 'character', message: `cast.${key}: ${message}` });
+  let spec: CharacterSpec;
+  try {
+    spec = loadCharacterSpec(dir);
+  } catch (e) {
+    err((e as Error).message);
+    return out;
+  }
+  const m = script.meta.cast[key]!;
+  if (typeof m.character === 'object' && m.character.facing !== 'front')
+    warn(`character.facing is ignored for ${CHARACTER_YAML} characters (set facing in the yaml)`);
+  if (!spec.license) warn(`${rel}/${CHARACTER_YAML} has no license`);
+  const used = usedFaces(script, key);
+  if (spec.source === 'imported') {
+    if (!readdirSync(dir).some((f) => TERMS_FILE.test(f.normalize('NFC'))))
+      warn(`${rel} has no README / terms file: check the material's terms of use`);
+    const parts = join(dir, IMPORTED_PARTS);
+    for (const [framing, faces] of used) {
+      if (framing !== 'full')
+        err(`imported characters have only the full framing (::shot ${framing})`);
+      for (const f of faces) {
+        if (!spec.faces[f]) {
+          err(`face "${f}" is not defined in ${rel}/${CHARACTER_YAML}`);
+          continue;
+        }
+        const pick = { ...spec.faces.neutral, ...spec.faces[f] };
+        for (const slot of Object.keys(pick))
+          if (!YMM4_SLOTS.includes(slot.normalize('NFC')))
+            err(`face "${f}": "${slot}" is not a YMM4 part folder (${YMM4_SLOTS.join(' ')})`);
+        for (const [folder, stem] of Object.entries(pick)) {
+          const file = join(parts, folder.replace(/[123]$/, ''), `${stem}.png`);
+          if (!existsSync(file))
+            err(`${file.slice(dir.length + 1)} is missing (face "${f}", folder ${folder})`);
+        }
+      }
+    }
+    return out;
+  }
+  // Faces this cast member speaks with need mouth frames (others may be listening faces).
+  const speaking = new Set<string>();
+  for (const scene of script.scenes)
+    for (const b of scene.blocks)
+      if (b.kind === 'paragraph' && b.cast === key) speaking.add(b.face ?? m.face);
+  for (const name of Object.keys(spec.faces))
+    if (/-(talk|half|blink)$/.test(name))
+      err(`face name "${name}" must not end in -talk, -half or -blink`);
+  for (const [name, e] of Object.entries(spec.expressions))
+    if (e.gaze && spec.eyes === 'dot')
+      err(`expression "${name}" has gaze, but eyes: dot cannot show where they look`);
+  const motions = [...MOTIONS, 'none'] as readonly string[];
+  for (const [name, f] of Object.entries(spec.faces))
+    if (f.motion && !motions.includes(f.motion))
+      err(`face "${name}" motion "${f.motion}" is not one of ${MOTIONS.join(', ')}`);
+  for (const [name, e] of Object.entries(spec.expressions))
+    if (e.motion && !motions.includes(e.motion))
+      err(`expression "${name}" motion "${e.motion}" is not one of ${MOTIONS.join(', ')}`);
+  for (const f of ['upper', 'head'] as const) {
+    const s = spec.sets[f];
+    if (s && Object.keys(s.views).length > 1) err(`the ${f} set must have only the front view`);
+  }
+  // Bodies (motions) and head offsets need a split view (body + head layers); turned views are
+  // one-image (plan Q4). Gaze needs a front-facing head.
+  const scopes = [
+    { where: '', views: spec.views, bodies: spec.bodies, groups: spec.groups },
+    ...(['upper', 'head'] as const).flatMap((f) =>
+      spec.sets[f] ? [{ where: `sets.${f}.`, ...spec.sets[f]! }] : [],
+    ),
+  ];
+  for (const sc of scopes) {
+    const single = (view: string) => {
+      const v = sc.views[view];
+      return v ? isSingle(v) : false;
+    };
+    for (const key2 of Object.keys(sc.bodies)) {
+      const view = key2.split('/')[0]!;
+      if (single(view))
+        err(
+          `${sc.where}bodies.${key2} is on the one-image view "${view}"; bodies need a split front view (layers: split)`,
+        );
+    }
+    for (const [key2, g] of Object.entries(sc.groups)) {
+      const view = key2.split('/')[0]!;
+      if (single(view) && g.offset && (g.offset[0] !== 0 || g.offset[1] !== 0))
+        err(`${sc.where}groups.${key2}: offsets do not apply to the one-image view "${view}"`);
+    }
+  }
+  for (const [name, f] of Object.entries(spec.faces)) {
+    if (!spec.expressions[f.expression]?.gaze) continue;
+    const vf = spec.views[f.view]?.facing ?? 'front';
+    const hf = f.head ? (spec.heads[`${f.view}/${f.head}`]?.facing ?? vf) : vf;
+    if (vf !== 'front' || hf !== 'front')
+      err(`face "${name}" uses gaze on a turned view or head; gaze needs a front-facing head`);
+  }
+  const text = [
+    spec.kind ?? '',
+    ...Object.values(spec.expressions).map((e) => e.prompt ?? ''),
+    ...Object.values(spec.bodies).map((b) => b.prompt ?? ''),
+  ]
+    .join(' ')
+    .toLowerCase();
+  for (const ip of IP_NAMES)
+    if (text.includes(ip))
+      warn(
+        `"${ip}" appears in the character description: describe an original design instead (best-effort check)`,
+      );
+  // Every used face must resolve in its framing on both sides (sides can differ per output).
+  const sizes = new Map<Framing, Set<string>>();
+  for (const [framing, faces] of used)
+    for (const face of faces) {
+      if (!spec.faces[face]) {
+        err(`face "${face}" is not defined in ${rel}/${CHARACTER_YAML}`);
+        continue;
+      }
+      const problems = new Map<string, string[]>();
+      for (const side of ['left', 'right'] as const) {
+        try {
+          const r = resolveFace(dir, spec, framing, face, side, [1, 1]);
+          const files = [...r.head.states.closed, ...(r.body ? [r.body.file] : [])];
+          // Optional parts must share the canvas too, or they land in the wrong place.
+          const optional = [
+            r.head.states.talk.at(-1)!,
+            r.head.states.half.at(-1)!,
+            r.head.states.blink.at(-1)!,
+            ...(r.front ? [r.front.file] : []),
+          ].filter((f) => existsSync(f));
+          for (const f of optional)
+            (sizes.get(framing) ?? sizes.set(framing, new Set()).get(framing)!).add(
+              imageSize(f).join('×'),
+            );
+          const fm =
+            spec.faces[face]?.motion ?? spec.expressions[spec.faces[face]!.expression]?.motion;
+          if (r.pivot === null && (fm === 'head-nod' || fm === 'head-tilt'))
+            problems.set(
+              `face "${face}" has ${fm}, but no head layer in ${framing}: it plays as ${fm === 'head-nod' ? 'nod' : 'lean'} (whole body)`,
+              ['warn'],
+            );
+          if (r.body && r.body.flip !== r.head.flip && spec.mirror)
+            problems.set(
+              `face "${face}" flips only the ${r.head.flip ? 'head' : 'body'} on the ${side} side: asymmetric details (a hair clip) switch sides there`,
+              ['warn'],
+            );
+          if (speaking.has(face) && !existsSync(r.head.states.talk.at(-1)!))
+            problems.set(
+              `face "${face}" is used for speaking but has no mouth frames (${framing})`,
+              ['warn'],
+            );
+          for (const file of files) {
+            if (!existsSync(file))
+              problems.set(
+                `${file.slice(dir.length + 1)} is missing (face "${face}", ${framing})`,
+                [],
+              );
+            else
+              (sizes.get(framing) ?? sizes.set(framing, new Set()).get(framing)!).add(
+                imageSize(file).join('×'),
+              );
+          }
+        } catch (e) {
+          if (!(e instanceof FaceError)) throw e;
+          const msg = `${e.message} (${framing})`;
+          problems.set(msg, [...(problems.get(msg) ?? []), side]);
+        }
+      }
+      // Report a problem once; name the side only when it happens on one side.
+      for (const [msg, sides] of problems) {
+        if (sides[0] === 'warn') warn(msg);
+        else err(sides.length === 1 ? `${msg.slice(0, -1)}, ${sides[0]} side)` : msg);
+      }
+    }
+  const full = sizes.get('full');
+  if (spec.size && full && !full.has(spec.size.join('×')))
+    err(
+      `size: ${spec.size.join('×')} does not match the full set's images (${[...full].join(', ')})`,
+    );
+  for (const [framing, set] of sizes)
+    if (set.size > 1)
+      err(
+        `images of the ${framing} set have different sizes (${[...set].join(', ')}); use one canvas`,
+      );
   return out;
 }

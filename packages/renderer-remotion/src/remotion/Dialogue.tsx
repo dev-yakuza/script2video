@@ -22,7 +22,7 @@ import {
   type DialogueGeometry,
   type StageSwitch,
 } from '../shared';
-import type { CastInfo, CharacterFace } from './types';
+import type { CastInfo, CharacterFace, PartsFace, PartsSet } from './types';
 
 const FADE = 6; // frames for the speaking highlight to come and go
 const BLINK_FRAMES = 4;
@@ -228,22 +228,21 @@ interface MotionOffset {
   rot: number;
 }
 
+/** Head motions and what they become without a head layer (whole-body channel). */
+const HEAD_FALLBACK: Record<string, string> = { 'head-nod': 'nod', 'head-tilt': 'lean' };
+
 /**
- * The most recent motion of this character that is still playing. One-shot motions (jump,
- * shake, nod, bounce, shiver) play once from their start; `sink` and `lean` hold until their
- * face ends. `toCenter` is +1 on the left side, -1 on the right (lean / nod tilt that way).
+ * Offset of one motion at a frame. One-shot motions (jump, shake, nod, bounce, shiver,
+ * head-nod) play once from their start; `sink`, `lean` and `head-tilt` hold until their face
+ * ends. `toCenter` is +1 on the left side, -1 on the right (lean / nod / tilt go that way).
  */
-function motionOffset(
-  key: string,
+function offsetOf(
+  m: TimelineMotion,
+  motion: string,
   frame: number,
-  motions: TimelineMotion[],
   toCenter: number,
 ): MotionOffset {
   const none = { x: 0, y: 0, rot: 0 };
-  const m = motions
-    .filter((x) => x.cast === key && x.startFrame <= frame)
-    .sort((a, b) => b.startFrame - a.startFrame)[0];
-  if (!m) return none;
   const t = frame - m.startFrame;
   const fade = (len: number) => Math.max(0, 1 - t / len);
   // Holding motions: ease in, hold while the face lasts, ease out.
@@ -252,7 +251,7 @@ function motionOffset(
       interpolate(t, [0, 12], [0, 1], { ...clamp, easing: Easing.out(Easing.cubic) }),
       interpolate(frame, [m.endFrame + FACE_HOLD, m.endFrame + FACE_HOLD + 12], [1, 0], clamp),
     );
-  switch (m.motion) {
+  switch (motion) {
     case 'jump':
       return t < 14 ? { x: 0, y: -70 * Math.sin((Math.PI * t) / 14), rot: 0 } : none;
     case 'shake':
@@ -272,9 +271,58 @@ function motionOffset(
       return { x: 0, y: 30 * held(), rot: 0 };
     case 'lean':
       return { x: 0, y: 0, rot: 5 * held() * toCenter };
+    // Head layer only (rotation about the neck pivot).
+    case 'head-nod': {
+      if (t >= 24) return none;
+      const d = Math.sin((Math.PI * t) / 12) ** 2;
+      return { x: 0, y: 6 * d, rot: 4 * d * toCenter };
+    }
+    case 'head-tilt':
+      return { x: 0, y: 0, rot: 9 * held() * toCenter };
     default:
       return none;
   }
+}
+
+/** Pivot of the face a parts character shows at a frame (null: no head layer). */
+type PivotAt = (frame: number) => [number, number] | null;
+
+/**
+ * Motion channels (plan C7): the body channel and the head channel each play their most recent
+ * motion. A head motion goes to the head channel when the face shown at its start has a head
+ * pivot; otherwise it falls back (head-nod → nod, head-tilt → lean) on the body channel. A head
+ * motion stops when the pivot changes (the face changed to another view or head).
+ */
+function motionChannels(
+  key: string,
+  frame: number,
+  motions: TimelineMotion[],
+  toCenter: number,
+  pivotAt: PivotAt | null,
+  /** Frames where this character's face can change (line / reaction starts and holds' ends). */
+  changes: number[] = [],
+): { body: MotionOffset; head: MotionOffset } {
+  const none = { x: 0, y: 0, rot: 0 };
+  let body: { m: TimelineMotion; name: string } | null = null;
+  let head: { m: TimelineMotion; name: string } | null = null;
+  for (const m of motions) {
+    if (m.cast !== key || m.startFrame > frame) continue;
+    const fallback = HEAD_FALLBACK[m.motion];
+    const onHead = fallback !== undefined && pivotAt !== null && pivotAt(m.startFrame) !== null;
+    const entry = { m, name: fallback !== undefined && !onHead ? fallback : m.motion };
+    if (onHead) {
+      if (!head || m.startFrame >= head.m.startFrame) head = entry;
+    } else if (!body || m.startFrame >= body.m.startFrame) body = entry;
+  }
+  let headOffset = head ? offsetOf(head.m, head.name, frame, toCenter) : none;
+  if (head && pivotAt) {
+    // Cancelled for good once the pivot changes (even if the face comes back later).
+    const a = pivotAt(head.m.startFrame);
+    const same = (b: [number, number] | null) => !!a && !!b && a[0] === b[0] && a[1] === b[1];
+    const checks = [...changes.filter((f) => f > head!.m.startFrame && f <= frame), frame];
+    if (!checks.every((f) => same(pivotAt(f)))) headOffset = none;
+  }
+  return { body: body ? offsetOf(body.m, body.name, frame, toCenter) : none, head: headOffset };
 }
 
 function pickImage(f: CharacterFace, mouth: number, blink: boolean): string {
@@ -296,10 +344,10 @@ const Character: React.FC<{
   scale: number;
   z: number;
   motion: MotionOffset;
-}> = ({ c, side, geometry, state, blink, presence, x, scale, z, motion }) => {
+  headMotion: MotionOffset;
+  parts: PartsSet | null;
+}> = ({ c, side, geometry, state, blink, presence, x, scale, z, motion, headMotion, parts }) => {
   const ch = c.character!;
-  const faces = ch.faces[state.face] ?? ch.faces[c.face] ?? Object.values(ch.faces)[0]!;
-  const src = pickImage(faces, state.mouth, blink);
   // Mirror art that looks toward the frame edge so every character faces the center.
   const mirror =
     (side === 'left' && ch.facing === 'left') || (side === 'right' && ch.facing === 'right');
@@ -326,15 +374,95 @@ const Character: React.FC<{
         filter: `brightness(${0.62 + 0.38 * a}) saturate(${0.7 + 0.3 * a})`,
       }}
     >
+      {parts ? (
+        <PartsImage
+          set={parts}
+          face={partsFace(parts, state.face, c.face)}
+          state={state}
+          blink={blink}
+          boxW={geometry.boxW * scale}
+          boxH={geometry.boxH * scale}
+          headMotion={headMotion}
+          k={k}
+          side={side}
+        />
+      ) : (
+        <Img
+          src={staticFile(pickImage(classicFace(c, state.face), state.mouth, blink))}
+          style={
+            ch.size
+              ? // Imported parts art: the parts size rule (plan 5.3), so mixed casts match.
+                (() => {
+                  const s = Math.min(
+                    (geometry.boxW * scale) / ch.size[0],
+                    (geometry.boxH * scale) / ch.size[1],
+                  );
+                  return { width: ch.size[0] * s, height: ch.size[1] * s, flexShrink: 0 };
+                })()
+              : {
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  objectFit: 'contain',
+                  transform: mirror ? 'scaleX(-1)' : undefined,
+                }
+          }
+        />
+      )}
+    </div>
+  );
+};
+
+function classicFace(c: CastInfo, face: string): CharacterFace {
+  const ch = c.character!;
+  return ch.faces[face] ?? ch.faces[c.face] ?? Object.values(ch.faces)[0]!;
+}
+
+function partsFace(set: PartsSet, face: string, fallback: string): PartsFace {
+  return set.faces[face] ?? set.faces[fallback] ?? Object.values(set.faces)[0]!;
+}
+
+/**
+ * A parts character: body → head (mouth / blink state) → front, stacked on one canvas. Size rule
+ * (plan 5.3): scale = min(boxW / art width, boxH / height), so it matches the classic `contain`
+ * path; the widened canvas is centered and bottom-aligned (its margins may overflow the box).
+ */
+const PartsImage: React.FC<{
+  set: PartsSet;
+  face: PartsFace;
+  state: CharacterState;
+  blink: boolean;
+  boxW: number;
+  boxH: number;
+  headMotion: MotionOffset;
+  k: number;
+  side: 'left' | 'right';
+}> = ({ set, face, state, blink, boxW, boxH, headMotion, k, side }) => {
+  const [W, H] = set.canvas;
+  const s = Math.min(boxW / set.baseWidth, boxH / set.baseHeight);
+  const layer: React.CSSProperties = {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: '100%',
+    height: '100%',
+  };
+  const head = pickImage(face.head, state.mouth, blink);
+  const origin = face.pivot
+    ? `${(face.pivot[0] / W) * 100}% ${(face.pivot[1] / H) * 100}%`
+    : 'center';
+  const hx = headMotion.x * k * (side === 'left' ? 1 : -1);
+  return (
+    <div style={{ position: 'relative', width: W * s, height: H * s, flexShrink: 0 }}>
+      {face.body ? <Img src={staticFile(face.body)} style={layer} /> : null}
       <Img
-        src={staticFile(src)}
+        src={staticFile(head)}
         style={{
-          maxWidth: '100%',
-          maxHeight: '100%',
-          objectFit: 'contain',
-          transform: mirror ? 'scaleX(-1)' : undefined,
+          ...layer,
+          transformOrigin: origin,
+          transform: `translate(${hx}px, ${headMotion.y * k}px) rotate(${headMotion.rot}deg)`,
         }}
       />
+      {face.front ? <Img src={staticFile(face.front)} style={layer} /> : null}
     </div>
   );
 };
@@ -355,7 +483,9 @@ export const CharacterStage: React.FC<{
   geometry: DialogueGeometry;
   stage: Record<'left' | 'right', StageSwitch[]>;
   fps: number;
-}> = ({ cast, audio, reactions, motions, mouths, geometry, stage, fps }) => {
+  /** This scene's framing per cast member (`::shot`). */
+  framing: Record<string, string>;
+}> = ({ cast, audio, reactions, motions, mouths, geometry, stage, fps, framing }) => {
   const frame = useCurrentFrame();
   const g = geometry.character;
   if (!g) return null;
@@ -385,6 +515,28 @@ export const CharacterStage: React.FC<{
       const t = pi >= 0 && ci >= 0 ? p : ci >= 0 ? 1 : 0;
       const state = characterState(c, frame, audio, reactions, mouths);
       const order = ci >= 0 ? ci : pi;
+      const parts = c.character?.parts
+        ? (c.character.parts[framing[key] ?? 'full'] ?? c.character.parts.full ?? null)
+        : null;
+      const pivotAt: PivotAt | null = parts
+        ? (f) => partsFace(parts, characterState(c, f, audio, reactions, mouths).face, c.face).pivot
+        : null;
+      const changes = [
+        ...audio
+          .filter((a) => a.cast === key)
+          .flatMap((a) => [a.startFrame, a.startFrame + a.durationFrames + FACE_HOLD]),
+        ...reactions
+          .filter((r) => r.cast === key)
+          .flatMap((r) => [r.startFrame, r.endFrame + FACE_HOLD]),
+      ];
+      const channels = motionChannels(
+        key,
+        frame,
+        motions,
+        side === 'left' ? 1 : -1,
+        pivotAt,
+        changes,
+      );
       return (
         <Character
           key={key}
@@ -397,7 +549,9 @@ export const CharacterStage: React.FC<{
           x={from.x + (to.x - from.x) * t}
           scale={from.s + (to.s - from.s) * t}
           z={20 - order + Math.round(state.amount * 10)}
-          motion={motionOffset(key, frame, motions, side === 'left' ? 1 : -1)}
+          motion={channels.body}
+          headMotion={channels.head}
+          parts={parts}
         />
       );
     });

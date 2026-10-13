@@ -33,6 +33,7 @@ export {
   type TimelineMotion,
   type TimelineVisual,
   type TimelineIssue,
+  sceneFramings,
 } from './timeline.js';
 export { roundTripCer, normalizeForCer, readKoreanNumbers, koreanInteger } from './cer.js';
 export {

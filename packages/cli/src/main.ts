@@ -24,7 +24,7 @@
  *   s2v tts-server start
  */
 
-import { mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -43,13 +43,21 @@ import {
   parseScript,
   type AudioManifest,
   type Lang,
+  type Script,
 } from '@script2video/core';
-import { renderScenes, type Aspect } from '@script2video/renderer-remotion';
+import {
+  characterSource,
+  faceMotions,
+  loadCharacterSpec,
+  renderScenes,
+  type Aspect,
+} from '@script2video/renderer-remotion';
 import { castOptions } from './cast.js';
 import { buildSfxTrack, mixSoundtrack } from './soundtrack.js';
 import { writePublishFiles, writeThumbnail } from './publish.js';
 import { timelineMouths } from './mouth.js';
 import { checkSubtitles } from './check.js';
+import { importCharacter } from './character-import.js';
 import { dev } from './dev.js';
 import { importRecording } from './import-recording.js';
 import { doctor } from './doctor.js';
@@ -75,6 +83,7 @@ function usage(): never {
     'usage: s2v <lint|check|sentences|tts|timeline|render|snapshot|pick|say> <file|text> [options]\n' +
       '       s2v voice create <voices/id.yaml> [--lang ko] [--candidates 3] [--play]\n' +
       '       s2v voice pick <voices/id.yaml> <n> [--lang ko]\n' +
+      '       s2v character import <ymm4 folder|zip> --out <characters/id> [--name <character>]\n' +
       '       s2v audio prune <script.md>\n' +
       '       s2v export-script <script.md>   (reading script for recording)\n' +
       '       s2v import-recording <script.md> <take.wav> [--write]\n' +
@@ -89,6 +98,7 @@ function usage(): never {
 function load(path: string) {
   const { script, diagnostics } = parseScript(readFileSync(path, 'utf8'));
   const all = [...diagnostics.items];
+  if (script) injectFaceMotions(script, dirname(path));
   if (script) {
     let manifest: AudioManifest | undefined;
     try {
@@ -122,6 +132,24 @@ function load(path: string) {
   return script;
 }
 
+/**
+ * Parts characters bring their own face → motion table from character.yaml (plan C6). Done here
+ * so every path that builds a timeline (lint, check, timeline, render, snapshot) sees it.
+ */
+function injectFaceMotions(script: Script, scriptDir: string): void {
+  for (const m of Object.values(script.meta.cast)) {
+    if (!m.character) continue;
+    const dir = resolve(scriptDir, typeof m.character === 'string' ? m.character : m.character.dir);
+    if (!existsSync(dir) || characterSource(dir) !== 'parts') continue;
+    try {
+      const motions = faceMotions(loadCharacterSpec(dir));
+      if (motions) m.faceMotions = motions;
+    } catch {
+      // The lint reports the broken character.yaml.
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   const { values, positionals } = parseArgs({
@@ -146,6 +174,8 @@ async function main(): Promise<void> {
       'no-play': { type: 'boolean', default: false },
       play: { type: 'boolean', default: false },
       candidates: { type: 'string', default: '3' },
+      out: { type: 'string' },
+      name: { type: 'string' },
     },
   });
   const file = positionals[0];
@@ -227,6 +257,21 @@ async function main(): Promise<void> {
     }
     if (sub === 'pick' && n) {
       pickVoice(resolve(yamlPath), Number(n), lang, log);
+      return;
+    }
+    usage();
+  }
+  if (command === 'character') {
+    const [sub, src] = positionals;
+    if (sub === 'import' && src && values.out) {
+      const r = importCharacter(resolve(src), resolve(values.out), {
+        ...(values.name ? { name: values.name } : {}),
+        log: (m) => console.error(m),
+      });
+      console.error(
+        `imported ${r.copied} parts into ${r.out}${r.terms.length ? ` (with ${r.terms.join(', ')})` : ''}\n` +
+          `next: pick faces in ${join(r.out, 'parts.html')} and edit ${join(r.out, 'character.yaml')}`,
+      );
       return;
     }
     usage();

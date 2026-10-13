@@ -277,6 +277,7 @@ const SceneComp: React.FC<SceneProps> = ({
                 geometry={g}
                 stage={stage}
                 fps={fps}
+                framing={scene.framing ?? {}}
               />
             ) : g.mode === 'avatar' ? (
               <CastStrip
@@ -324,6 +325,7 @@ const placeholder: SceneProps = {
     subtitles: [],
     reactions: [],
     motions: [],
+    framing: {},
   },
   lang: 'ko',
   fps: 30,

@@ -5,6 +5,23 @@ export type Aspect = '16:9' | '9:16' | '1:1';
 /** Public-dir paths of one face: mouth closed (base), open (talk), half open, eyes closed. */
 export type CharacterFace = { base: string; talk?: string; half?: string; blink?: string };
 
+/** One face of a parts character: body (+ front) layers and the head in its 4 mouth/eye states. */
+export type PartsFace = {
+  body?: string;
+  front?: string;
+  head: CharacterFace;
+  /** Head transform origin [x, y] in canvas px; null: no head motions (they fall back). */
+  pivot: [number, number] | null;
+};
+
+/** A framing's faces; `canvas` is the widened canvas, `baseWidth` the art's own width (size rule). */
+export type PartsSet = {
+  canvas: [number, number];
+  baseWidth: number;
+  baseHeight: number;
+  faces: Record<string, PartsFace>;
+};
+
 export type CastInfo = {
   key: string;
   name: string;
@@ -13,7 +30,14 @@ export type CastInfo = {
   face: string;
   /** Public-dir path of the avatar image. */
   avatar?: string;
-  character?: { faces: Record<string, CharacterFace>; facing: 'left' | 'right' | 'front' };
+  character?: {
+    faces: Record<string, CharacterFace>;
+    facing: 'left' | 'right' | 'front';
+    /** Parts characters (character.yaml): layers per framing and face, already flipped for this side. */
+    parts?: Record<string, PartsSet>;
+    /** Imported material: its art size (scaled like parts art). */
+    size?: [number, number];
+  };
   side?: 'left' | 'right';
 };
 

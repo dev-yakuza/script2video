@@ -31,6 +31,7 @@ const scene = (
   cues: [],
   reactions: [],
   motions: [],
+  framing: {},
   subtitles: subs.map(([s, e, text, cast]) => ({
     startFrame: s,
     endFrame: e,

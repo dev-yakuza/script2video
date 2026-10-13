@@ -19,6 +19,15 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { composeFace, composeImported } from './character/compose.js';
+import { resolveFace, setOf } from './character/resolve.js';
+import {
+  characterSource,
+  type Framing,
+  IMPORTED_PARTS,
+  loadCharacterSpec,
+} from './character/spec.js';
+import type { PartsFace, PartsSet } from './remotion/types.js';
 import {
   assignSides,
   stagePlan,
@@ -27,6 +36,20 @@ import {
   type StageSwitch,
 } from './shared.js';
 
+export {
+  CHARACTER_YAML,
+  CharacterSpecError,
+  characterSource,
+  faceMotions,
+  FRAMINGS,
+  IMPORTED_PARTS,
+  loadCharacterSpec,
+  parseCharacterSpec,
+  type CharacterSpec,
+  type Framing,
+  type LayeredSpec,
+} from './character/spec.js';
+export { FaceError, isSingle, resolveFace, setOf } from './character/resolve.js';
 export {
   assignSides,
   dialogueShape,
@@ -239,20 +262,179 @@ export function characterFaces(dir: string): Record<string, CharacterFiles> {
   return faces;
 }
 
+type PreparedCharacter = {
+  faces: Record<string, CharacterFiles>;
+  facing: 'left' | 'right' | 'front';
+  parts?: Record<string, PartsSet>;
+  /** Imported material: art size, so it is scaled like parts art (plan 5.3). */
+  size?: [number, number];
+};
+
+/** Subfolders, skipping dot entries (`.DS_Store`, `.git`) and files. */
+function subdirs(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => !f.startsWith('.') && statSync(join(dir, f)).isDirectory())
+    .sort();
+}
+
+/** First `head.png` under a set's views (its size is the set canvas). */
+function findHeadImage(root: string): string | null {
+  const views = join(root, 'views');
+  for (const v of subdirs(views))
+    for (const h of subdirs(join(views, v, 'face')))
+      for (const e of subdirs(join(views, v, 'face', h))) {
+        const f = join(views, v, 'face', h, e, 'head.png');
+        if (existsSync(f)) return f;
+      }
+  return null;
+}
+
+/**
+ * Faces a cast member shows per framing in this output: its default face plus the faces of its
+ * lines and reactions, in each scene's framing. The stage only ever shows these (a character
+ * still on stage after a boundary shows its default face), and lint checks exactly the same set.
+ */
+function usedFaces(
+  timeline: Timeline,
+  key: string,
+  defaultFace: string,
+): Map<Framing, Set<string>> {
+  const out = new Map<Framing, Set<string>>();
+  for (const s of timeline.scenes) {
+    const framing = s.framing?.[key] ?? 'full';
+    const set = out.get(framing) ?? out.set(framing, new Set()).get(framing)!;
+    for (const f of sceneFaces(s, key, defaultFace)) set.add(f);
+  }
+  return out;
+}
+
+/** Faces a cast member can show in one scene. */
+function sceneFaces(scene: TimelineScene, key: string, defaultFace: string): string[] {
+  return [
+    defaultFace,
+    ...scene.audio.filter((a) => a.cast === key).map((a) => a.face),
+    ...scene.reactions.filter((r) => r.cast === key).map((r) => r.face),
+  ];
+}
+
+function publish(publicDir: string, abs: string, rel: string): string {
+  mkdirSync(dirname(join(publicDir, rel)), { recursive: true });
+  copyFileSync(abs, join(publicDir, rel));
+  return rel;
+}
+
+/**
+ * Parts characters (character.yaml): composed per (framing, face) for the side the character
+ * stands on in this output (plan C2, C3). Layered art gets body/head/front layers; imported YMM4
+ * art is composed into whole images and uses the classic path, already facing the center.
+ */
+function prepareParts(
+  opts: RenderOptions,
+  c: CastOption & { character: NonNullable<CastOption['character']> },
+  dir: string,
+  side: Side,
+  publicDir: string,
+  hashes: Record<string, string>,
+): PreparedCharacter {
+  const spec = loadCharacterSpec(dir);
+  const cacheRoot = join(opts.workDir, 'characters');
+  const used = usedFaces(opts.timeline, c.key, c.face);
+  if (spec.source === 'imported') {
+    const parts = join(dir, IMPORTED_PARTS);
+    const first = subdirs(parts).flatMap((f) =>
+      readdirSync(join(parts, f))
+        .filter((x) => x.endsWith('.png') && !x.startsWith('.'))
+        .map((x) => join(parts, f, x)),
+    )[0];
+    if (!first) throw new Error(`character ${c.key}: no parts found in ${parts}`);
+    const size = (spec.size as [number, number] | undefined) ?? imageSize(first);
+    const faces: Record<string, CharacterFiles> = {};
+    for (const face of used.get('full') ?? [c.face]) {
+      const f = composeImported(dir, spec, face, side, size, cacheRoot);
+      const base = `characters/${c.key}/full/${face}`;
+      faces[face] = {
+        base: publish(publicDir, f.base, `${base}/face.png`),
+        talk: publish(publicDir, f.talk, `${base}/face-talk.png`),
+        half: publish(publicDir, f.half, `${base}/face-half.png`),
+        blink: publish(publicDir, f.blink, `${base}/face-blink.png`),
+      };
+      hashes[`character:${c.key}/full/${face}/${side}`] = f.hash;
+    }
+    return { faces, facing: 'front', size };
+  }
+  const parts: Record<string, PartsSet> = {};
+  for (const [framing, names] of used) {
+    const set = setOf(dir, spec, framing);
+    if (!findHeadImage(set.root))
+      throw new Error(`character ${c.key}: no head images in the ${framing} set (${set.root})`);
+    // The canvas is the size of the art the output uses (`size` describes the full set).
+    const first = resolveFace(dir, spec, framing, [...names][0]!, side, [1, 1]).head.states
+      .closed[0]!;
+    const size =
+      framing === 'full' && spec.size
+        ? (spec.size as [number, number])
+        : existsSync(first)
+          ? imageSize(first)
+          : imageSize(findHeadImage(set.root)!);
+    const faces: Record<string, PartsFace> = {};
+    let canvas: [number, number] = size;
+    for (const face of names) {
+      let resolved;
+      try {
+        resolved = resolveFace(dir, spec, framing, face, side, size);
+      } catch (e) {
+        throw new Error(`character ${c.key} (${c.character.dir}): ${(e as Error).message}`, {
+          cause: e,
+        });
+      }
+      const comp = composeFace(resolved, cacheRoot);
+      canvas = comp.canvas;
+      const base = `characters/${c.key}/${framing}/${face}`;
+      faces[face] = {
+        ...(comp.body ? { body: publish(publicDir, comp.body, `${base}/body.png`) } : {}),
+        ...(comp.front ? { front: publish(publicDir, comp.front, `${base}/front.png`) } : {}),
+        head: {
+          base: publish(publicDir, comp.head.base, `${base}/head.png`),
+          talk: publish(publicDir, comp.head.talk, `${base}/head-talk.png`),
+          half: publish(publicDir, comp.head.half, `${base}/head-half.png`),
+          blink: publish(publicDir, comp.head.blink, `${base}/head-blink.png`),
+        },
+        pivot: comp.pivot,
+      };
+      hashes[`character:${c.key}/${framing}/${face}/${side}`] = comp.hash;
+    }
+    parts[framing] = { canvas, baseWidth: size[0], baseHeight: size[1], faces };
+  }
+  // Classic faces stay empty: the stage draws parts characters from `parts`.
+  return { faces: {}, facing: 'front', parts };
+}
+
 function prepareCharacters(
   opts: RenderOptions,
   publicDir: string,
   hashes: Record<string, string>,
-): Record<string, { faces: Record<string, CharacterFiles>; facing: 'left' | 'right' | 'front' }> {
-  const out: Record<
-    string,
-    { faces: Record<string, CharacterFiles>; facing: 'left' | 'right' | 'front' }
-  > = {};
+): Record<string, PreparedCharacter> {
+  const out: Record<string, PreparedCharacter> = {};
+  const { left } = assignSides(opts.cast ?? []);
+  const leftKeys = new Set(left.map((c) => c.key));
   for (const c of opts.cast ?? []) {
     if (!c.character) continue;
     const dir = resolve(opts.assetsRoot, c.character.dir);
     if (!existsSync(dir))
       throw new Error(`character folder not found: ${c.character.dir} (${dir})`);
+    if (characterSource(dir) === 'parts') {
+      const side: Side = leftKeys.has(c.key) ? 'left' : 'right';
+      out[c.key] = prepareParts(
+        opts,
+        { ...c, character: c.character },
+        dir,
+        side,
+        publicDir,
+        hashes,
+      );
+      continue;
+    }
     const faces: Record<string, CharacterFiles> = {};
     for (const [face, files] of Object.entries(characterFaces(dir))) {
       if (!files.base) continue; // a face needs its mouth-closed image
@@ -329,6 +511,20 @@ function preparePublicDir(opts: RenderOptions) {
   return { publicDir, imageSizes, assetPaths, hashes, cast, subtitleStyle, logo };
 }
 
+/**
+ * Character hashes a scene depends on: classic art (`character:<key>/<file>`) always; composed
+ * parts (`character:<key>/<framing>/<face>/<side>`) only in the scene's framing for that cast.
+ */
+function characterKeyFor(k: string, c: CastOption, scene: TimelineScene): boolean {
+  if (!k.startsWith(`character:${c.key}/`)) return false;
+  const rest = k.slice(`character:${c.key}/`.length).split('/');
+  if (rest.length !== 3) return true;
+  return (
+    rest[0] === (scene.framing?.[c.key] ?? 'full') &&
+    sceneFaces(scene, c.key, c.face).includes(rest[1]!)
+  );
+}
+
 function chunkKey(
   scene: TimelineScene,
   opts: RenderOptions,
@@ -353,9 +549,7 @@ function chunkKey(
         ) ||
         scene.cues.some((c) => k === `asset:${c.attrs.show}`) ||
         k === `asset:${opts.logo?.src}` ||
-        (opts.cast ?? []).some(
-          (c) => k === `asset:${c.avatar}` || k.startsWith(`character:${c.key}/`),
-        ),
+        (opts.cast ?? []).some((c) => k === `asset:${c.avatar}` || characterKeyFor(k, c, scene)),
     ),
   );
   return createHash('sha256')

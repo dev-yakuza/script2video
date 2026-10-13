@@ -7,8 +7,10 @@ import { unified } from 'unified';
 import YAML from 'yaml';
 import { Diagnostics } from './diagnostics.js';
 import {
+  FRAMINGS,
   frontmatterSchema,
   MOTIONS,
+  type Framing,
   type MdBlock,
   type MdRun,
   SFX,
@@ -43,6 +45,7 @@ export const KNOWN_DIRECTIVES = [
   'react',
   'only',
   'audio',
+  'shot',
 ] as const;
 
 /** Directives implemented in this build. Known-but-unimplemented names are errors, not no-ops. */
@@ -66,6 +69,7 @@ export const IMPLEMENTED_DIRECTIVES = new Set<string>([
   'react',
   'only',
   'audio',
+  'shot',
 ]);
 
 const VISUAL_LEAF = new Set(['title', 'image', 'video', 'thumbnail']);
@@ -269,6 +273,12 @@ function paragraphFrom(
           );
       } else if (d.name === 'audio') {
         audio = attrs.src;
+      } else if (d.name === 'shot') {
+        diags.error(
+          'shot-placement',
+          "shot is a block directive: put ::shot{cast=framing} on its own line before the scene's first paragraph",
+          dLine,
+        );
       }
       continue;
     }
@@ -513,6 +523,45 @@ export function pipeTable(source: string): string[][] {
     .filter((cells) => !cells.every((c) => /^:?-{2,}:?$/.test(c)));
 }
 
+/**
+ * `::shot{mina=head yuki=upper}`: framings from this scene on (PLAN character C9). Only before
+ * the scene's first paragraph, so a framing never changes in the middle of a line.
+ */
+function shotFrom(
+  node: LeafDirective | ContainerDirective,
+  scene: Scene,
+  meta: Frontmatter,
+  diags: Diagnostics,
+): void {
+  const line = lineOf(node);
+  if (node.type !== 'leafDirective') {
+    diags.error('shot-placement', 'shot is a leaf directive: ::shot{cast=framing}', line);
+    return;
+  }
+  if (scene.blocks.some((b) => b.kind === 'paragraph')) {
+    diags.error(
+      'shot-placement',
+      "::shot must come before the scene's first paragraph (a framing never changes mid-scene)",
+      line,
+    );
+    return;
+  }
+  const attrs = attrsOf(node);
+  if (Object.keys(attrs).length === 0)
+    diags.error('shot-empty', '::shot needs cast=framing, e.g. ::shot{mina=head}', line);
+  for (const [who, framing] of Object.entries(attrs)) {
+    if (!(who in meta.cast))
+      diags.error('shot-cast', `::shot names "${who}", which is not in cast`, line);
+    else if (!(FRAMINGS as readonly string[]).includes(framing))
+      diags.error(
+        'shot-framing',
+        `framing must be one of ${FRAMINGS.join(', ')}: "${framing}"`,
+        line,
+      );
+    else (scene.shot ??= {})[who] = framing as Framing;
+  }
+}
+
 function headingTitle(h: Heading): { title: string; id?: string } {
   const raw = plainText(h.children);
   const m = HEADING_ID.exec(raw);
@@ -555,6 +604,16 @@ export function parseScript(source: string): ParseResult {
     return { script: null, diagnostics: diags };
   }
   const meta = parsedMeta.data;
+  for (const [key, member] of Object.entries(
+    (rawMeta as { cast?: Record<string, unknown> } | null)?.cast ?? {},
+  )) {
+    if (member && typeof member === 'object' && 'faceMotions' in member)
+      diags.error(
+        'frontmatter-schema',
+        `cast.${key}.faceMotions is internal (set from character.yaml); remove it`,
+        lineOf(yamlNode),
+      );
+  }
   const castKeys = Object.keys(meta.cast);
   const defaultCast = castKeys[0]!;
 
@@ -600,6 +659,10 @@ export function parseScript(source: string): ParseResult {
       }
       case 'leafDirective':
       case 'containerDirective': {
+        if (node.name === 'shot') {
+          shotFrom(node, ensureScene(line), meta, diags);
+          break;
+        }
         const v = visualFrom(node, source, diags);
         if (v) ensureScene(line).blocks.push(v);
         break;

@@ -28,6 +28,7 @@ const timeline: Timeline = {
       subtitles: [],
       reactions: [],
       motions: [],
+      framing: {},
       cues: [
         cue(30, { mark: 'circle' }),
         cue(60, { show: 'b.png' }),
@@ -45,6 +46,7 @@ const timeline: Timeline = {
       subtitles: [],
       reactions: [],
       motions: [],
+      framing: {},
       cues: [cue(20, { line: '2', sfx: 'ding' })],
     },
   ],

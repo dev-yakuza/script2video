@@ -38,6 +38,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: ffmpeg (parts character composition tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: corepack enable
       - run: yarn install --immutable
       - run: yarn workspace @script2video/core build
