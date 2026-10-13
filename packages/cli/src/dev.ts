@@ -65,7 +65,14 @@ export async function dev(path: string, opts: DevOptions): Promise<void> {
   // Debounce: editors write files in several steps.
   let timer: NodeJS.Timeout | null = null;
   watch(dirname(path), { recursive: true }, (_event, file) => {
-    if (!file || /(^|\/)(audio|\.s2v-cache|out)\//.test(file) || file.endsWith('~')) return;
+    // Character generation writes .work/ and provenance.json while it runs: not script edits.
+    if (
+      !file ||
+      /(^|\/)(audio|\.s2v-cache|out|\.work)\//.test(file) ||
+      file.endsWith('provenance.json') ||
+      file.endsWith('~')
+    )
+      return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => void cycle(), 300);
   });

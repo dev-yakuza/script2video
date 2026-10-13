@@ -28,6 +28,8 @@ import {
   type CharacterSpec,
 } from '@script2video/renderer-remotion';
 import { resolvePersona } from './persona.js';
+import { loadGraph } from './character-gen/commands.js';
+import { PROVENANCE, status } from './character-gen/state.js';
 
 const FRAME: Record<string, [number, number]> = {
   '16:9': [1920, 1080],
@@ -363,7 +365,7 @@ const IP_NAMES = [
 ];
 
 /** Faces a cast member shows, per framing, over every output (both sides are checked). */
-function usedFaces(script: Script, key: string): Map<Framing, Set<string>> {
+export function usedFaces(script: Script, key: string): Map<Framing, Set<string>> {
   const used = new Map<Framing, Set<string>>();
   const add = (f: Framing, face: string) =>
     (used.get(f) ?? used.set(f, new Set()).get(f)!).add(face);
@@ -575,5 +577,18 @@ export function lintPartsCharacter(
       err(
         `images of the ${framing} set have different sizes (${[...set].join(', ')}); use one canvas`,
       );
+  if (spec.source === 'generated' && existsSync(join(dir, PROVENANCE))) {
+    // Plan 6: images still to generate or approve (the renderer only sees approved ones).
+    try {
+      const g = loadGraph(dir);
+      const open = [...g.items.keys()].filter((id) => status(g, id) !== 'approved');
+      if (open.length)
+        warn(
+          `${rel}: ${open.length} generated images are not approved yet (s2v character build / review ${rel})`,
+        );
+    } catch (e) {
+      warn(`${rel}: generation state unreadable: ${(e as Error).message}`);
+    }
+  }
   return out;
 }

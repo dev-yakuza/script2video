@@ -46,6 +46,7 @@ export {
   loadCharacterSpec,
   parseCharacterSpec,
   type CharacterSpec,
+  type Facing,
   type Framing,
   type LayeredSpec,
 } from './character/spec.js';

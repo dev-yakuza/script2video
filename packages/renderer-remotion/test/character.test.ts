@@ -133,6 +133,55 @@ faces:
     ).toThrow(CharacterSpecError);
   });
 
+  it('standard@1: default faces turn toward the partner; exclude drops dependent faces', () => {
+    const s = spec('source: generated\npreset: standard@1\n');
+    expect(Object.keys(s.expressions)).toHaveLength(12);
+    expect(s.faces.happy).toEqual({ view: 'turn', expression: 'happy' });
+    expect(s.faces['front-happy']).toEqual({ view: 'front', expression: 'happy' });
+    expect(s.faces['glance-puzzled']).toMatchObject({ head: 'glance', motion: 'head-tilt' });
+    expect(s.faces.wave).toEqual({ view: 'front', body: 'wave', expression: 'happy' });
+    expect(s.sets.head?.faces).toContain('moved');
+    const x = spec('source: generated\npreset: standard@1\nexclude: [happy, glance]\n');
+    for (const f of ['happy', 'front-happy', 'wave', 'glance-neutral'])
+      expect(x.faces[f]).toBe(undefined);
+    expect(x.sets.head?.faces).not.toContain('happy');
+    expect(x.heads['front/glance']).toBe(undefined);
+  });
+
+  it('overriding one field of a preset entry keeps the rest (no schema default in between)', () => {
+    const s = spec(
+      'source: generated\npreset: standard@1\nviews:\n  turn: { pivot: [300, 200] }\n',
+    );
+    expect(s.views.turn).toMatchObject({
+      preset: 'turn-slight',
+      facing: 'right',
+      pivot: [300, 200],
+    });
+    // Excluding the turn view: the default faces look at the viewer instead of disappearing.
+    const t = spec('source: generated\npreset: standard@1\nexclude: [turn]\n');
+    expect(t.faces.neutral).toEqual({ view: 'front', expression: 'neutral' });
+    expect(t.sets.head?.faces).toContain('neutral');
+    // Invalid values are reported, not dropped; null removes a preset set.
+    expect(() => parseCharacterSpec('source: generated\npreset: standard@1\nfaces: 3\n')).toThrow(
+      CharacterSpecError,
+    );
+    expect(spec('source: generated\npreset: standard@1\nsets: { head: null }\n').sets.head).toBe(
+      undefined,
+    );
+    // A user-only close-up set gets the implicit front view.
+    expect(
+      spec('source: generated\nsets: { upper: { faces: [] } }\n').sets.upper?.views,
+    ).toHaveProperty('front');
+    // A user set may leave views out (the preset's are kept).
+    const u = spec(
+      'source: generated\npreset: standard@1\nsets:\n  head:\n    faces: [front-calm]\n',
+    );
+    expect(u.sets.head).toMatchObject({
+      views: { front: { facing: 'front' } },
+      faces: ['front-calm'],
+    });
+  });
+
   it('face motions: the face wins over its expression', () => {
     expect(faceMotions(spec(BASE))).toEqual({ point: 'head-nod' });
   });

@@ -18,6 +18,9 @@
  *   s2v dev <script.md> [--video]  (edit loop: lint → tts → snapshot on every save)
  *   s2v doctor                    (is this machine ready?)
  *   s2v character setup [--max-memory-gb N]   (optional: character image generation, Apple silicon)
+ *   s2v character create <dir> [--candidates 4] | pick <dir> <n> | build <dir> [--dry-run]
+ *                 | review <dir> | approve <dir> <item>...|--all [--except <item>...]
+ *                 | redo <dir> <item>... [--seed N] | missing <script.md> [--apply]
  *   s2v new <dir> [--lang ko]     (a new video folder with a starter script)
  *   s2v snapshot <script.md> [--output youtube] [--draft]
  *   s2v pick <image>
@@ -60,6 +63,15 @@ import { timelineMouths } from './mouth.js';
 import { checkSubtitles } from './check.js';
 import { importCharacter } from './character-import.js';
 import { defaultMemoryLimitGb, ExitError, setupImagegen } from './imagegen.js';
+import {
+  approveItems,
+  buildCharacter,
+  createCharacter,
+  pickCandidate,
+  redoItems,
+  reviewCharacter,
+} from './character-gen/commands.js';
+import { applyMissing, findMissing, printMissing } from './character-gen/missing.js';
 import { dev } from './dev.js';
 import { importRecording } from './import-recording.js';
 import { doctor } from './doctor.js';
@@ -87,6 +99,13 @@ function usage(): never {
       '       s2v voice pick <voices/id.yaml> <n> [--lang ko]\n' +
       '       s2v character import <ymm4 folder|zip> --out <characters/id> [--name <character>]\n' +
       '       s2v character setup [--max-memory-gb N]   (image generation models; Apple silicon)\n' +
+      '       s2v character create <dir> [--candidates 4]   (round 1: candidate front images)\n' +
+      '       s2v character pick <dir> <n>   (a candidate becomes the front reference)\n' +
+      '       s2v character build <dir> [--dry-run] [--reset-derived]   (the next round)\n' +
+      '       s2v character review <dir>\n' +
+      '       s2v character approve <dir> <item>...|--all [--except <item>...]\n' +
+      '       s2v character redo <dir> <item>... [--seed N]\n' +
+      '       s2v character missing <script.md> [--apply]\n' +
       '       s2v audio prune <script.md>\n' +
       '       s2v export-script <script.md>   (reading script for recording)\n' +
       '       s2v import-recording <script.md> <take.wav> [--write]\n' +
@@ -187,10 +206,16 @@ async function main(): Promise<void> {
       script: { type: 'string' },
       'no-play': { type: 'boolean', default: false },
       play: { type: 'boolean', default: false },
-      candidates: { type: 'string', default: '3' },
+      candidates: { type: 'string' },
       out: { type: 'string' },
       name: { type: 'string' },
       'max-memory-gb': { type: 'string' },
+      'dry-run': { type: 'boolean', default: false },
+      'reset-derived': { type: 'boolean', default: false },
+      all: { type: 'boolean', default: false },
+      except: { type: 'string', multiple: true },
+      seed: { type: 'string' },
+      apply: { type: 'boolean', default: false },
     },
   });
   const file = positionals[0];
@@ -264,7 +289,7 @@ async function main(): Promise<void> {
     if (sub === 'create') {
       await createVoice(resolve(yamlPath), REPO_ROOT, {
         lang,
-        candidates: Math.max(1, Number(values.candidates)),
+        candidates: Math.max(1, Number(values.candidates ?? 3)),
         play: values.play === true,
         log,
       });
@@ -284,6 +309,73 @@ async function main(): Promise<void> {
         explicit: values['max-memory-gb'] !== undefined,
         log: (m) => console.error(m),
       });
+      return;
+    }
+    const gen = {
+      repoRoot: REPO_ROOT,
+      maxGb: memoryLimit(values['max-memory-gb']),
+      log: (m: string) => console.error(m),
+    };
+    const items = positionals.slice(2);
+    if (sub === 'create' && src) {
+      const n = Number(values.candidates ?? 4);
+      if (!Number.isInteger(n) || n < 1 || n > 16) usage();
+      await createCharacter(resolve(src), { ...gen, candidates: n });
+      return;
+    }
+    if (sub === 'pick' && src && items.length === 1) {
+      pickCandidate(resolve(src), items[0]!, gen.log);
+      return;
+    }
+    if (sub === 'build' && src) {
+      await buildCharacter(resolve(src), {
+        ...gen,
+        dryRun: values['dry-run'] === true,
+        resetDerived: values['reset-derived'] === true,
+      });
+      return;
+    }
+    if (sub === 'review' && src) {
+      await reviewCharacter(resolve(src), gen);
+      return;
+    }
+    if (sub === 'approve' && src && (items.length > 0 || values.all)) {
+      // `--all --except a b`: names after --except are exceptions too; with --all and no
+      // --except, names are ambiguous and refused.
+      if (values.all && items.length > 0 && !values.except) usage();
+      await approveItems(resolve(src), values.all ? [] : items, {
+        ...gen,
+        all: values.all === true,
+        except: [...(values.except ?? []), ...(values.all ? items : [])],
+        resetDerived: values['reset-derived'] === true,
+      });
+      return;
+    }
+    if (sub === 'redo' && src && items.length > 0) {
+      const seed = values.seed === undefined ? undefined : Number(values.seed);
+      if (seed !== undefined && !(Number.isInteger(seed) && seed >= 0 && seed < 2 ** 32)) usage();
+      redoItems(resolve(src), items, seed, gen.log);
+      return;
+    }
+    if (sub === 'missing' && src) {
+      const scriptPath = resolve(src);
+      // Parse only: the lint errors (a face missing from a set) are what this command explains.
+      const parsed = parseScript(readFileSync(scriptPath, 'utf8'));
+      for (const d of parsed.diagnostics.items.filter((x) => x.severity === 'error'))
+        console.error(formatDiagnostic(d, scriptPath));
+      if (!parsed.script) process.exit(1);
+      const script = parsed.script;
+      const reports = findMissing(script, dirname(scriptPath));
+      if (values.apply)
+        for (const r of reports) {
+          const added = applyMissing(r);
+          if (added.length) console.error(`${r.cast}: added ${added.join(', ')}`);
+        }
+      const n = printMissing(
+        values.apply ? findMissing(script, dirname(scriptPath)) : reports,
+        gen.log,
+      );
+      if (n > 0) process.exitCode = 1;
       return;
     }
     if (sub === 'import' && src && values.out) {
