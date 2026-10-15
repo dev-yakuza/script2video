@@ -39,6 +39,7 @@ import {
   buildTimeline,
   formatDiagnostic,
   HASH_VERSIONS,
+  lintActing,
   lintLength,
   bgmOf,
   logoOf,
@@ -51,15 +52,9 @@ import {
   parseScript,
   type AudioManifest,
   type Lang,
-  type Script,
 } from '@script2video/core';
-import {
-  characterSource,
-  faceMotions,
-  loadCharacterSpec,
-  renderScenes,
-  type Aspect,
-} from '@script2video/renderer-remotion';
+import { renderScenes, type Aspect } from '@script2video/renderer-remotion';
+import { enrichCast } from './cast-faces.js';
 import { castOptions } from './cast.js';
 import { buildSfxTrack, mixSoundtrack } from './soundtrack.js';
 import { writePublishFiles, writeThumbnail } from './publish.js';
@@ -129,7 +124,7 @@ function usage(): never {
 function load(path: string) {
   const { script, diagnostics } = parseScript(readFileSync(path, 'utf8'));
   const all = [...diagnostics.items];
-  if (script) injectFaceMotions(script, dirname(path));
+  if (script) enrichCast(script, dirname(path));
   if (script) {
     let manifest: AudioManifest | undefined;
     try {
@@ -142,6 +137,7 @@ function load(path: string) {
       ...lintCast(script, dirname(path)),
       ...lintSubtitleFonts(script, dirname(path)),
       ...lintBgm(script, dirname(path)),
+      ...lintActing(script),
       ...lintSubtitleBudget(script),
       ...lintUnreadWords(script),
       ...lintLength(script, manifest),
@@ -161,24 +157,6 @@ function load(path: string) {
   for (const d of all) console.error(formatDiagnostic(d, path));
   if (!script || all.some((d) => d.severity === 'error')) process.exit(1);
   return script;
-}
-
-/**
- * Parts characters bring their own face → motion table from character.yaml (plan C6). Done here
- * so every path that builds a timeline (lint, check, timeline, render, snapshot) sees it.
- */
-function injectFaceMotions(script: Script, scriptDir: string): void {
-  for (const m of Object.values(script.meta.cast)) {
-    if (!m.character) continue;
-    const dir = resolve(scriptDir, typeof m.character === 'string' ? m.character : m.character.dir);
-    if (!existsSync(dir) || characterSource(dir) !== 'parts') continue;
-    try {
-      const motions = faceMotions(loadCharacterSpec(dir));
-      if (motions) m.faceMotions = motions;
-    } catch {
-      // The lint reports the broken character.yaml.
-    }
-  }
 }
 
 /** `--max-memory-gb` (default: max(24 GB, 60 % of RAM)). */
@@ -432,6 +410,7 @@ async function main(): Promise<void> {
         console.error(formatDiagnostic(d, scriptPath));
       if (!parsed.script) process.exit(1);
       const script = parsed.script;
+      enrichCast(script, dirname(scriptPath));
       const reports = findMissing(script, dirname(scriptPath));
       if (values.apply)
         for (const r of reports) {

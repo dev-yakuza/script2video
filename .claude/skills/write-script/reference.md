@@ -164,6 +164,18 @@ surprised moved serious`.
   - compare: `highlight=1` (0-based column); gallery: `highlight=2` (0-based image)
   - diagram: `node=B` (flowchart node id); markdown / split: `highlight=1` (0-based block)
 - `sfx=pop|click|whoosh|ding|none` on any cue — that effect (none: silence the automatic one).
+- Acting: `key{emo=sad power=weak say="as if to herself" volume=soft speed=0.9}: text`.
+  - `emo`: `neutral happy sad angry surprised anxious excited calm serious puzzled moved playful`
+    or a name from `acting.emotions` in the frontmatter (`sleepy: { voice: "Sound drowsy.",
+    face: calm, motion: none, speed: 0.8, maxPause: 1.5 }`). It sets the voice (Qwen preset
+    speakers), the character's face of that name (default face when it has none) and a motion.
+  - `power=weak|strong` needs `emo`. `say="…"`: a free direction (Qwen preset speakers; no quotes
+    or `}` inside). `volume=soft|loud`: −6 / +3 dB. `speed=0.8–1.25`: times the cast speed.
+  - `:emo{emo=sad}` between two sentences changes them from the next sentence to the paragraph
+    end (it replaces all of emo/power/say/volume/speed). Not inside a sentence.
+  - Only on lines whose words carry the emotion: an instruction does not make a plain sentence
+    happy (it can sound wrong). Persona and Supertonic voices do not act emotions.
+  - Keep the prefix on one line: `key{…}: text`.
 - `:pause[0.8]` — extra pause after the sentence (seconds).
 - `:only{youtube}` — this paragraph only in the listed outputs.
 - `:audio{src=rec/intro.wav}` — this paragraph is your own recording (≤ 180 s) instead of TTS;

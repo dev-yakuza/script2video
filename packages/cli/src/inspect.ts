@@ -9,13 +9,17 @@ import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import {
+  ACTING_VERSION,
+  actingTable,
   bgmOf,
   canonical,
   castsIn,
   closedWorldErrors,
   contentOf,
+  gainFor,
   logoOf,
   outputScenes,
+  paragraphActing,
   parseScript,
   presentationAttrs,
   schemaDefaults,
@@ -35,6 +39,7 @@ import {
   loadCharacterSpec,
   rendererSourceHash,
 } from '@script2video/renderer-remotion';
+import { enrichCast } from './cast-faces.js';
 import { mockEnabled } from './mock-tts.js';
 import {
   ALIGN_VERSION,
@@ -125,8 +130,8 @@ function rendererHash(repoRoot: string): string {
     join(repoRoot, 'packages', 'renderer-remotion', 'src', 'index.ts'),
     join(repoRoot, 'fonts.lock.json'),
     // CLI code that shapes the picture and the sound: mouths, cast, mix, sound effects, publishing
-    ...['mouth.ts', 'cast.ts', 'media.ts', 'soundtrack.ts', 'publish.ts'].map((f) =>
-      join(repoRoot, 'packages', 'cli', 'src', f),
+    ...['mouth.ts', 'cast.ts', 'cast-faces.ts', 'media.ts', 'soundtrack.ts', 'publish.ts'].map(
+      (f) => join(repoRoot, 'packages', 'cli', 'src', f),
     ),
     ...readdirSync(join(repoRoot, 'packages', 'core', 'src'))
       .filter((f) => f.endsWith('.ts'))
@@ -155,7 +160,17 @@ export function inspectErrors(source: string): { errors: InspectError[]; script:
     .filter((d) => d.severity === 'error' || DROPPED.has(d.code))
     .map((d) => ({ ...(d.line ? { line: d.line } : {}), message: `${d.code}: ${d.message}` }));
   if (!parsed.script || !parsed.trace) return { errors, script: null };
-  errors.push(...closedWorldErrors(source, parsed.trace, parsed.script));
+  // a line the parser already reported as a broken prefix is not reported twice
+  const broken = new Set(
+    parsed.diagnostics.items
+      .filter((d) => d.code === 'prefix-broken' || d.code === 'prefix-directive')
+      .map((d) => d.line),
+  );
+  errors.push(
+    ...closedWorldErrors(source, parsed.trace, parsed.script).filter(
+      (e) => !(e.line !== undefined && broken.has(e.line) && /would be read aloud/.test(e.message)),
+    ),
+  );
   return { errors, script: parsed.script };
 }
 
@@ -173,6 +188,8 @@ export function inspectScript(
   if (errors.length > 0 || !script) return { errors };
   const { meta } = script;
   const scriptDir = dirname(scriptPath);
+  // the faces a character can draw decide which face an emotion line shows (as in render)
+  enrichCast(script, scriptDir);
   const files = new Files(scriptDir);
   const reasons: Record<string, string[]> = {};
 
@@ -203,15 +220,18 @@ export function inspectScript(
     for (const scene of script.scenes)
       for (const [bi, block] of scene.blocks.entries()) {
         if (block.kind !== 'paragraph') continue;
-        for (const si of block.sentences.keys()) {
+        for (const [si, sentence] of block.sentences.entries()) {
           const id = sentenceId(scene.id, bi, si);
           const rec = recorded.get(id);
+          // the mix level of the line (volume, power): heard, but not part of the synthesis
+          const gain = gainFor(meta, block, sentence) || undefined;
           if (rec) {
             sentences.push({
               cast: block.cast,
               recording: rec.sha,
               index: rec.index,
               text: rec.alignText,
+              gain,
             });
             continue;
           }
@@ -219,8 +239,12 @@ export function inspectScript(
           sentences.push({
             cast: block.cast,
             voice: j.member.voice,
-            speed: j.member.speed,
+            // cast × line × emotion speed (the cast speed when the line sets none)
+            speed: j.speedProduct,
+            // the instruction actually sent: cast style, emotion template, say
             style: j.synthFields.instruct || undefined,
+            templates: j.template ? ACTING_VERSION : undefined,
+            gain,
             text: j.ttsText,
             seed: meta.seed,
             maxPause: meta.pacing.maxPause,
@@ -283,6 +307,7 @@ export function inspectScript(
     ffmpeg: ffmpegVersion(),
     defaults_voice: defaults.voice,
     defaults_presentation: defaults.presentation,
+    templates: actingTable(),
   };
 
   // ---------- presentation (per output) ----------
@@ -359,12 +384,19 @@ export function inspectScript(
               },
             ];
           }
+          // emotion faces and motions, only where a line has an emotion and the cast is drawn
+          const drawn =
+            meta.cast[b.cast]?.character && b.sentences.some((s) => s.acting?.emo !== undefined)
+              ? paragraphActing(meta, b, framings[i]![b.cast] ?? 'full')
+              : undefined;
           return [
             {
               p: b.cast,
               gap: b.gap,
               face: b.face,
               motion: b.motion,
+              faces: drawn?.faces.map((f) => f.drawn),
+              runs: drawn?.runs,
               sentences: b.sentences.map((s) => ({
                 pause: s.pauseAfter,
                 cues: s.cues.map((c) => ({
@@ -409,7 +441,8 @@ export function inspectScript(
       for (const c of cast) add(c.key, meta.cast[c.key]!.face);
       for (const b of scene.blocks)
         if (b.kind === 'paragraph') {
-          add(b.cast, b.face ?? meta.cast[b.cast]!.face);
+          const framing = framings[i]![b.cast] ?? 'full';
+          for (const f of paragraphActing(meta, b, framing).faces) add(b.cast, f.drawn);
           for (const s of b.sentences)
             for (const r of s.reacts ?? []) for (const [c, f] of Object.entries(r.faces)) add(c, f);
         }

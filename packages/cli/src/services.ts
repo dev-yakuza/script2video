@@ -153,5 +153,5 @@ export const ALIGNER: ServiceSpec = {
   id: 'script2video-aligner',
   dir: 'aligner',
   port: 47862,
-  wrapper: '0.3.0',
+  wrapper: '0.4.0',
 };

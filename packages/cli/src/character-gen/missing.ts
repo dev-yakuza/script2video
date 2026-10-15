@@ -33,6 +33,11 @@ export interface MissingReport {
   notInSet: { framing: Framing; face: string }[];
   notReady: { framing: Framing; face: string; items: string[] }[];
   impossible: { framing: Framing; face: string; why: string }[];
+  /**
+   * Faces lines ask for through an emotion that the character cannot draw yet (they show the
+   * default face). Optional: not counted, not added by --apply (acting stage 2 plan 6.1).
+   */
+  emotional: { framing: Framing; face: string }[];
 }
 
 /** The items a (framing, face) needs on both sides (ids as in items.ts). */
@@ -72,7 +77,12 @@ export function findMissing(script: Script, scriptDir: string): MissingReport[] 
       notInSet: [],
       notReady: [],
       impossible: [],
+      emotional: [],
     };
+    const drawn = usedFaces(script, key);
+    for (const [framing, faces] of usedFaces(script, key, 'wanted'))
+      for (const face of faces)
+        if (!drawn.get(framing)?.has(face)) r.emotional.push({ framing, face });
     for (const [framing, faces] of usedFaces(script, key))
       for (const face of faces) {
         const fd = spec.faces[face];
@@ -183,7 +193,16 @@ export function printMissing(reports: MissingReport[], log: (m: string) => void)
     for (const x of r.impossible)
       lines.push(`  (d) ${x.framing} ${x.face}: ${x.why}; use another face`);
     n += lines.length;
-    log(lines.length ? `${r.cast} (${r.dir}):\n${lines.join('\n')}` : `${r.cast}: nothing missing`);
+    // optional: emotion faces fall back to the default face, so they do not count
+    const optional = r.emotional.map(
+      (x) =>
+        `  (optional) ${x.framing} ${x.face}: asked for by an emotion, drawn with the default face for now (write face=${x.face} on a line to have it listed above)`,
+    );
+    log(
+      lines.length || optional.length
+        ? `${r.cast} (${r.dir}):\n${[...lines, ...optional].join('\n')}`
+        : `${r.cast}: nothing missing`,
+    );
   }
   return n;
 }

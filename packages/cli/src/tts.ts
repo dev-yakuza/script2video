@@ -25,8 +25,21 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
+  ACTING_VERSION,
+  analyzeLevels,
   assessSentence,
+  emotionGateFailures,
+  GATES,
+  normalizeForCer,
   bestAttempt,
+  emotionSentence,
+  instructFor,
+  lengthMultiplier,
+  maxPauseFor,
+  speedProduct,
+  SUPERTONIC_SPEED,
+  type Acting,
+  type EmotionTakeMeasure,
   consistencyReasons,
   cosine,
   roundTripCer,
@@ -40,7 +53,7 @@ import {
   type Script,
   type SentenceAssessment,
 } from '@script2video/core';
-import { compressPausesInFile, cropFile, loudnessReader } from './pauses.js';
+import { compressPausesInFile, cropFile, loudnessReader, readPcm16 } from './pauses.js';
 import { mockEnabled, mockSynthesize } from './mock-tts.js';
 import { splitRecording } from './recording.js';
 import { resolvePersona, type PersonaRef } from './persona.js';
@@ -102,6 +115,14 @@ export interface LockEntry {
   /** Similarity with the voice reference clip, and the reference it was measured against. */
   sim?: number;
   voiceRef?: string;
+  /**
+   * Emotion lines (ko): what the emotion gates read (stage 2 plan 4.1), so `--recheck` judges
+   * without the raw take. `raw`: the raw take inside the aligned words; the rest: lock wav × tempo.
+   */
+  raw?: { duration: number; pause: number; ending: number | null };
+  lead?: number;
+  tail?: number;
+  noise?: number;
 }
 
 export interface LockManifest {
@@ -206,6 +227,18 @@ export interface SentenceJob {
   synthFields: { speed: number; instruct: string };
   key: string;
   tempo: number | null;
+  /** Voice attributes of the line (acting stage 2). */
+  acting?: Acting;
+  /** An emotion line: the emotion gates apply (ko) and the emotion pitch window. */
+  emotional: boolean;
+  /** cast × line × user emotion speed: tempo (qwen, persona) or synthesis speed (supertonic). */
+  speedProduct: number;
+  /** The instruction holds an acting template (its version is in the synthesis key). */
+  template: boolean;
+  /** Expected-length factor of the emotion (1 for plain lines). */
+  multiplier: number;
+  /** Longest pause allowed inside the raw take. */
+  maxPause: number;
 }
 
 interface Attempt {
@@ -221,12 +254,26 @@ interface Attempt {
   sim: number | null;
   /** The reference the take was checked against (null: not checked). */
   voiceRef: string | null;
+  /** Emotion gate measurements (emotion lines in ko only). */
+  emotion?: EmotionTakeMeasure & { ending: number | null };
 }
 
 interface PitchResult {
   median_hz: number | null;
   ending_st: number | null;
+  lead_s: number;
+  tail_s: number;
+  noise_s: number;
 }
+
+/** Margins kept around the aligned words when the raw take is measured (as the edge cut). */
+const rawWindow = (words: AlignedWord[], length: number): [number, number] =>
+  words.length === 0
+    ? [0, length]
+    : [
+        Math.max(0, words[0]!.start - EDGE_PAD_LEAD_S),
+        Math.min(length, words[words.length - 1]!.end + EDGE_PAD_TAIL_S),
+      ];
 
 export interface RecordedParagraph {
   src: string;
@@ -241,6 +288,8 @@ export interface SentencePlan {
   sentences: Record<string, string>;
   /** Paragraphs that cannot be planned (missing recording, unresolvable persona), in script order. */
   errors: { id: string; message: string }[];
+  /** Things changed to make a plan (a draft speed clamped to Supertonic's range). */
+  notes: string[];
 }
 
 const DRAFT_VOICES = ['F1', 'M1', 'F2', 'M2', 'F3', 'M3', 'F4', 'M4', 'F5', 'M5'];
@@ -271,7 +320,7 @@ export function planSentences(
       models: Record<string, { revision: string }>;
     }
   ).models;
-  const plan: SentencePlan = { jobs: [], recorded: [], sentences: {}, errors: [] };
+  const plan: SentencePlan = { jobs: [], recorded: [], sentences: {}, errors: [], notes: [] };
   for (const scene of script.scenes) {
     for (const [bi, block] of scene.blocks.entries()) {
       if (block.kind !== 'paragraph') continue;
@@ -316,6 +365,38 @@ export function planSentences(
       }
       for (const [si, sentence] of block.sentences.entries()) {
         const ttsText = toTtsText(sentence.text, meta.pronounce).tts;
+        const acting = sentence.acting;
+        // a draft speaks plainly (plan 3: no template or say, whatever the draft voice is)
+        const { instruct, template } =
+          target.engine === 'qwen' && !opts.draft
+            ? instructFor(meta, member.style, acting)
+            : { instruct: '', template: false };
+        const speed = speedProduct(meta, member, acting);
+        const id = sentenceId(scene.id, bi, si);
+        if (speed < 0.5 || speed > 2) {
+          plan.errors.push({
+            id,
+            message: `${id}: speed ${speed.toFixed(3)} (cast × line × emotion) is outside 0.5–2`,
+          });
+          continue;
+        }
+        let synthSpeed = target.engine === 'supertonic' ? speed : 1;
+        if (target.engine === 'supertonic') {
+          const [lo, hi] = SUPERTONIC_SPEED;
+          if (synthSpeed < lo || synthSpeed > hi) {
+            if (!opts.draft) {
+              plan.errors.push({
+                id,
+                message: `${id}: Supertonic speed ${speed.toFixed(3)} is outside ${lo.toFixed(3)}–${hi.toFixed(3)}`,
+              });
+              continue;
+            }
+            synthSpeed = Math.min(hi, Math.max(lo, synthSpeed));
+            plan.notes.push(
+              `${id}: draft speed ${speed.toFixed(3)} clamped to ${synthSpeed.toFixed(3)} (Supertonic range)`,
+            );
+          }
+        }
         // Two-level key: the raw TTS output depends only on synthesis inputs; post-processing
         // (tempo, trim, pause compression, alignment) can change without re-running the model.
         const synthFields = {
@@ -326,15 +407,17 @@ export function planSentences(
           voice: target.voice,
           // persona: the exact reference clip and its sentence define the voice
           ...(target.ref ? { ref: target.ref.sha256, refText: target.ref.text } : {}),
-          instruct: target.engine === 'qwen' ? (member.style ?? '') : '',
+          instruct,
           lang: meta.lang,
-          speed: target.engine === 'supertonic' ? member.speed : 1,
+          speed: synthSpeed,
           seed: meta.seed,
           decoding: TTS_DECODING,
           text: ttsText,
+          // only lines that use an acting template: other keys stay as they were (A3)
+          ...(template ? { templates: ACTING_VERSION } : {}),
         };
         const synthKey = hashKey(synthFields);
-        const tempo = target.engine !== 'supertonic' && member.speed !== 1 ? member.speed : null;
+        const tempo = target.engine !== 'supertonic' && speed !== 1 ? speed : null;
         const key = hashKey({
           synthKey,
           postprocess: POSTPROCESS_VERSION,
@@ -342,8 +425,8 @@ export function planSentences(
           tempo,
           maxPause: meta.pacing.maxPause,
         });
-        const id = sentenceId(scene.id, bi, si);
         plan.sentences[id] = key;
+        const emotional = emotionSentence(target.engine, acting, opts.draft);
         plan.jobs.push({
           id,
           text: sentence.text,
@@ -355,6 +438,12 @@ export function planSentences(
           synthFields,
           key,
           tempo,
+          ...(acting ? { acting } : {}),
+          emotional,
+          speedProduct: speed,
+          template,
+          multiplier: lengthMultiplier(meta, emotional, acting),
+          maxPause: maxPauseFor(meta, acting),
         });
       }
     }
@@ -476,19 +565,52 @@ export async function synthesizeScript(
     }
   };
   /** Pitch and similarity of a take against its voice reference. */
+  const emoOf = (job: SentenceJob) =>
+    job.emotional && job.acting?.emo ? { emo: job.acting.emo } : {};
   const consistency = async (job: SentenceJob, wavPath: string, f0: number | null) => {
     const s = await similarity(job, wavPath);
     if (!s) return { sim: null, voiceRef: null, reasons: [] };
     return {
       sim: s.sim,
       voiceRef: s.r.sha,
-      reasons: consistencyReasons({ text: job.text, f0, sim: s.sim }, s.r.ref),
+      reasons: consistencyReasons({ text: job.text, f0, sim: s.sim, ...emoOf(job) }, s.r.ref),
     };
+  };
+  /** The emotion gates apply to new takes of emotion lines in Korean (stage 2 plan 4). */
+  const gated = (job: SentenceJob) => checkVoices && job.emotional && meta.lang === 'ko';
+  const charsOf = (job: SentenceJob) => [...normalizeForCer(job.ttsText, meta.lang)].length;
+  /**
+   * The raw take as the model made it (trimmed, no tempo, no pause compression), measured inside
+   * the aligned words: its length and longest quiet gap, and its ending.
+   */
+  const measureRaw = async (job: SentenceJob, raw: string, attempt: number) => {
+    const dir = join(repoRoot, '.s2v-cache', 'tts-raw-trim');
+    mkdirSync(dir, { recursive: true });
+    const trimmed = join(dir, `${job.synthKey}.a${attempt}.wav`);
+    try {
+      await postprocess(raw, trimmed, null);
+      const { data } = await aligner.post<{ words: AlignedWord[] }>('/align', {
+        wav_path: trimmed,
+        text: job.alignText,
+        lang: meta.lang,
+      });
+      const pcm = readPcm16(trimmed);
+      const length = pcm.samples.length / pcm.rate;
+      const [from, to] = rawWindow(data.words, length);
+      const slice = pcm.samples.subarray(Math.round(from * pcm.rate), Math.round(to * pcm.rate));
+      const samples = Float32Array.from(slice, (x) => x / 32768);
+      const gaps = samples.length > 0 ? analyzeLevels(samples, pcm.rate).gaps : [];
+      const p = (await aligner.post<PitchResult>('/pitch', { wav_path: trimmed })).data;
+      return { duration: to - from, pause: Math.max(0, ...gaps), ending: p.ending_st };
+    } finally {
+      if (existsSync(trimmed)) unlinkSync(trimmed);
+    }
   };
 
   // ---------- jobs ----------
   const plan = planSentences(scriptPath, script, repoRoot, { draft: opts.draft === true, mock });
   if (plan.errors.length > 0) throw new Error(plan.errors[0]!.message);
+  for (const n of plan.notes) opts.log(`  ${n}`);
   const { jobs, recorded } = plan;
   Object.assign(manifest.sentences, plan.sentences);
 
@@ -496,14 +618,14 @@ export async function synthesizeScript(
   const runAttempt = async (job: SentenceJob, attempt: number): Promise<Attempt> => {
     if (mock) {
       const wavPath = join(lockDir, `${job.key}.try${attempt}.wav`);
-      const words = mockSynthesize(job.alignText, meta.lang, job.member.speed, wavPath);
+      const words = mockSynthesize(job.alignText, meta.lang, job.speedProduct, wavPath);
       const assessment = assessSentence({
         text: job.text,
         lang: meta.lang,
         duration: wavDuration(wavPath),
         words,
         cer: null,
-        speed: job.member.speed,
+        speed: job.speedProduct,
         loudness: loudnessReader(wavPath),
       });
       return {
@@ -570,25 +692,58 @@ export async function synthesizeScript(
         duration: wavDuration(wavPath),
         words,
         cer,
-        speed: job.member.speed,
+        speed: job.speedProduct,
         loudness: loudnessReader(wavPath),
       });
     let assessment = assess();
-    // Non-speech sound before the first / after the last word (laughs, breaths — common on very
-    // short sentences) is cut away instead of re-synthesizing; inside words it cannot be.
-    const edgeOnly = /before the first word|after the last word/;
-    if (!assessment.ok && words.length > 0 && assessment.reasons.some((r) => edgeOnly.test(r))) {
+    let cropped = false;
+    const crop = () => {
       const from = Math.max(0, words[0]!.start - EDGE_PAD_LEAD_S);
       const to = Math.min(wavDuration(wavPath), words[words.length - 1]!.end + EDGE_PAD_TAIL_S);
       cropFile(wavPath, from, to);
       words = words.map((w) => ({ ...w, start: Math.max(0, w.start - from), end: w.end - from }));
+      cropped = true;
       assessment = assess();
       opts.log(
         `  ${job.id} attempt ${attempt}: cut non-speech outside the words (kept ${from.toFixed(2)}–${to.toFixed(2)}s)`,
       );
+    };
+    // Non-speech sound before the first / after the last word (laughs, breaths — common on very
+    // short sentences) is cut away instead of re-synthesizing; inside words it cannot be.
+    const edgeOnly = /before the first word|after the last word/;
+    if (!assessment.ok && words.length > 0 && assessment.reasons.some((r) => edgeOnly.test(r)))
+      crop();
+    let pitch = (await aligner.post<PitchResult>('/pitch', { wav_path: wavPath })).data;
+    // emotion lines: sound before / after the voice is cut away too when it fails the edge gate
+    const tempo = job.tempo ?? 1;
+    const edgeFails = () =>
+      pitch.lead_s * tempo > GATES.edgeS || pitch.tail_s * tempo > GATES.edgeS;
+    if (gated(job) && !cropped && words.length > 0 && edgeFails()) {
+      crop();
+      pitch = (await aligner.post<PitchResult>('/pitch', { wav_path: wavPath })).data;
     }
-    const pitch = (await aligner.post<PitchResult>('/pitch', { wav_path: wavPath })).data;
     const f0 = pitch.median_hz;
+    let emotion: Attempt['emotion'];
+    if (gated(job)) {
+      const r = await measureRaw(job, raw, attempt);
+      emotion = {
+        chars: charsOf(job),
+        rawDuration: r.duration,
+        rawPause: r.pause,
+        ending: r.ending,
+        lead: pitch.lead_s * tempo,
+        tail: pitch.tail_s * tempo,
+        noise: pitch.noise_s * tempo,
+      };
+      const ref = await referenceFor(job);
+      const failures = emotionGateFailures(
+        emotion,
+        { multiplier: job.multiplier, maxPause: job.maxPause, synthSpeed: job.synthFields.speed },
+        ref?.ref.rate ?? null,
+      );
+      if (failures.length)
+        assessment = { ...assessment, ok: false, reasons: [...assessment.reasons, ...failures] };
+    }
     let sim: number | null = null;
     let voiceRef: string | null = null;
     if (checkVoices) {
@@ -614,6 +769,7 @@ export async function synthesizeScript(
       ending: pitch.ending_st,
       sim,
       voiceRef,
+      ...(emotion ? { emotion } : {}),
     };
   };
 
@@ -639,6 +795,19 @@ export async function synthesizeScript(
       ...(chosen.sim !== null && chosen.voiceRef
         ? { sim: Number(chosen.sim.toFixed(4)), voiceRef: chosen.voiceRef }
         : {}),
+      ...(chosen.emotion
+        ? {
+            raw: {
+              duration: Number(chosen.emotion.rawDuration.toFixed(3)),
+              pause: Number(chosen.emotion.rawPause.toFixed(2)),
+              ending:
+                chosen.emotion.ending !== null ? Number(chosen.emotion.ending.toFixed(2)) : null,
+            },
+            lead: Number(chosen.emotion.lead.toFixed(3)),
+            tail: Number(chosen.emotion.tail.toFixed(3)),
+            noise: Number(chosen.emotion.noise.toFixed(3)),
+          }
+        : {}),
     };
     save();
   };
@@ -652,11 +821,37 @@ export async function synthesizeScript(
       duration: e.duration,
       words: e.words,
       cer: opts.asr ? e.cer : null,
-      speed: job.member.speed,
+      speed: job.speedProduct,
       loudness: loudnessReader(wav),
     });
     if (!checkVoices) return reasons;
     const r = await referenceFor(job);
+    // emotion gates from the recorded measurements only (the raw take may be gone, A4)
+    if (gated(job)) {
+      if (e.raw && e.lead !== undefined && e.tail !== undefined && e.noise !== undefined)
+        reasons.push(
+          ...emotionGateFailures(
+            {
+              chars: charsOf(job),
+              rawDuration: e.raw.duration,
+              rawPause: e.raw.pause,
+              lead: e.lead,
+              tail: e.tail,
+              noise: e.noise,
+            },
+            {
+              multiplier: job.multiplier,
+              maxPause: job.maxPause,
+              synthSpeed: job.synthFields.speed,
+            },
+            r?.ref.rate ?? null,
+          ),
+        );
+      else
+        opts.log(
+          `  ${job.id}: no emotion measurements in the lock (made before them); emotion gates skipped`,
+        );
+    }
     if (!r) return reasons;
     if (e.f0 === undefined || e.ending === undefined) {
       await ensureServices();
@@ -677,7 +872,7 @@ export async function synthesizeScript(
     save();
     return [
       ...reasons,
-      ...consistencyReasons({ text: job.text, f0: e.f0 ?? null, sim: e.sim }, r.ref),
+      ...consistencyReasons({ text: job.text, f0: e.f0 ?? null, sim: e.sim, ...emoOf(job) }, r.ref),
     ];
   };
 

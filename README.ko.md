@@ -130,6 +130,28 @@ node packages/cli/dist/main.js voice pick voices/minsu.yaml 2 --lang ko
 판정합니다. `voice refs <script>`는 기준 음성을 보여 주고, `--refresh` 뒤에는 이제 실패하는 lock 문장을
 알려 줍니다.
 
+### 대사 연기
+
+화자 접두에 감정을 적습니다: `mina{emo=sad}: 그럴 줄 알았어.` 감정은
+`neutral happy sad angry surprised anxious excited calm serious puzzled moved playful`이고, frontmatter의
+`acting.emotions`로 직접 만들 수도 있습니다(`sleepy: { voice: "Sound drowsy and slow.", face: calm,
+speed: 0.8, maxPause: 1.5 }`). 감정은 목소리(Qwen 프리셋 화자는 감정 지시를 따름), 캐릭터의 같은 이름
+표정(없으면 기본 표정, 만들 표정은 `s2v character missing`이 알려 줌), 모션을 정합니다. 문장 사이에
+`:emo{emo=sad}`를 두면 다음 문장부터 바뀝니다: `mina{emo=calm}: 괜찮았어요. :emo{emo=sad}그런데요.`
+
+| 속성                |                                                    |
+| ------------------- | -------------------------------------------------- |
+| `emo=`              | 감정                                               |
+| `power=weak/strong` | 세기(persona·Supertonic 목소리는 조금 작게 / 크게) |
+| `say="…"`           | 이 대사만의 자유 지시(Qwen 프리셋 화자만)          |
+| `volume=soft/loud`  | 믹스에서 −6 / +3 dB                                |
+| `speed=0.8–1.25`    | cast의 `speed`와 곱함                              |
+
+감정은 말 자체에 감정이 실린 대사에 적으세요. 지시만으로 평범한 문장을 기쁘게 만들 수는 없습니다.
+persona·Supertonic 목소리는 감정을 연기하지 못합니다(표정과 모션은 바뀜). 한국어 감정 대사의 새
+테이크는 숨소리·한숨·긴 쉼·부자연스러운 길이를 검사하고, 걸리면 다시 만듭니다. 이 속성이 없는 대사의
+소리는 그대로입니다.
+
 ### 캐릭터
 
 화자에게 캐릭터 그림을 주면 화면 왼쪽 아래나 오른쪽 아래에 섭니다. 한쪽에는 한 번에 한 캐릭터만

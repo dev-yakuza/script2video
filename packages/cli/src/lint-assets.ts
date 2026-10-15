@@ -10,6 +10,7 @@ import {
   logoOf,
   MOTIONS,
   sceneFramings,
+  sentenceFace,
   type Diagnostic,
   type Framing,
   type Script,
@@ -18,15 +19,13 @@ import {
   CHARACTER_YAML,
   characterFaces,
   characterSource,
-  FaceError,
-  IMPORTED_PARTS,
   isSingle,
   imageSize,
   loadCharacterSpec,
   MAX_AVATARS,
-  resolveFace,
   type CharacterSpec,
 } from '@script2video/renderer-remotion';
+import { importedFaceProblems, partsFaceProblems } from './cast-faces.js';
 import { resolvePersona } from './persona.js';
 import { loadGraph } from './character-gen/commands.js';
 import { PROVENANCE, status } from './character-gen/state.js';
@@ -265,9 +264,10 @@ export function lintCast(script: Script, scriptDir: string): Diagnostic[] {
     for (const scene of script.scenes)
       for (const b of scene.blocks)
         if (b.kind === 'paragraph') {
-          if (b.cast === key && b.face) used.add(b.face);
-          for (const s of b.sentences)
+          for (const s of b.sentences) {
+            if (b.cast === key) used.add(sentenceFace(meta, b, s, 'full').drawn);
             for (const r of s.reacts ?? []) if (r.faces[key]) used.add(r.faces[key]);
+          }
         }
     for (const face of used)
       if (!faces[face]?.base) err(`cast.${key}: ${rel}/${face}.png is missing (face "${face}")`);
@@ -329,24 +329,6 @@ export function lintCast(script: Script, scriptDir: string): Diagnostic[] {
   return out;
 }
 
-/** Selection keys of imported YMM4 faces (folders; 後 / 他 take slots 1–3). */
-const YMM4_SLOTS = [
-  '後',
-  '後1',
-  '後2',
-  '後3',
-  '体',
-  '顔色',
-  '髪',
-  '口',
-  '目',
-  '眉',
-  '他',
-  '他1',
-  '他2',
-  '他3',
-];
-
 /** README / terms files that come with downloaded material. */
 const TERMS_FILE = /^(readme|terms|license|licence|利用規約|規約)/i;
 
@@ -364,8 +346,16 @@ const IP_NAMES = [
   'rilakkuma',
 ];
 
-/** Faces a cast member shows, per framing, over every output (both sides are checked). */
-export function usedFaces(script: Script, key: string): Map<Framing, Set<string>> {
+/**
+ * Faces a cast member shows, per framing, over every output (both sides are checked).
+ * `wanted`: the faces lines ask for before an emotion face falls back to the default one
+ * (`character missing` lists those to make).
+ */
+export function usedFaces(
+  script: Script,
+  key: string,
+  which: 'drawn' | 'wanted' = 'drawn',
+): Map<Framing, Set<string>> {
   const used = new Map<Framing, Set<string>>();
   const add = (f: Framing, face: string) =>
     (used.get(f) ?? used.set(f, new Set()).get(f)!).add(face);
@@ -378,9 +368,10 @@ export function usedFaces(script: Script, key: string): Map<Framing, Set<string>
       add(framing, member.face);
       for (const b of scene.blocks)
         if (b.kind === 'paragraph' && (!b.only || b.only.includes(name))) {
-          if (b.cast === key && b.face) add(framing, b.face);
-          for (const s of b.sentences)
+          for (const s of b.sentences) {
+            if (b.cast === key) add(framing, sentenceFace(script.meta, b, s, framing)[which]);
             for (const r of s.reacts ?? []) if (r.faces[key]) add(framing, r.faces[key]);
+          }
         }
     });
   }
@@ -414,24 +405,16 @@ export function lintPartsCharacter(
   if (spec.source === 'imported') {
     if (!readdirSync(dir).some((f) => TERMS_FILE.test(f.normalize('NFC'))))
       warn(`${rel} has no README / terms file: check the material's terms of use`);
-    const parts = join(dir, IMPORTED_PARTS);
     for (const [framing, faces] of used) {
       if (framing !== 'full')
         err(`imported characters have only the full framing (::shot ${framing})`);
       for (const f of faces) {
-        if (!spec.faces[f]) {
+        const problems = importedFaceProblems(dir, spec, f);
+        if (problems === null) {
           err(`face "${f}" is not defined in ${rel}/${CHARACTER_YAML}`);
           continue;
         }
-        const pick = { ...spec.faces.neutral, ...spec.faces[f] };
-        for (const slot of Object.keys(pick))
-          if (!YMM4_SLOTS.includes(slot.normalize('NFC')))
-            err(`face "${f}": "${slot}" is not a YMM4 part folder (${YMM4_SLOTS.join(' ')})`);
-        for (const [folder, stem] of Object.entries(pick)) {
-          const file = join(parts, folder.replace(/[123]$/, ''), `${stem}.png`);
-          if (!existsSync(file))
-            err(`${file.slice(dir.length + 1)} is missing (face "${f}", folder ${folder})`);
-        }
+        for (const p of problems) err(p);
       }
     }
     return out;
@@ -440,7 +423,10 @@ export function lintPartsCharacter(
   const speaking = new Set<string>();
   for (const scene of script.scenes)
     for (const b of scene.blocks)
-      if (b.kind === 'paragraph' && b.cast === key) speaking.add(b.face ?? m.face);
+      if (b.kind === 'paragraph' && b.cast === key)
+        for (const s of b.sentences)
+          for (const f of ['full', 'upper', 'head'] as const)
+            speaking.add(sentenceFace(script.meta, b, s, f).drawn);
   for (const name of Object.keys(spec.faces))
     if (/-(talk|half|blink)$/.test(name))
       err(`face name "${name}" must not end in -talk, -half or -blink`);
@@ -511,56 +497,18 @@ export function lintPartsCharacter(
         err(`face "${face}" is not defined in ${rel}/${CHARACTER_YAML}`);
         continue;
       }
-      const problems = new Map<string, string[]>();
-      for (const side of ['left', 'right'] as const) {
-        try {
-          const r = resolveFace(dir, spec, framing, face, side, [1, 1]);
-          const files = [...r.head.states.closed, ...(r.body ? [r.body.file] : [])];
-          // Optional parts must share the canvas too, or they land in the wrong place.
-          const optional = [
-            r.head.states.talk.at(-1)!,
-            r.head.states.half.at(-1)!,
-            r.head.states.blink.at(-1)!,
-            ...(r.front ? [r.front.file] : []),
-          ].filter((f) => existsSync(f));
-          for (const f of optional)
-            (sizes.get(framing) ?? sizes.set(framing, new Set()).get(framing)!).add(
-              imageSize(f).join('×'),
-            );
-          const fm =
-            spec.faces[face]?.motion ?? spec.expressions[spec.faces[face]!.expression]?.motion;
-          if (r.pivot === null && (fm === 'head-nod' || fm === 'head-tilt'))
-            problems.set(
-              `face "${face}" has ${fm}, but no head layer in ${framing}: it plays as ${fm === 'head-nod' ? 'nod' : 'lean'} (whole body)`,
-              ['warn'],
-            );
-          if (r.body && r.body.flip !== r.head.flip && spec.mirror)
-            problems.set(
-              `face "${face}" flips only the ${r.head.flip ? 'head' : 'body'} on the ${side} side: asymmetric details (a hair clip) switch sides there`,
-              ['warn'],
-            );
-          if (speaking.has(face) && !existsSync(r.head.states.talk.at(-1)!))
-            problems.set(
-              `face "${face}" is used for speaking but has no mouth frames (${framing})`,
-              ['warn'],
-            );
-          for (const file of files) {
-            if (!existsSync(file))
-              problems.set(
-                `${file.slice(dir.length + 1)} is missing (face "${face}", ${framing})`,
-                [],
-              );
-            else
-              (sizes.get(framing) ?? sizes.set(framing, new Set()).get(framing)!).add(
-                imageSize(file).join('×'),
-              );
-          }
-        } catch (e) {
-          if (!(e instanceof FaceError)) throw e;
-          const msg = `${e.message} (${framing})`;
-          problems.set(msg, [...(problems.get(msg) ?? []), side]);
-        }
-      }
+      const { problems, files, optional } = partsFaceProblems(
+        dir,
+        spec,
+        framing,
+        face,
+        speaking.has(face),
+      );
+      // Every image must share the canvas, or parts land in the wrong place.
+      for (const f of [...optional, ...files])
+        (sizes.get(framing) ?? sizes.set(framing, new Set()).get(framing)!).add(
+          imageSize(f).join('×'),
+        );
       // Report a problem once; name the side only when it happens on one side.
       for (const [msg, sides] of problems) {
         if (sides[0] === 'warn') warn(msg);

@@ -14,6 +14,7 @@
  * the described gender).
  */
 
+import { emotionPitchWindow, emotionSimFloor } from './acting.js';
 import type { Lang } from './schema.js';
 
 /** Bump when the reference voice recipe (sentences, seeds, measurements) changes. */
@@ -144,23 +145,30 @@ export function pitchRange(sigma: number, text: string): [number, number] {
   return [-limit, limit + rising];
 }
 
-/** Failed consistency checks of one take (empty: it sounds like the reference voice). */
+/**
+ * Failed consistency checks of one take (empty: it sounds like the reference voice). `emo`: the
+ * emotion of an emotion line (acting stage 2 plan 4.2), which gets the wider emotion window.
+ */
 export function consistencyReasons(
-  take: { text: string; f0: number | null; sim: number | null },
-  ref: Pick<VoiceReference, 'f0' | 'sigma' | 'simFloor'>,
+  take: { text: string; f0: number | null; sim: number | null; emo?: string },
+  ref: Pick<VoiceReference, 'f0' | 'sigma' | 'simFloor' | 'sims'>,
 ): string[] {
   const reasons: string[] = [];
+  const floor = take.emo !== undefined ? emotionSimFloor(ref.sims) : ref.simFloor;
   if (take.f0 !== null) {
     const dev = semitones(take.f0, ref.f0);
-    const [lo, hi] = pitchRange(ref.sigma, take.text);
+    const [lo, hi] =
+      take.emo !== undefined
+        ? emotionPitchWindow(take.emo, ref.sigma, take.text)
+        : pitchRange(ref.sigma, take.text);
     if (dev < lo || dev > hi)
       reasons.push(
         `pitch ${take.f0.toFixed(0)}Hz is ${dev > 0 ? '+' : ''}${dev.toFixed(1)} st from the voice reference ${ref.f0.toFixed(0)}Hz (allowed ${lo.toFixed(1)}…+${hi.toFixed(1)})`,
       );
   }
-  if (take.sim !== null && take.sim < ref.simFloor)
+  if (take.sim !== null && take.sim < floor)
     reasons.push(
-      `voice similarity ${take.sim.toFixed(3)} is below ${ref.simFloor.toFixed(3)} (sounds like another person)`,
+      `voice similarity ${take.sim.toFixed(3)} is below ${floor.toFixed(3)} (sounds like another person)`,
     );
   return reasons;
 }

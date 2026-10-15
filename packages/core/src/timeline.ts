@@ -23,6 +23,7 @@ import {
   type Sentence,
   type Visual,
 } from './schema.js';
+import { gainFor, paragraphActing } from './acting.js';
 import { toAlignText, ttsRangeToDisplay } from './tts-text.js';
 
 export interface AlignedWord {
@@ -50,11 +51,13 @@ export function sentenceId(sceneId: string, blockIndex: number, sentenceIndex: n
 export interface TimelineAudio {
   sentenceId: string;
   cast: string;
-  /** Character face while this sentence is spoken (paragraph `face`, else the cast default). */
+  /** Character face while this sentence is spoken (paragraph `face`, its emotion's, else the cast default). */
   face: string;
   src: string;
   startFrame: number;
   durationFrames: number;
+  /** Mix gain on top of the loudness normalization (dB; absent = 0): `volume`, `power`. */
+  gain?: number;
 }
 
 export interface TimelineCue {
@@ -327,6 +330,8 @@ export function buildTimeline(
       started = true;
       const blockReactions: (TimelineReaction & { motion?: string })[] = [];
       let blockStart: number | null = null;
+      const acting = paragraphActing(meta, block, out.framing[block.cast] ?? 'full');
+      const sentenceStart: (number | undefined)[] = [];
       block.sentences.forEach((sentence, si) => {
         const id = sentenceId(scene.id, blockIndex, si);
         const audio = manifest[id];
@@ -338,13 +343,16 @@ export function buildTimeline(
         const startFrame = toFrame(t);
         blockStart ??= startFrame;
         for (const v of pendingVisuals.splice(0)) out.visuals.push({ startFrame, visual: v });
+        sentenceStart[si] = startFrame;
+        const gain = gainFor(meta, block, sentence);
         out.audio.push({
           sentenceId: id,
           cast: block.cast,
-          face: block.face ?? meta.cast[block.cast]?.face ?? 'neutral',
+          face: acting.faces[si]!.drawn,
           src: audio.src,
           startFrame,
           durationFrames: Math.ceil(audio.duration * fps),
+          ...(gain !== 0 ? { gain } : {}),
         });
         const spans = displayWordSpans(sentence, audio.words, meta.pronounce, meta.lang);
         for (const cue of sentence.cues) {
@@ -402,14 +410,19 @@ export function buildTimeline(
         if (motion)
           out.motions.push({ cast: r.cast, motion, startFrame: r.startFrame, endFrame: blockEnd });
       }
-      const own = motionFor(meta, block.cast, block.face, block.motion);
-      if (own && blockStart !== null)
+      // a run starts at its sentence (or the next one that has audio) and lasts until the next run
+      const at = (si: number) => sentenceStart.slice(si).find((f) => f !== undefined);
+      acting.runs.forEach((run, k) => {
+        const startFrame = at(run.sentence);
+        if (!run.motion || startFrame === undefined) return;
+        const next = acting.runs[k + 1];
         out.motions.push({
           cast: block.cast,
-          motion: own,
-          startFrame: blockStart,
-          endFrame: blockEnd,
+          motion: run.motion,
+          startFrame,
+          endFrame: (next && at(next.sentence)) ?? blockEnd,
         });
+      });
       pendingGap = pacing.paragraphGap;
     });
 

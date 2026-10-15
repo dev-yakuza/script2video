@@ -129,6 +129,28 @@ node packages/cli/dist/main.js voice pick voices/minsu.yaml 2 --lang ko
 作り直します（最大 6 テイク）。すでにオーディオ lock にある文は `tts --recheck` のときだけ判定し直します。
 `voice refs <script>` は基準音声を表示し、`--refresh` の後は今は不合格になる lock の文を示します。
 
+### セリフの演技
+
+話者の接頭辞に感情を書きます: `mina{emo=sad}: そうだと思った。` 感情は
+`neutral happy sad angry surprised anxious excited calm serious puzzled moved playful` で、frontmatter の
+`acting.emotions` で自作もできます（`sleepy: { voice: "Sound drowsy and slow.", face: calm,
+speed: 0.8, maxPause: 1.5 }`）。感情は声（Qwen のプリセット話者は感情の指示に従う）、キャラクターの同名の
+表情（なければ既定の表情。作る表情は `s2v character missing` が示す）、モーションを決めます。文と文の間に
+`:emo{emo=sad}` を置くと次の文から変わります: `mina{emo=calm}: 大丈夫でした。:emo{emo=sad}でも。`
+
+| 属性                |                                                         |
+| ------------------- | ------------------------------------------------------- |
+| `emo=`              | 感情                                                    |
+| `power=weak/strong` | 強さ（persona・Supertonic の声は少し小さく / 大きく）   |
+| `say="…"`           | このセリフだけの自由な指示（Qwen のプリセット話者のみ） |
+| `volume=soft/loud`  | ミックスで −6 / +3 dB                                   |
+| `speed=0.8–1.25`    | cast の `speed` と掛け合わせる                          |
+
+感情は、言葉自体に感情がこもったセリフに書いてください。指示だけで平凡な文を楽しそうにはできません。
+persona・Supertonic の声は感情を演じられません（表情とモーションは変わります）。韓国語の感情セリフの新しい
+テイクは息・ため息・長い間・不自然な長さを検査し、引っかかれば作り直します。これらの属性がないセリフの
+音は変わりません。
+
 ### キャラクター
 
 話者にキャラクターの絵を与えると、画面の左下か右下に立ちます。片側に立つのは一度に 1 人だけで

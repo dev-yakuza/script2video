@@ -133,6 +133,29 @@ seed, up to 6 takes. Sentences already in the audio lock are not checked again u
 `tts --recheck`. `voice refs <script>` shows the references and, after `--refresh`, lists the locked
 sentences that would now fail.
 
+### Acting a line
+
+Give a line an emotion in the speaker prefix: `mina{emo=sad}: 그럴 줄 알았어.` Emotions:
+`neutral happy sad angry surprised anxious excited calm serious puzzled moved playful`, or your own
+under `acting.emotions` in the frontmatter (`sleepy: { voice: "Sound drowsy and slow.", face: calm,
+speed: 0.8, maxPause: 1.5 }`). An emotion picks the voice (Qwen preset speakers follow an instruction
+for it), the character's face of that name when the character has one (else the default face; `s2v
+character missing` lists the faces to make) and a motion. Change it from a sentence on with
+`:emo{emo=sad}`, between sentences: `mina{emo=calm}: 괜찮았어요. :emo{emo=sad}그런데요.`
+
+| attribute           |                                                                       |
+| ------------------- | --------------------------------------------------------------------- |
+| `emo=`              | the emotion                                                           |
+| `power=weak/strong` | how strong (persona and Supertonic voices: a little quieter / louder) |
+| `say="…"`           | a free direction for this line (Qwen preset speakers only)            |
+| `volume=soft/loud`  | −6 / +3 dB in the mix                                                 |
+| `speed=0.8–1.25`    | multiplied with the cast `speed`                                      |
+
+Write emotions on lines whose words already carry them: an instruction cannot make a neutral
+sentence sound happy. Persona and Supertonic voices cannot act an emotion (the face and motion still
+change). New takes of emotion lines in Korean are checked for breaths, sighs, long pauses and an
+unnatural length, and made again when they fail. Lines without these attributes sound as before.
+
 ### Characters
 
 Give a speaker character art and it stands in the bottom-left or bottom-right corner. One

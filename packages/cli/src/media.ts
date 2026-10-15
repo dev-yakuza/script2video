@@ -150,7 +150,10 @@ export async function buildNarration(
   const gains: Record<string, number> = {};
   for (const { scene, a } of audio) {
     const l = loud.get(a.src);
-    const db = clampGain(l != null ? SPEECH_LUFS - l : median(byCast.get(a.cast) ?? []));
+    // the line's own level (volume, power) goes on top of the normalization (acting plan 3.4);
+    // the per-speaker fallback above is taken without it
+    const db =
+      clampGain(l != null ? SPEECH_LUFS - l : median(byCast.get(a.cast) ?? [])) + (a.gain ?? 0);
     gains[a.sentenceId] = Number(db.toFixed(1));
     const g = 10 ** (db / 20);
     const { rate, samples } = readPcm16(a.src);

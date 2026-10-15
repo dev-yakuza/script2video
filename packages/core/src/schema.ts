@@ -42,6 +42,20 @@ export const castMemberSchema = z.object({
    * present, faces bring these motions instead of the name-based FACE_MOTION. Not for scripts.
    */
   faceMotions: z.record(z.string(), z.string()).optional(),
+  /**
+   * Internal: faces the cast member's character can really draw, filled by the CLI (acting stage 2
+   * plan 6.1). `any`: classic characters (no framings); otherwise per framing. Not for scripts.
+   */
+  faceSets: z
+    .union([
+      z.object({ any: z.array(z.string()) }),
+      z.object({
+        full: z.array(z.string()).optional(),
+        upper: z.array(z.string()).optional(),
+        head: z.array(z.string()).optional(),
+      }),
+    ])
+    .optional(),
 });
 export type CastMember = z.infer<typeof castMemberSchema>;
 
@@ -141,6 +155,26 @@ export const outputProfileSchema = z.object({
 });
 export type OutputProfile = z.infer<typeof outputProfileSchema>;
 
+/** A user-defined emotion (frontmatter `acting.emotions`, acting plan 2.6). */
+export const userEmotionSchema = z.object({
+  /** Voice instruction (qwen), like a standard emotion's template. */
+  voice: z.string().min(1),
+  face: z
+    .string()
+    .regex(/^[a-z][a-z0-9-]*$/)
+    .optional(),
+  motion: z.string().optional(),
+  /** Tempo factor, multiplied with the cast and line `speed`. */
+  speed: z.number().min(0.5).max(2).optional(),
+  /** Longest pause allowed inside a take (seconds) instead of the default gate. */
+  maxPause: z.number().min(0.2).max(2).optional(),
+});
+export type UserEmotion = z.infer<typeof userEmotionSchema>;
+
+export const actingSchema = z.object({
+  emotions: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/), userEmotionSchema).optional(),
+});
+
 export const pacingSchema = z.object({
   sentenceGap: z.number().min(0).default(0.3),
   paragraphGap: z.number().min(0).default(0.6),
@@ -175,6 +209,8 @@ export const frontmatterSchema = z.object({
   transition: z.enum(['none', 'fade']).default('none'),
   translationOf: z.string().optional(),
   allowDrift: z.boolean().default(false),
+  /** Acting (acting plan 2.6). No default: scripts without it keep the same parsed meta. */
+  acting: actingSchema.optional(),
 });
 export type Frontmatter = z.infer<typeof frontmatterSchema>;
 
@@ -184,7 +220,19 @@ export type Inline =
   | { type: 'cue'; text: string; attrs: Record<string, string> }
   | { type: 'pause'; seconds: number }
   /** Listener reactions: cast key → face, from the word after this point. */
-  | { type: 'react'; faces: Record<string, string>; motions?: Record<string, string> };
+  | { type: 'react'; faces: Record<string, string>; motions?: Record<string, string> }
+  /** `:emo{…}`: the voice attributes from the next sentence on. */
+  | { type: 'emo'; acting: Acting; line?: number };
+
+/** How a line is spoken (acting plan 2.1): set by the speaker prefix or an inline `:emo`. */
+export interface Acting {
+  emo?: string;
+  power?: 'weak' | 'strong';
+  /** Free direction for this line (qwen only). */
+  say?: string;
+  volume?: 'soft' | 'loud';
+  speed?: number;
+}
 
 export interface Cue {
   /** Character range [start, end) of the cue phrase inside `Sentence.text`. */
@@ -201,6 +249,10 @@ export interface Sentence {
   pauseAfter?: number;
   /** `:react{cast=face}` points: character offset in `text` and the faces to show from there. */
   reacts?: { at: number; faces: Record<string, string>; motions?: Record<string, string> }[];
+  /** The voice attributes this sentence is spoken with (prefix or the last `:emo`). */
+  acting?: Acting;
+  /** An inline `:emo` starts at this sentence. */
+  actingChange?: true;
 }
 
 export interface Paragraph {
@@ -214,6 +266,8 @@ export interface Paragraph {
   motion?: string;
   only?: string[];
   audio?: string;
+  /** Voice attributes of the speaker prefix (`mina{emo=sad}:`). */
+  acting?: Acting;
   sentences: Sentence[];
 }
 

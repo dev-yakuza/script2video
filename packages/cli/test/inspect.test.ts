@@ -13,6 +13,7 @@ import {
   KNOWN_DIRECTIVES,
   outputScenes,
   parseScript,
+  SPEAKER_ATTRS,
 } from '@script2video/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { castOptions } from '../src/cast.js';
@@ -79,7 +80,10 @@ describe('inspect: closed world', () => {
       }
     };
     walk(frontmatterSchema, '');
-    const leaves = paths.filter((p) => p !== 'cast.*.faceMotions.*' && p !== 'cast.*.faceMotions');
+    // internal keys the CLI fills from character files (scripts writing them get a parser error)
+    const leaves = paths.filter(
+      (p) => !p.startsWith('cast.*.faceMotions') && !p.startsWith('cast.*.faceSets'),
+    );
     for (const p of leaves) expect(FRONTMATTER, p).toHaveProperty([p]);
     expect(castMemberSchema).toBeTruthy();
   });
@@ -96,11 +100,12 @@ describe('inspect: closed world', () => {
       }
     };
     for (const pkg of ['core', 'renderer-remotion']) scan(join(ROOT, 'packages', pkg, 'src'));
-    const table = new Set(
-      Object.values(DIRECTIVES).flatMap((d) =>
+    const table = new Set([
+      ...Object.values(DIRECTIVES).flatMap((d) =>
         typeof d.attrs === 'string' ? [] : Object.keys(d.attrs),
       ),
-    );
+      ...Object.keys(SPEAKER_ATTRS),
+    ]);
     expect([...read].filter((a) => !table.has(a))).toEqual([]);
   });
 
@@ -120,7 +125,11 @@ describe('inspect: closed world', () => {
       `${FM()}# s\n\na{face=happy bounce}: 안녕.\n`,
       /is not key=value/,
     ],
-    ['a gap that is not a number', `${FM()}# s\n\na{gap=abc}: 안녕.\n`, /gap=abc is not a number/],
+    [
+      'a gap that is not a number',
+      `${FM()}# s\n\na{gap=abc}: 안녕.\n`,
+      /gap must be a number from -1\.5 to 3: "abc"/,
+    ],
     ['an unknown top-level key', `${FM('colour: red\n')}# s\n\na: 안녕.\n`, /"colour"/],
     [
       'an unknown cast key',
@@ -531,5 +540,56 @@ describe('inspect: committed samples', () => {
     if ('errors' in r) throw new Error(r.errors.map((e) => e.message).join('\n'));
     const { engine: _e, ...hashes } = r.result.hashes;
     expect(hashes).toEqual(GOLDEN[rel]);
+  });
+});
+
+describe('inspect: acting (stage 2)', () => {
+  const S = (line: string, extra = '') => `${FM(extra)}# s\n\n${line}\n`;
+
+  it('reads say markup as text and knows :emo', () => {
+    expect(
+      errorsOf(S('a{emo=calm say="a :pause[1] *b*"}: 안녕. :emo{emo=sad speed=0.9}그래.')),
+    ).toBe('');
+    expect(errorsOf(S('a: 안녕. :emo{emo=sad speed=fast}그래.'))).toMatch(/speed/);
+    expect(
+      errorsOf(
+        S('a{emo=sad}: 안녕.', 'acting:\n  emotions:\n    sleepy: { voice: "x", tone: 1 }\n'),
+      ),
+    ).toMatch(/acting\.emotions\.sleepy\.tone/);
+    expect(
+      errorsOf(
+        S('a{emo=sleepy}: 안녕.', 'acting:\n  emotions:\n    sleepy: { voice: "x", face: calm }\n'),
+      ),
+    ).toBe('');
+  });
+
+  it('accepts a negative gap', () => {
+    expect(errorsOf(S('a{gap=-0.2}: 안녕.'))).toBe('');
+  });
+
+  it('changes the voice hash with the emotion, not with the face', () => {
+    const base = ok(S('a: 안녕하세요.')).hashes;
+    const emo = ok(S('a{emo=sad}: 안녕하세요.')).hashes;
+    const face = ok(S('a{face=happy}: 안녕하세요.')).hashes;
+    const loud = ok(S('a{volume=loud}: 안녕하세요.')).hashes;
+    expect(emo.voice).not.toBe(base.voice);
+    expect(face.voice).toBe(base.voice);
+    expect(loud.voice).not.toBe(base.voice);
+    expect(emo.content).toBe(base.content);
+  });
+
+  it('reports the acting tables as an engine part', () => {
+    const r = ok(S('a: 안녕.'));
+    expect(r.engine).toHaveProperty('templates');
+    expect(r.hashes.engine).toHaveProperty('templates');
+  });
+});
+
+describe('inspect: speakers inside a paragraph', () => {
+  it('reports a speaker on a later line of the same paragraph', () => {
+    expect(errorsOf(`${FM()}# s\n\na{emo=sad}: 하나\nb{emo=happy}: 둘.\n`)).toMatch(
+      /"b:" on a later line/,
+    );
+    expect(errorsOf(`${FM()}# s\n\na: 하나\nNote: 둘.\n`)).toBe('');
   });
 });

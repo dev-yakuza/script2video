@@ -24,6 +24,12 @@ describe('planSentences', () => {
     expect(plan.sentences).toEqual(manifest.sentences);
   });
 
+  it.each(SAMPLES)('parses %s without acting fields', (rel) => {
+    const r = parseScript(readFileSync(join(ROOT, rel), 'utf8'));
+    expect(r.diagnostics.items.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(JSON.stringify(r.script)).not.toMatch(/"acting"|"actingChange"/);
+  });
+
   it('reports a paragraph it cannot plan instead of throwing', () => {
     const path = join(ROOT, 'videos/x/script.ko.md');
     const { script } = parseScript(
@@ -34,5 +40,61 @@ describe('planSentences', () => {
       expect.stringMatching(/persona "nobody" not found/),
       'recording not found: missing.wav',
     ]);
+  });
+
+  const plan = (body: string, draft = false) => {
+    const path = join(ROOT, 'videos/x/script.ko.md');
+    const { script } = parseScript(
+      `---\nlang: ko\ncast:\n  a: { voice: "qwen:Sohee", style: "밝게" }\n  r: { voice: "supertonic:F1", speed: 0.7 }\n---\n# s\n${body}\n`,
+    );
+    return planSentences(path, script!, ROOT, { draft, mock: false });
+  };
+
+  it('keeps the keys of lines without acting', () => {
+    const a = plan('a: 안녕하세요.');
+    const b = plan('a{gap=0.2 face=happy}: 안녕하세요.');
+    expect(b.sentences).toEqual(a.sentences);
+    expect(a.jobs[0]!.synthFields.instruct).toBe('밝게');
+  });
+
+  it('puts the template and its version into the synthesis key of emotion lines', () => {
+    const [plain] = plan('a: 안녕하세요.').jobs;
+    const [sad] = plan('a{emo=sad}: 안녕하세요.').jobs;
+    expect(sad!.synthKey).not.toBe(plain!.synthKey);
+    expect(sad!.synthFields.instruct).toMatch(/^밝게 Sound sad: .* Say only the words/);
+    expect(sad).toMatchObject({ emotional: true, template: true, multiplier: 1.05 });
+    expect((sad!.synthFields as unknown as { templates?: number }).templates).toBe(1);
+  });
+
+  it('leaves power out of the qwen keys (no effect before take selection)', () => {
+    const [weak] = plan('a{emo=sad power=weak}: 안녕하세요.').jobs;
+    const [normal] = plan('a{emo=sad}: 안녕하세요.').jobs;
+    expect(weak!.key).toBe(normal!.key);
+  });
+
+  it('turns the line speed into tempo, or the synthesis speed for supertonic', () => {
+    const [q] = plan('a{speed=1.2}: 안녕하세요.').jobs;
+    expect(q).toMatchObject({ tempo: 1.2, speedProduct: 1.2 });
+    expect(q!.synthKey).toBe(plan('a: 안녕하세요.').jobs[0]!.synthKey);
+    const [r] = plan('r{speed=1.25}: 안녕하세요.').jobs;
+    expect(r!.synthFields.speed).toBeCloseTo(0.875);
+  });
+
+  it('speaks plainly in a draft, even with a qwen draft voice', () => {
+    const path = join(ROOT, 'videos/x/script.ko.md');
+    const { script } = parseScript(
+      '---\nlang: ko\ncast:\n  a: { voice: "qwen:Sohee", draftVoice: "qwen:Sohee" }\n---\n# s\na{emo=sad say="조용히"}: 안녕하세요.\n',
+    );
+    const [job] = planSentences(path, script!, ROOT, { draft: true, mock: false }).jobs;
+    expect(job).toMatchObject({ template: false, emotional: false });
+    expect(job!.synthFields.instruct).toBe('');
+  });
+
+  it('refuses a speed Supertonic cannot take, and clamps a draft', () => {
+    expect(plan('r{speed=0.8}: 안녕하세요.').errors[0]!.message).toMatch(/Supertonic speed 0.560/);
+    const draft = plan('r{speed=0.8}: 안녕하세요.', true);
+    expect(draft.errors).toEqual([]);
+    expect(draft.notes[0]).toMatch(/clamped/);
+    expect(draft.jobs[0]!.emotional).toBe(false);
   });
 });

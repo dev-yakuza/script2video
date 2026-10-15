@@ -194,3 +194,36 @@ describe('locked sentences against a new reference', () => {
     expect(failing[0]!.reasons).toHaveLength(2);
   });
 });
+
+describe('locked emotion lines', () => {
+  it('judges them with the emotion pitch window and similarity floor', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 's2v-lock-'));
+    writeFileSync(join(dir, 'a.wav'), 'x');
+    const none = { post: async () => ({ data: {}, headers: new Headers() }) } as unknown as Service;
+    const services = { tts: none, aligner: none, ensure: async () => {} };
+    const r = {
+      ref: { f0: 120, sigma: 0.5, simFloor: 0.97, sims: [0.98, 0.99] } as VoiceReference,
+      jsonPath: '',
+      clipPath: join(dir, 'clip.wav'),
+      sha: 'ref',
+    };
+    const lock = {
+      dir,
+      sentences: { 's:0:0': 'A' },
+      // +5 semitones and 0.96: too far for a plain line, fine for a happy one
+      entries: { A: { src: 'a.wav', f0: 120 * 2 ** (5 / 12), sim: 0.96, voiceRef: 'ref' } },
+    };
+    const lines = new Map([['s:0:0', '합격했어요!']]);
+    const plain = await lockedFailures(lines, lock, r, services, new ClipVectors(none));
+    expect(plain[0]!.reasons).toHaveLength(2);
+    const happy = await lockedFailures(
+      lines,
+      lock,
+      r,
+      services,
+      new ClipVectors(none),
+      new Map([['s:0:0', 'happy']]),
+    );
+    expect(happy).toEqual([]);
+  });
+});

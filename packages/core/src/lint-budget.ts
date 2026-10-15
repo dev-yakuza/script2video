@@ -6,6 +6,7 @@
  * through the real timeline so pacing, pauses and `only` filters count exactly as in a render.
  */
 
+import { emotionSentence, engineOf, lengthMultiplier, speedProduct } from './acting.js';
 import { normalizeForCer } from './cer.js';
 import type { Diagnostic } from './diagnostics.js';
 import type { Lang, Script } from './schema.js';
@@ -109,7 +110,7 @@ export function estimateLengths(script: Script, manifest: AudioManifest = {}, fp
   for (const scene of script.scenes)
     scene.blocks.forEach((block, bi) => {
       if (block.kind !== 'paragraph') return;
-      const speed = meta.cast[block.cast]?.speed ?? 1;
+      const member = meta.cast[block.cast];
       block.sentences.forEach((s, si) => {
         const id = sentenceId(scene.id, bi, si);
         total++;
@@ -120,7 +121,15 @@ export function estimateLengths(script: Script, manifest: AudioManifest = {}, fp
           return;
         }
         const chars = [...normalizeForCer(toTtsText(s.text, meta.pronounce).tts, meta.lang)].length;
-        filled[id] = { src: '', words: [], duration: chars / (ESTIMATE_RATE[meta.lang] * speed) };
+        // cast × line × emotion speed; an emotion line runs longer or shorter by its multiplier
+        const speed = member ? speedProduct(meta, member, s.acting) : 1;
+        const emotional = !!member && !block.audio && emotionSentence(engineOf(member), s.acting);
+        const factor = lengthMultiplier(meta, emotional, s.acting);
+        filled[id] = {
+          src: '',
+          words: [],
+          duration: (chars / (ESTIMATE_RATE[meta.lang] * speed)) * factor,
+        };
       });
     });
   return Object.keys(meta.outputs).map((output): LengthEstimate => {

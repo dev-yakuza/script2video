@@ -33,10 +33,10 @@ from pydantic import BaseModel, Field
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
-from pitch_helpers import ending_semitones  # noqa: E402
+from pitch_helpers import edges_and_noise, ending_semitones, sound_frames  # noqa: E402
 
 SERVER_ID = "script2video-aligner"
-WRAPPER_VERSION = "0.3.0"
+WRAPPER_VERSION = "0.4.0"
 LANG = {"ko": "Korean", "ja": "Japanese", "en": "English"}
 # qwen-asr's timestamp path caps alignment input at 180 s (MAX_FORCE_ALIGN_INPUT_SECONDS).
 MAX_ALIGN_SECONDS = 180
@@ -153,19 +153,23 @@ def create_app(device: str) -> FastAPI:
 
     @app.post("/pitch")
     def pitch(req: PitchRequest) -> dict:
-        """Median F0 of the voiced frames (Hz), for voice-consistency checks, and the ending: how far
-        the last fifth of the voiced frames sits from that median (semitones, acting plan 3.5)."""
+        """Median F0 of the voiced frames (Hz), for voice-consistency checks, the ending: how far
+        the last fifth of the voiced frames sits from that median (semitones, acting plan 3.5), and
+        the non-speech around and inside the take (lead_s, tail_s, noise_s; stage 2 plan 4.1)."""
         import librosa
         import numpy as np
 
         wav, sr = read_wav(req.wav_path)
         y = librosa.resample(wav, orig_sr=sr, target_sr=16000) if sr != 16000 else wav
-        f0, voiced, _ = librosa.pyin(y, fmin=65, fmax=600, sr=16000, frame_length=1024)
+        f0, voiced, _ = librosa.pyin(y, fmin=65, fmax=600, sr=16000, frame_length=1024, hop_length=256)
+        rms = librosa.feature.rms(y=y, frame_length=1024, hop_length=256)[0]
         f = f0[~np.isnan(f0)]
+        sound = sound_frames([float(x) for x in rms])
         return {
             "median_hz": float(np.median(f)) if f.size else None,
             "voiced_ratio": float(np.mean(voiced)),
             "ending_st": ending_semitones([float(x) for x in f]),
+            **edges_and_noise([bool(x) for x in voiced], sound, 256 / 16000),
         }
 
     @app.post("/transcribe")

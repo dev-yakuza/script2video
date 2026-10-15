@@ -81,6 +81,10 @@ export const DIRECTIVES: Record<
   only: { placement: 'inline', attrs: 'output' },
   audio: { placement: 'inline', attrs: { src: 'voice' } },
   shot: { placement: 'leaf', attrs: 'cast' },
+  emo: {
+    placement: 'inline',
+    attrs: { emo: 'voice', power: 'voice', say: 'voice', volume: 'voice', speed: 'voice' },
+  },
 };
 
 /** Speaker prefix attributes (`mina{face=happy}:`). */
@@ -88,6 +92,11 @@ export const SPEAKER_ATTRS: Record<string, Kind> = {
   gap: 'presentation',
   face: 'presentation',
   motion: 'presentation',
+  emo: 'voice',
+  power: 'voice',
+  say: 'voice',
+  volume: 'voice',
+  speed: 'voice',
 };
 
 /** Frontmatter keys by kind (plan 3.1b); `*` is a record key (cast name, output name, word). */
@@ -154,8 +163,13 @@ export const FRONTMATTER: Record<string, Kind> = {
   transition: 'presentation',
   translationOf: 'structure',
   allowDrift: 'structure',
+  'acting.emotions.*.voice': 'voice',
+  'acting.emotions.*.speed': 'voice',
+  'acting.emotions.*.maxPause': 'voice',
+  'acting.emotions.*.face': 'presentation',
+  'acting.emotions.*.motion': 'presentation',
 };
-const RECORDS = new Set(['cast', 'outputs', 'pronounce']);
+const RECORDS = new Set(['cast', 'outputs', 'pronounce', 'acting.emotions']);
 
 export interface InspectError {
   line?: number;
@@ -212,6 +226,15 @@ function paragraphIssues(node: RootContent, source: string, castKeys: string[]):
       line,
       message: 'a table must be inside :::table … ::: (here it would be read aloud)',
     });
+  // a speaker on a later line of the same paragraph is read by the first one, prefix and all
+  for (const [k, l] of lines.slice(1).entries()) {
+    const later = /^([A-Za-z_][\w-]*)(\{[^}]*\})?:/.exec(l)?.[1];
+    if (later && castKeys.includes(later))
+      out.push({
+        line: line + k + 1,
+        message: `"${later}:" on a later line of this paragraph is read by its first speaker; leave an empty line before it`,
+      });
+  }
   const speaker = /^([A-Za-z_][\w-]*)\{[^}]*\}:/.exec(raw);
   if (speaker && !castKeys.includes(speaker[1]!))
     out.push({
@@ -240,14 +263,7 @@ function paragraphIssues(node: RootContent, source: string, castKeys: string[]):
       line: last.position?.start.line ?? line,
       message: ':react at the end of a paragraph has no word to start from; it is dropped',
     });
-  node.children.forEach((c, i) => {
-    const next = node.children[i + 1];
-    if (c.type === 'textDirective' && next?.type === 'text' && /^\s*\{[^}]*=/.test(next.value))
-      out.push({
-        line: c.position?.start.line ?? line,
-        message: `:${c.name} has attributes that did not parse ({…} would be read aloud; check quotes and spaces)`,
-      });
-  });
+  // attributes that did not attach to their directive: the parser reports them (directive-brace)
   return out;
 }
 
@@ -340,16 +356,6 @@ function walk(
   return { directives, altLoss, issues };
 }
 
-/** `k=v` pairs of a speaker prefix, strictly: anything else inside the braces is an error. */
-function speakerPairs(raw: string): { pairs: Record<string, string>; rest: string } {
-  const pairs: Record<string, string> = {};
-  const rest = raw.replace(/([A-Za-z_][\w-]*)=("([^"]*)"|'([^']*)'|[^\s"']+)/g, (_, k, v, a, b) => {
-    pairs[k as string] = (a ?? b ?? v) as string;
-    return '';
-  });
-  return { pairs, rest: rest.trim() };
-}
-
 const own = (o: object, k: string) => Object.hasOwn(o, k);
 
 /** Frontmatter keys the table does not know (nested, with record keys as `*`). */
@@ -385,7 +391,8 @@ export function closedWorldErrors(
   const consumed = new Set(trace.consumed);
   const shorthand = new Set(trace.shorthand);
   const castKeys = Object.keys(script.meta.cast);
-  const { directives, altLoss, issues } = walk(source, castKeys);
+  // the parser's view: speaker prefixes masked, so a `say="… :pause …"` is not a directive
+  const { directives, altLoss, issues } = walk(trace.masked, castKeys);
   errors.push(...issues);
   const outputs = script.meta.outputs;
   for (const d of directives) {
@@ -432,16 +439,7 @@ export function closedWorldErrors(
       line,
       message: 'image caption contains ":name", which the parser drops; escape it as "\\:"',
     });
-  for (const { line, raw } of trace.speakerAttrs) {
-    const { pairs, rest } = speakerPairs(raw);
-    if (rest) errors.push({ line, message: `speaker {${raw}}: "${rest}" is not key=value` });
-    for (const [k, v] of Object.entries(pairs)) {
-      if (!own(SPEAKER_ATTRS, k))
-        errors.push({ line, message: `speaker {…} has no attribute "${k}"` });
-      if (k === 'gap' && !/^\d+(\.\d+)?$/.test(v))
-        errors.push({ line, message: `gap=${v} is not a number` });
-    }
-  }
+  // speaker prefix attributes are checked strictly by the parser (prefix-attrs, gap-value)
   for (const key of castKeys)
     if (key in Object.prototype) errors.push({ message: `cast name "${key}" is reserved` });
   // `constructor: …` matches `in meta.cast` in the parser without being a cast member
@@ -669,7 +667,7 @@ export function outputScenes(script: Script, output: string): Scene[] {
 }
 
 /** Numeric directive attributes: `Number` normalization (`2.0` = `2`). */
-const NUMERIC = new Set(['x', 'y', 'zoom', 'r', 'w', 'h', 'start', 'highlight']);
+const NUMERIC = new Set(['x', 'y', 'zoom', 'r', 'w', 'h', 'start', 'highlight', 'speed']);
 
 /**
  * Presentation / asset attributes of a directive with their defaults removed; asset values are

@@ -16,7 +16,7 @@ import {
   type SentenceAssessment,
 } from '../src/index.js';
 
-const REF = { f0: 120, sigma: 0.5, simFloor: 0.95 };
+const REF = { f0: 120, sigma: 0.5, simFloor: 0.95, sims: [0.95, 0.97] };
 const st = (hz: number, n: number) => hz * 2 ** (n / 12);
 
 describe('consistency against the reference voice', () => {

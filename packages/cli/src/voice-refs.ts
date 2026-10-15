@@ -18,6 +18,8 @@ import { dirname, join } from 'node:path';
 import {
   consistencyReasons,
   cosine,
+  emotionSentence,
+  engineOf,
   medoid,
   normalizeForCer,
   REF_SEEDS,
@@ -289,6 +291,21 @@ export function castSentences(script: Script, castKey: string): Map<string, stri
   return out;
 }
 
+/** Emotion lines of one cast member (id → emotion): they are judged with the emotion pitch window. */
+export function castEmotions(script: Script, castKey: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const member = script.meta.cast[castKey];
+  if (!member) return out;
+  for (const scene of script.scenes)
+    for (const [bi, block] of scene.blocks.entries()) {
+      if (block.kind !== 'paragraph' || block.audio || block.cast !== castKey) continue;
+      for (const [si, s] of block.sentences.entries())
+        if (emotionSentence(engineOf(member), s.acting))
+          out.set(sentenceId(scene.id, bi, si), s.acting!.emo!);
+    }
+  return out;
+}
+
 /** Re-judge locked sentences against a reference (no re-synthesis): the ones that now fail. */
 export async function lockedFailures(
   sentences: Map<string, string>,
@@ -300,6 +317,7 @@ export async function lockedFailures(
   r: LoadedReference,
   services: RefServices,
   vectors: ClipVectors,
+  emotions: Map<string, string> = new Map(),
 ): Promise<{ id: string; text: string; reasons: string[] }[]> {
   const out: { id: string; text: string; reasons: string[] }[] = [];
   for (const [id, text] of sentences) {
@@ -316,7 +334,8 @@ export async function lockedFailures(
       e.voiceRef === r.sha && e.sim !== undefined
         ? e.sim
         : cosine(await embed(services.tts, wav), await vectors.get(r));
-    const reasons = consistencyReasons({ text, f0, sim }, r.ref);
+    const emo = emotions.get(id);
+    const reasons = consistencyReasons({ text, f0, sim, ...(emo ? { emo } : {}) }, r.ref);
     if (reasons.length) out.push({ id, text, reasons });
   }
   return out;
@@ -420,6 +439,7 @@ export async function voiceRefs(
         r!,
         services,
         vectors,
+        castEmotions(script, castKey),
       );
       if (failing.length === 0) opts.log('  every locked sentence passes against it');
       else {

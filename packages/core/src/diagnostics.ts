@@ -1,4 +1,5 @@
-export type Severity = 'error' | 'warning';
+/** `info`: no effect on the exit code (a hint, e.g. an attribute this voice cannot act). */
+export type Severity = 'error' | 'warning' | 'info';
 
 export interface Diagnostic {
   severity: Severity;
@@ -16,6 +17,10 @@ export class Diagnostics {
 
   warn(code: string, message: string, line?: number): void {
     this.items.push({ severity: 'warning', code, message, line });
+  }
+
+  info(code: string, message: string, line?: number): void {
+    this.items.push({ severity: 'info', code, message, line });
   }
 
   get hasErrors(): boolean {
