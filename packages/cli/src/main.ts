@@ -10,6 +10,7 @@
  *   s2v voice refs <script.md> [--refresh]   (reference voices for the consistency checks)
  *   s2v tts <script.md> [--no-asr] [--recheck] [--retry <scene[:paragraph[:sentence]]> ...]
  *   s2v sentences <script.md>   (sentence ids for --retry)
+ *   s2v inspect <script.md> --json [--hash-version 1]   (what the script is made of, hashed by kind)
  *   s2v export-script <script.md>   (reading script for a recording session)
  *   s2v import-recording <script.md> <take.wav> [--write]   (one take → per-paragraph files)
  *   s2v timeline <script.md> [--output youtube] [--fps 30]
@@ -30,13 +31,14 @@
  *   s2v tts-server start
  */
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
   buildTimeline,
   formatDiagnostic,
+  HASH_VERSIONS,
   lintLength,
   bgmOf,
   logoOf,
@@ -92,6 +94,7 @@ import { runResident, say } from './say.js';
 import { snapshot } from './snapshot.js';
 import { loadAudioManifest, pruneAudio, synthesizeScript } from './tts.js';
 import { voiceRefs } from './voice-refs.js';
+import { inspectScript } from './inspect.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -112,6 +115,7 @@ function usage(): never {
       '       s2v character redo <dir> <item>... [--seed N]\n' +
       '       s2v character missing <script.md> [--apply]\n' +
       '       s2v audio prune <script.md>\n' +
+      '       s2v inspect <script.md> --json [--hash-version 1]\n' +
       '       s2v export-script <script.md>   (reading script for recording)\n' +
       '       s2v import-recording <script.md> <take.wav> [--write]\n' +
       '       s2v dev <script.md> [--output youtube] [--video] [--no-asr]\n' +
@@ -188,9 +192,8 @@ function memoryLimit(value: string | undefined): number {
   return n;
 }
 
-async function main(): Promise<void> {
-  const [command, ...rest] = process.argv.slice(2);
-  const { values, positionals } = parseArgs({
+function parseCli(rest: string[]) {
+  return parseArgs({
     args: rest,
     allowPositionals: true,
     options: {
@@ -222,8 +225,22 @@ async function main(): Promise<void> {
       seed: { type: 'string' },
       apply: { type: 'boolean', default: false },
       refresh: { type: 'boolean', default: false },
+      json: { type: 'boolean', default: false },
+      'hash-version': { type: 'string' },
     },
   });
+}
+
+async function main(): Promise<void> {
+  const [command, ...rest] = process.argv.slice(2);
+  let parsed: ReturnType<typeof parseCli>;
+  try {
+    parsed = parseCli(rest);
+  } catch (e) {
+    console.error((e as Error).message);
+    usage();
+  }
+  const { values, positionals } = parsed;
   const file = positionals[0];
   if (command === 'tts-server' && file === 'start') {
     await runResident(REPO_ROOT, (m) => console.error(m));
@@ -274,6 +291,37 @@ async function main(): Promise<void> {
     console.error(
       `wrote ${files.length} paragraph files under rec/${values.write ? ' and added :audio to the script' : '; add :audio{src=...} (or run again with --write)'}`,
     );
+    return;
+  }
+  if (command === 'inspect') {
+    const [scriptFile] = positionals;
+    const hashVersion = Number(values['hash-version'] ?? 1);
+    if (!scriptFile || !values.json || positionals.length !== 1) usage();
+    if (!(HASH_VERSIONS as readonly number[]).includes(hashVersion)) {
+      console.error(
+        `--hash-version ${values['hash-version']}: supported: ${HASH_VERSIONS.join(', ')}`,
+      );
+      process.exit(2);
+    }
+    // only --json and --hash-version: any other flag (even at its default value) is a mistake
+    const flags = process.argv
+      .slice(3)
+      .filter((a) => a.startsWith('--'))
+      .map((a) => a.slice(2).split('=')[0]!);
+    if (flags.some((f) => f !== 'json' && f !== 'hash-version')) usage();
+    if (values['hash-version'] !== undefined && !/^\d+$/.test(values['hash-version'])) usage();
+    const scriptPath = resolve(scriptFile);
+    if (!existsSync(scriptPath) || !statSync(scriptPath).isFile()) {
+      console.error(`${scriptFile}: no such file`);
+      process.exit(2);
+    }
+    const r = inspectScript(scriptPath, REPO_ROOT, hashVersion, scriptFile);
+    if ('errors' in r) {
+      for (const e of r.errors)
+        console.error(`${scriptPath}${e.line ? `:${e.line}` : ''} error ${e.message}`);
+      process.exit(1);
+    }
+    process.stdout.write(`${JSON.stringify(r.result, null, 2)}\n`);
     return;
   }
   if (command === 'audio') {

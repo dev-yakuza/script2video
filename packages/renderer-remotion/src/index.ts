@@ -51,6 +51,7 @@ export {
   type LayeredSpec,
 } from './character/spec.js';
 export { FaceError, isSingle, resolveFace, setOf } from './character/resolve.js';
+export { COMPOSER_VERSION } from './character/compose.js';
 export {
   assignSides,
   dialogueShape,
@@ -179,7 +180,7 @@ const CONCAT_ARGS = [
 ];
 
 /** Hash of the composition source: any change to the visual code invalidates cached chunks. */
-function rendererSourceHash(): string {
+export function rendererSourceHash(): string {
   const dir = join(PACKAGE_ROOT, 'src', 'remotion');
   const h = createHash('sha256');
   for (const f of readdirSync(dir).sort()) h.update(f).update(readFileSync(join(dir, f)));

@@ -68,6 +68,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `voice check <voices/id.yaml>`                                                         | ペルソナの参照音声を判定（雑音・間・語尾の途切れ・音の高さ） |
 | `voice refs <script> [--refresh]`                                                      | 文を比べる基準音声                                           |
 | `audio prune <script>`                                                                 | 台本で使わなくなった音声を削除                               |
+| `inspect <script> --json`                                                              | 台本の構成と、変更の種類ごとのハッシュ（ツール向け）         |
 | `export-script <script>`                                                               | ナレーションを自分で録音するための読み原稿を作る             |
 | `import-recording <script> <take.wav> [--write]`                                       | 通しで録音したファイルを段落ごとに分ける（`:audio`）         |
 | `tts-server start`                                                                     | コマンドの間も TTS サーバーを起動したままにする              |
@@ -75,6 +76,12 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 
 `node packages/cli/dist/main.js <command> …` の形で実行します。`S2V_TTS=mock` を付けると、モデルなしで
 合成した仮の音声で全体を動かせるので、レイアウト作業や CI に便利です。
+
+`inspect --json` は動画を検収するツール向けです。出力、シーン、画面の文字、声、ファイルの一覧と、変更の
+種類ごとのハッシュ（`content`、`voice`、`audio`、出力ごとの `presentation`、`engine` の構成要素）を出すので、
+変わった部分だけを検収し直せます。形式にないもの（綴りを誤った属性、文字として表示される位置の指示）が
+ある台本は拒否します。計算できないハッシュは理由付きで `null` です。`engine` は構成要素ごとに比べてください。
+`defaults_*` に新しいキーが増えたのは s2v に新しい項目が加わったためで、台本のハッシュには影響しません。
 
 ## 台本の書き方
 

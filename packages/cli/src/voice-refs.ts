@@ -8,7 +8,8 @@
  * Each is measured once from 4 fixed sentences × 5 seeds and committed, so every machine checks
  * sentences against the same numbers (MPS output is not bit-identical across runs). Qwen and
  * Supertonic references are looked up like personas (up to the repository root) and created in
- * the outermost folder, so a series of videos shares one.
+ * the outermost voices/ folder that exists (else the repository root's), so a series of videos
+ * shares one.
  */
 
 import { createHash } from 'node:crypto';
@@ -87,9 +88,11 @@ export function referenceLocation(
   for (const d of dirs)
     if (existsSync(join(d, rel.json)))
       return { jsonPath: join(d, rel.json), clipPath: join(d, rel.clip), exists: true };
-  // Created in the repository root's voices/, or next to the script outside a repository.
+  // Created in the outermost voices/ folder that already exists (so a repository keeps one); with
+  // none, in the repository root's voices/, or next to the script outside a repository.
   const inRepo = existsSync(join(dirname(dirs[dirs.length - 1]!), '.git'));
-  const outer = inRepo ? dirs[dirs.length - 1]! : dirs[0]!;
+  const existing = dirs.filter((d) => existsSync(d));
+  const outer = existing[existing.length - 1] ?? (inRepo ? dirs[dirs.length - 1]! : dirs[0]!);
   return { jsonPath: join(outer, rel.json), clipPath: join(outer, rel.clip), exists: false };
 }
 

@@ -57,11 +57,14 @@ import {
 } from './voice-refs.js';
 
 const run = promisify(execFile);
-const POSTPROCESS_VERSION = 'pp3-48k-mono-trim50db-pausecap-edgecut';
+export const POSTPROCESS_VERSION = 'pp3-48k-mono-trim50db-pausecap-edgecut';
 /** Bump when the aligner input or mapping changes: word timings are re-measured (raw audio reused). */
-const ALIGN_VERSION = 'al2-ko-numbers-spelled';
+export const ALIGN_VERSION = 'al2-ko-numbers-spelled';
 /** How recordings are cut into sentences (recording.ts). */
-const RECORDING_VERSION = 'rec1-midgap';
+export const RECORDING_VERSION = 'rec1-midgap';
+/** Synthesis wrapper version and decoding: part of every synthesis key. */
+export const TTS_WRAPPER = '0.1.0';
+export const TTS_DECODING = 'sampling-default';
 
 const sha256File = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
 
@@ -192,7 +195,7 @@ export interface TtsOptions {
   log: (msg: string) => void;
 }
 
-interface SentenceJob {
+export interface SentenceJob {
   id: string;
   text: string;
   member: CastMember;
@@ -225,6 +228,140 @@ interface PitchResult {
   ending_st: number | null;
 }
 
+export interface RecordedParagraph {
+  src: string;
+  sha: string;
+  items: { id: string; key: string; text: string; alignText: string }[];
+}
+
+export interface SentencePlan {
+  jobs: SentenceJob[];
+  recorded: RecordedParagraph[];
+  /** sentence id (scene:block:sentence) → lock key, for every sentence that could be planned */
+  sentences: Record<string, string>;
+  /** Paragraphs that cannot be planned (missing recording, unresolvable persona), in script order. */
+  errors: { id: string; message: string }[];
+}
+
+const DRAFT_VOICES = ['F1', 'M1', 'F2', 'M2', 'F3', 'M3', 'F4', 'M4', 'F5', 'M5'];
+
+/**
+ * The lock key of every sentence, without synthesizing: what `tts` would make, and what `inspect`
+ * hashes (they must agree, so both use this).
+ */
+export function planSentences(
+  scriptPath: string,
+  script: Script,
+  repoRoot: string,
+  opts: { draft: boolean; mock: boolean },
+): SentencePlan {
+  const { meta } = script;
+  const { mock } = opts;
+  const castOrder = Object.keys(meta.cast);
+  const memberFor = (castKey: string): CastMember => {
+    const member = meta.cast[castKey]!;
+    if (!opts.draft) return member;
+    const voice =
+      member.draftVoice ??
+      `supertonic:${DRAFT_VOICES[castOrder.indexOf(castKey) % DRAFT_VOICES.length]}`;
+    return { ...member, voice, style: undefined };
+  };
+  const models = (
+    JSON.parse(readFileSync(join(repoRoot, 'models.lock.json'), 'utf8')) as {
+      models: Record<string, { revision: string }>;
+    }
+  ).models;
+  const plan: SentencePlan = { jobs: [], recorded: [], sentences: {}, errors: [] };
+  for (const scene of script.scenes) {
+    for (const [bi, block] of scene.blocks.entries()) {
+      if (block.kind !== 'paragraph') continue;
+      if (block.audio) {
+        // Your own recording instead of TTS (see recording.ts).
+        const src = resolve(dirname(scriptPath), block.audio);
+        if (!existsSync(src)) {
+          plan.errors.push({
+            id: sentenceId(scene.id, bi, 0),
+            message: `recording not found: ${block.audio}`,
+          });
+          continue;
+        }
+        const sha = sha256File(src);
+        const items = block.sentences.map((sentence, si) => {
+          const alignText = toAlignText(sentence.text, meta.pronounce, meta.lang).tts;
+          const id = sentenceId(scene.id, bi, si);
+          const key = hashKey({
+            recording: sha,
+            index: si,
+            alignText,
+            version: RECORDING_VERSION,
+            align: ALIGN_VERSION,
+          });
+          plan.sentences[id] = key;
+          return { id, key, text: sentence.text, alignText };
+        });
+        plan.recorded.push({ src, sha, items });
+        continue;
+      }
+      const member = memberFor(block.cast);
+      // Mock runs need no persona reference clips (CI has none).
+      let target: VoiceTarget;
+      try {
+        target =
+          mock && member.voice.startsWith('persona:')
+            ? { engine: 'persona', voice: member.voice.slice(8), modelName: 'qwen3-tts-1.7b-base' }
+            : voiceTarget(member, meta.lang, dirname(scriptPath));
+      } catch (e) {
+        plan.errors.push({ id: sentenceId(scene.id, bi, 0), message: (e as Error).message });
+        continue;
+      }
+      for (const [si, sentence] of block.sentences.entries()) {
+        const ttsText = toTtsText(sentence.text, meta.pronounce).tts;
+        // Two-level key: the raw TTS output depends only on synthesis inputs; post-processing
+        // (tempo, trim, pause compression, alignment) can change without re-running the model.
+        const synthFields = {
+          ...(mock ? { mock: 1 } : {}),
+          engine: target.engine,
+          model: models[target.modelName]!.revision,
+          wrapper: TTS_WRAPPER,
+          voice: target.voice,
+          // persona: the exact reference clip and its sentence define the voice
+          ...(target.ref ? { ref: target.ref.sha256, refText: target.ref.text } : {}),
+          instruct: target.engine === 'qwen' ? (member.style ?? '') : '',
+          lang: meta.lang,
+          speed: target.engine === 'supertonic' ? member.speed : 1,
+          seed: meta.seed,
+          decoding: TTS_DECODING,
+          text: ttsText,
+        };
+        const synthKey = hashKey(synthFields);
+        const tempo = target.engine !== 'supertonic' && member.speed !== 1 ? member.speed : null;
+        const key = hashKey({
+          synthKey,
+          postprocess: POSTPROCESS_VERSION,
+          align: ALIGN_VERSION,
+          tempo,
+          maxPause: meta.pacing.maxPause,
+        });
+        const id = sentenceId(scene.id, bi, si);
+        plan.sentences[id] = key;
+        plan.jobs.push({
+          id,
+          text: sentence.text,
+          member,
+          target,
+          ttsText,
+          alignText: toAlignText(sentence.text, meta.pronounce, meta.lang).tts,
+          synthKey,
+          synthFields,
+          key,
+          tempo,
+        });
+      }
+    }
+  }
+  return plan;
+}
+
 export async function synthesizeScript(
   scriptPath: string,
   script: Script,
@@ -234,16 +371,6 @@ export async function synthesizeScript(
   const { meta } = script;
   const lockDir = opts.lockDir ?? join(dirname(scriptPath), 'audio', meta.lang);
   if (opts.draft) opts = { ...opts, asr: false };
-  const draftVoices = ['F1', 'M1', 'F2', 'M2', 'F3', 'M3', 'F4', 'M4', 'F5', 'M5'];
-  const castOrder = Object.keys(meta.cast);
-  const memberFor = (castKey: string): CastMember => {
-    const member = meta.cast[castKey]!;
-    if (!opts.draft) return member;
-    const voice =
-      member.draftVoice ??
-      `supertonic:${draftVoices[castOrder.indexOf(castKey) % draftVoices.length]}`;
-    return { ...member, voice, style: undefined };
-  };
   mkdirSync(lockDir, { recursive: true });
   const manifestPath = join(lockDir, 'manifest.json');
   const previous: LockManifest | null = existsSync(manifestPath)
@@ -360,87 +487,10 @@ export async function synthesizeScript(
   };
 
   // ---------- jobs ----------
-  const jobs: SentenceJob[] = [];
-  const recorded: {
-    src: string;
-    sha: string;
-    items: { id: string; key: string; text: string; alignText: string }[];
-  }[] = [];
-  for (const scene of script.scenes) {
-    for (const [bi, block] of scene.blocks.entries()) {
-      if (block.kind !== 'paragraph') continue;
-      if (block.audio) {
-        // Your own recording instead of TTS (see recording.ts).
-        const src = resolve(dirname(scriptPath), block.audio);
-        if (!existsSync(src)) throw new Error(`recording not found: ${block.audio}`);
-        const sha = sha256File(src);
-        const items = block.sentences.map((sentence, si) => {
-          const alignText = toAlignText(sentence.text, meta.pronounce, meta.lang).tts;
-          const id = sentenceId(scene.id, bi, si);
-          const key = hashKey({
-            recording: sha,
-            index: si,
-            alignText,
-            version: RECORDING_VERSION,
-            align: ALIGN_VERSION,
-          });
-          manifest.sentences[id] = key;
-          return { id, key, text: sentence.text, alignText };
-        });
-        recorded.push({ src, sha, items });
-        continue;
-      }
-      const member = memberFor(block.cast);
-      // Mock runs need no persona reference clips (CI has none).
-      const target: VoiceTarget =
-        mock && member.voice.startsWith('persona:')
-          ? { engine: 'persona', voice: member.voice.slice(8), modelName: 'qwen3-tts-1.7b-base' }
-          : voiceTarget(member, meta.lang, dirname(scriptPath));
-      for (const [si, sentence] of block.sentences.entries()) {
-        const ttsText = toTtsText(sentence.text, meta.pronounce).tts;
-        // Two-level key: the raw TTS output depends only on synthesis inputs; post-processing
-        // (tempo, trim, pause compression, alignment) can change without re-running the model.
-        const synthFields = {
-          ...(mock ? { mock: 1 } : {}),
-          engine: target.engine,
-          model: models[target.modelName]!.revision,
-          wrapper: '0.1.0',
-          voice: target.voice,
-          // persona: the exact reference clip and its sentence define the voice
-          ...(target.ref ? { ref: target.ref.sha256, refText: target.ref.text } : {}),
-          instruct: target.engine === 'qwen' ? (member.style ?? '') : '',
-          lang: meta.lang,
-          speed: target.engine === 'supertonic' ? member.speed : 1,
-          seed: meta.seed,
-          decoding: 'sampling-default',
-          text: ttsText,
-        };
-        const synthKey = hashKey(synthFields);
-        const tempo = target.engine !== 'supertonic' && member.speed !== 1 ? member.speed : null;
-        const key = hashKey({
-          synthKey,
-          postprocess: POSTPROCESS_VERSION,
-          align: ALIGN_VERSION,
-          tempo,
-          maxPause: meta.pacing.maxPause,
-        });
-        const id = sentenceId(scene.id, bi, si);
-        manifest.sentences[id] = key;
-        jobs.push({
-          id,
-          text: sentence.text,
-          member,
-          target,
-          ttsText,
-          alignText: toAlignText(sentence.text, meta.pronounce, meta.lang).tts,
-          synthKey,
-          synthFields,
-          key,
-          tempo,
-        });
-      }
-    }
-  }
+  const plan = planSentences(scriptPath, script, repoRoot, { draft: opts.draft === true, mock });
+  if (plan.errors.length > 0) throw new Error(plan.errors[0]!.message);
+  const { jobs, recorded } = plan;
+  Object.assign(manifest.sentences, plan.sentences);
 
   // ---------- one attempt: synthesize → post-process → align → ASR → assess ----------
   const runAttempt = async (job: SentenceJob, attempt: number): Promise<Attempt> => {

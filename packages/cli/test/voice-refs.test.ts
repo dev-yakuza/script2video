@@ -53,6 +53,15 @@ describe('reference voices', () => {
     expect(loc.jsonPath).toBe(
       join(root, 'voices', '_qwen', 'Sohee', `ko-${styleHash('차분하게')}.json`),
     );
+    // the outermost voices/ folder that exists wins over the repository root
+    mkdirSync(join(root, 'videos', 'voices'));
+    expect(
+      referenceLocation(SOHEE, video).jsonPath.startsWith(join(root, 'videos', 'voices')),
+    ).toBe(true);
+    mkdirSync(join(video, 'voices'));
+    expect(
+      referenceLocation(SOHEE, video).jsonPath.startsWith(join(root, 'videos', 'voices')),
+    ).toBe(true);
     // an existing one is found anywhere up to the root
     writeRef(join(root, 'videos', 'voices'));
     expect(referenceLocation(SOHEE, video)).toMatchObject({ exists: true });

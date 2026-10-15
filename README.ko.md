@@ -68,6 +68,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `voice check <voices/id.yaml>`                                                         | 페르소나 참조 음성 판정(잡음·쉼·끝 잘림·음높이) |
 | `voice refs <script> [--refresh]`                                                      | 문장을 비교할 기준 음성                         |
 | `audio prune <script>`                                                                 | 대본에서 더 이상 쓰지 않는 음성 삭제            |
+| `inspect <script> --json`                                                              | 대본의 구성과 변경 종류별 해시(도구용)          |
 | `export-script <script>`                                                               | 내레이션을 직접 녹음할 때 읽을 대본 만들기      |
 | `import-recording <script> <take.wav> [--write]`                                       | 한 번에 녹음한 파일을 문단별로 나누기(`:audio`) |
 | `tts-server start`                                                                     | 명령어 사이에 TTS 서버를 계속 띄워 두기         |
@@ -75,6 +76,12 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 
 `node packages/cli/dist/main.js <command> …` 형태로 실행합니다. `S2V_TTS=mock`을 붙이면 모델 없이
 합성 음성으로 전체를 돌려 볼 수 있어 레이아웃 작업과 CI에 편리합니다.
+
+`inspect --json`은 영상을 검수하는 도구용입니다. 출력, 장면, 화면 글자, 목소리, 파일 목록과 함께 변경
+종류별 해시(`content`, `voice`, `audio`, 출력마다 `presentation`, `engine`의 구성 요소)를 내므로, 바뀐
+부분만 다시 검수할 수 있습니다. 형식에 없는 것(철자가 틀린 속성, 글자로 보일 자리의 지시문)이 있는
+대본은 거부합니다. 계산할 수 없는 해시는 이유와 함께 `null`입니다. `engine`은 구성 요소별로 비교하세요.
+`defaults_*`에 새 키가 생긴 것은 s2v에 새 필드가 생긴 것으로, 대본 해시에는 영향이 없습니다.
 
 ## 대본 쓰기
 

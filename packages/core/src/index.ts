@@ -6,7 +6,25 @@ export {
   KNOWN_DIRECTIVES,
   IMPLEMENTED_DIRECTIVES,
   type ParseResult,
+  type ParseTrace,
 } from './parse.js';
+export {
+  canonical,
+  castsIn,
+  closedWorldErrors,
+  contentOf,
+  DIRECTIVES,
+  FRONTMATTER,
+  HASH_VERSIONS,
+  outputScenes,
+  presentationAttrs,
+  schemaDefaults,
+  SPEAKER_ATTRS,
+  withoutDefaults,
+  type InspectError,
+  type Kind,
+  type ScreenText,
+} from './inspect.js';
 export {
   toTtsText,
   toAlignText,

@@ -79,7 +79,25 @@ const HEADING_ID = /\s*\{#([A-Za-z0-9_-]+)\}\s*$/;
 export interface ParseResult {
   script: Script | null;
   diagnostics: Diagnostics;
+  /** What the parser read from the source, for `inspect`'s closed-world checks. */
+  trace?: ParseTrace;
 }
+
+/** Source positions (start offsets) the parser used; anything else it turned into text or dropped. */
+export interface ParseTrace {
+  /** The frontmatter as YAML parsed it, before the schema dropped unknown keys. */
+  frontmatterRaw: unknown;
+  /** Directive nodes the parser read as directives. */
+  consumed: number[];
+  /** `alex:Today`: a text directive glued back into the speaker's text. */
+  shorthand: number[];
+  /** Raw `{…}` of speaker prefixes (`mina{face=happy}:`). */
+  speakerAttrs: { line: number; raw: string }[];
+}
+
+type Track = Omit<ParseTrace, 'frontmatterRaw'>;
+const offsetOf = (node: { position?: { start: { offset?: number } } }) =>
+  node.position?.start.offset ?? -1;
 
 function lineOf(node: { position?: { start: { line: number } } }): number | undefined {
   return node.position?.start.line;
@@ -169,6 +187,7 @@ function paragraphFrom(
   meta: Frontmatter,
   defaultCast: string,
   diags: Diagnostics,
+  track: Track,
 ): Paragraph | null {
   const line = lineOf(node);
   const children = [...node.children];
@@ -187,12 +206,14 @@ function paragraphFrom(
     first.value.trim() in meta.cast
   ) {
     const d = second as TextDirective;
+    track.shorthand.push(offsetOf(d));
     cast = first.value.trim();
     children.splice(0, 2, { type: 'text', value: d.name + plainText(d.children) });
   } else if (first?.type === 'text') {
     const m = SPEAKER_PREFIX.exec(first.value);
     if (m && m[1]! in meta.cast) {
       cast = m[1]!;
+      if (m[2]) track.speakerAttrs.push({ line: line ?? 0, raw: m[3] ?? '' });
       if (m[3]) {
         const a = parseInlineAttrs(m[3]);
         if (a.gap !== undefined) gap = Number(a.gap);
@@ -220,6 +241,7 @@ function paragraphFrom(
     if (child.type === 'textDirective') {
       const d = child as TextDirective;
       const dLine = lineOf(d) ?? line;
+      track.consumed.push(offsetOf(d));
       if (!checkDirectiveName(d.name, dLine, diags)) continue;
       const attrs = attrsOf(d);
       if (d.name === 'cue') {
@@ -616,6 +638,7 @@ export function parseScript(source: string): ParseResult {
   }
   const castKeys = Object.keys(meta.cast);
   const defaultCast = castKeys[0]!;
+  const track: Track = { consumed: [], shorthand: [], speakerAttrs: [] };
 
   const scenes: Scene[] = [];
   const sceneIds = new Set<string>();
@@ -659,6 +682,7 @@ export function parseScript(source: string): ParseResult {
       }
       case 'leafDirective':
       case 'containerDirective': {
+        track.consumed.push(offsetOf(node));
         if (node.name === 'shot') {
           shotFrom(node, ensureScene(line), meta, diags);
           break;
@@ -668,7 +692,7 @@ export function parseScript(source: string): ParseResult {
         break;
       }
       case 'paragraph': {
-        const p = paragraphFrom(node, meta, defaultCast, diags);
+        const p = paragraphFrom(node, meta, defaultCast, diags, track);
         if (p) ensureScene(line).blocks.push(p);
         break;
       }
@@ -710,5 +734,9 @@ export function parseScript(source: string): ParseResult {
     diags.error('no-narration', 'script has no narration paragraphs');
   }
 
-  return { script: { meta, scenes }, diagnostics: diags };
+  return {
+    script: { meta, scenes },
+    diagnostics: diags,
+    trace: { frontmatterRaw: rawMeta, ...track },
+  };
 }

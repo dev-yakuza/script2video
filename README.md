@@ -69,6 +69,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `voice check <voices/id.yaml>`                                                         | judge a persona's reference clip (noise, pauses, cut ending, pitch)   |
 | `voice refs <script> [--refresh]`                                                      | reference voices the sentences are checked against                    |
 | `audio prune <script>`                                                                 | remove audio the script no longer uses                                |
+| `inspect <script> --json`                                                              | what a script is made of, with one hash per kind of change (tooling)  |
 | `export-script <script>`                                                               | a reading script for recording the narration yourself                 |
 | `import-recording <script> <take.wav> [--write]`                                       | split one recorded take into paragraphs (`:audio`)                    |
 | `tts-server start`                                                                     | keep the TTS server running between commands                          |
@@ -76,6 +77,14 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 
 Run them as `node packages/cli/dist/main.js <command> …`. `S2V_TTS=mock` runs everything with
 synthetic audio (no models), useful for layout work and CI.
+
+`inspect --json` is for tools that review videos: it lists outputs, scenes, screen text, voices
+and files, and gives one hash per kind of change (`content`, `voice`, `audio`, one
+`presentation` per output, and the `engine` parts), so a reviewer re-checks only what changed. It
+refuses scripts with anything the format does not know (a misspelled attribute, a directive
+where it would be shown as text). A hash it cannot compute is `null` with a reason. Compare
+`engine` part by part; a new key in `defaults_*` comes from a new s2v field and changes no
+script hash.
 
 ## Writing scripts
 

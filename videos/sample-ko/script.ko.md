@@ -21,7 +21,7 @@ mina: 정말 대본만 쓰면 되나요?
 
 # 설정 화면 {#settings}
 
-::image{src=assets/settings.png bg=blur}
+::image{src=assets/settings.png}
 
 오른쪽 위의 :cue[설정 버튼]{x=0.957 y=0.025 zoom=3 mark=circle}을 누르면 :pause[0.4]
 새 :cue[프로젝트]{x=0.258 y=0.285 zoom=2 mark=box}를 만들 수 있습니다.
