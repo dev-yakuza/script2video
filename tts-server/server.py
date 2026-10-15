@@ -9,6 +9,7 @@ Endpoints (loopback only):
   GET  /health      identity, versions, lock hash, loaded models
   POST /synthesize  -> audio/wav body; metadata in X-S2V-* headers
   POST /design      VoiceDesign: description -> reference clip for a persona (audio/wav body)
+  POST /embed       speaker x-vector of a wav (1.7B Base speaker encoder), for voice consistency
 
 Run:  uv run --frozen --offline python server.py [--port 47861] [--host 127.0.0.1]
 """
@@ -39,7 +40,7 @@ from fetch_models import load_lock, snapshot_path  # noqa: E402
 from helpers import qwen_token_cap, sentence_seed  # noqa: E402
 
 SERVER_ID = "script2video-tts"
-WRAPPER_VERSION = "0.2.0"
+WRAPPER_VERSION = "0.3.0"
 QWEN_LANG = {"ko": "Korean", "ja": "Japanese", "en": "English"}
 QWEN_MODELS = {"1.7b": "qwen3-tts-1.7b-customvoice", "0.6b": "qwen3-tts-0.6b-customvoice"}
 BASE_MODEL = "qwen3-tts-1.7b-base"
@@ -75,6 +76,10 @@ class DesignRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500, description="reference sentence the new voice says")
     instruct: str = Field(min_length=1, max_length=1000, description="voice description")
     seed_material: str
+
+
+class EmbedRequest(BaseModel):
+    wav_path: str
 
 
 @dataclass
@@ -155,6 +160,21 @@ class Engines:
             )
             self._sync()
             return Synthesized(np.asarray(wavs[0], dtype=np.float32), sr, DESIGN_MODEL, seed)
+
+    def embed(self, req: EmbedRequest) -> list[float]:
+        """Speaker x-vector of a clip: the Base model's speaker encoder, as used for cloning."""
+        p = Path(req.wav_path)
+        if not p.is_file():
+            raise HTTPException(404, f"wav not found: {req.wav_path}")
+        wav, sr = sf.read(p, dtype="float32")
+        if wav.ndim > 1:
+            wav = wav.mean(axis=1)
+        with self._lock:
+            prompt = self._extra_model(BASE_MODEL).create_voice_clone_prompt(
+                ref_audio=(wav, sr), x_vector_only_mode=True
+            )
+            self._sync()
+            return [float(x) for x in prompt[0].ref_spk_embedding.float().flatten().cpu()]
 
     def _supertonic_tts(self):
         if self._supertonic is None:
@@ -255,6 +275,10 @@ def create_app(device: str) -> FastAPI:
     def design(req: DesignRequest) -> Response:
         start = time.perf_counter()
         return wav_response(engines.design(req), start)
+
+    @app.post("/embed")
+    def embed(req: EmbedRequest) -> dict:
+        return {"model": BASE_MODEL, "vector": engines.embed(req)}
 
     return app
 

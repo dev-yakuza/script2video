@@ -6,7 +6,7 @@ Endpoints (loopback only):
   GET  /health      identity, versions, lock hash, loaded models
   POST /align       {wav_path, text, lang} -> {words: [{text, start, end}]}   (80 ms grid)
   POST /transcribe  {wav_path, lang}       -> {text}
-  POST /pitch       {wav_path}             -> {median_hz, voiced_ratio}
+  POST /pitch       {wav_path}             -> {median_hz, voiced_ratio, ending_st}
 
 Audio is passed by local path: the Node orchestrator and this server share the filesystem, and
 sentence wavs already live in the audio lock / cache.
@@ -32,8 +32,11 @@ from pydantic import BaseModel, Field
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
+sys.path.insert(0, str(HERE))
+from pitch_helpers import ending_semitones  # noqa: E402
+
 SERVER_ID = "script2video-aligner"
-WRAPPER_VERSION = "0.2.0"
+WRAPPER_VERSION = "0.3.0"
 LANG = {"ko": "Korean", "ja": "Japanese", "en": "English"}
 # qwen-asr's timestamp path caps alignment input at 180 s (MAX_FORCE_ALIGN_INPUT_SECONDS).
 MAX_ALIGN_SECONDS = 180
@@ -150,7 +153,8 @@ def create_app(device: str) -> FastAPI:
 
     @app.post("/pitch")
     def pitch(req: PitchRequest) -> dict:
-        """Median F0 of the voiced frames (Hz), for voice-consistency checks across sentences."""
+        """Median F0 of the voiced frames (Hz), for voice-consistency checks, and the ending: how far
+        the last fifth of the voiced frames sits from that median (semitones, acting plan 3.5)."""
         import librosa
         import numpy as np
 
@@ -158,7 +162,11 @@ def create_app(device: str) -> FastAPI:
         y = librosa.resample(wav, orig_sr=sr, target_sr=16000) if sr != 16000 else wav
         f0, voiced, _ = librosa.pyin(y, fmin=65, fmax=600, sr=16000, frame_length=1024)
         f = f0[~np.isnan(f0)]
-        return {"median_hz": float(np.median(f)) if f.size else None, "voiced_ratio": float(np.mean(voiced))}
+        return {
+            "median_hz": float(np.median(f)) if f.size else None,
+            "voiced_ratio": float(np.mean(voiced)),
+            "ending_st": ending_semitones([float(x) for x in f]),
+        }
 
     @app.post("/transcribe")
     def transcribe(req: TranscribeRequest) -> dict:

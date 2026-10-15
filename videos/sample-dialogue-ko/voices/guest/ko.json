@@ -3,11 +3,13 @@
   "lang": "ko",
   "description": "30대 남성, 차분하고 약간 낮은 목소리, 또렷한 발음, 친근하고 호기심 많은 말투",
   "text": "안녕하세요. 오늘도 함께 이야기를 나눠 볼게요. 천천히, 또박또박 말씀드리겠습니다.",
-  "seed": 2680214133055462400,
+  "seed": 579919595184545200,
   "model": "qwen3-tts-1.7b-voicedesign",
   "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
-  "sha256": "6ac0825669557c7e1dd158a2e8bb4866d90f165a830394302c8906621002d0b4",
-  "candidate": 2,
-  "created": "2026-10-10T09:05:58.283Z",
-  "lufs": -20
+  "sha256": "988f27bf384318d0743bb63bf48fc87aa55e9ee00ec10961a2a672c59221918d",
+  "candidate": 1,
+  "created": "2026-10-15T01:47:10.000Z",
+  "lufs": -20,
+  "finish": "ref2-level-pause0.7-fade-pad0.3",
+  "gates": []
 }

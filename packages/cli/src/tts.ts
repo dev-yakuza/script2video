@@ -2,7 +2,8 @@
  * `s2v tts`: synthesize every sentence of a script into the audio lock (PLAN 5.2).
  *
  *   synthesize (tts-server) → atempo if speed≠1 (Qwen) → 48 kHz mono + trim silence (ffmpeg)
- *   → word timing (aligner /align) → ASR round-trip CER (aligner /transcribe, warn only in M1)
+ *   → word timing (aligner /align) → ASR round-trip CER (aligner /transcribe)
+ *   → pitch and similarity against the voice's committed reference (voice-refs.ts)
  *
  * Audio lock: <script dir>/audio/<lang>/{<key>.wav, manifest.json}. Entries are keyed by the
  * content key, so unchanged sentences are reused and edits only re-synthesize what changed.
@@ -26,6 +27,8 @@ import { promisify } from 'node:util';
 import {
   assessSentence,
   bestAttempt,
+  consistencyReasons,
+  cosine,
   roundTripCer,
   sentenceId,
   toAlignText,
@@ -42,6 +45,16 @@ import { mockEnabled, mockSynthesize } from './mock-tts.js';
 import { splitRecording } from './recording.js';
 import { resolvePersona, type PersonaRef } from './persona.js';
 import { ALIGNER, Service, TTS_SERVER } from './services.js';
+import {
+  ClipVectors,
+  createReference,
+  describeVoice,
+  embed,
+  loadReference,
+  type LoadedReference,
+  type RefServices,
+  type RefVoice,
+} from './voice-refs.js';
 
 const run = promisify(execFile);
 const POSTPROCESS_VERSION = 'pp3-48k-mono-trim50db-pausecap-edgecut';
@@ -55,8 +68,8 @@ const sha256File = (path: string) => createHash('sha256').update(readFileSync(pa
 function hashKey(fields: unknown): string {
   return createHash('sha256').update(JSON.stringify(fields)).digest('hex').slice(0, 24);
 }
-/** Re-synthesis attempts after the first one when a sentence fails the checks (PLAN 5.2). */
-const MAX_RETRIES = 3;
+/** Takes per sentence when they keep failing the checks (acting plan 3.5, Q4). */
+const MAX_ATTEMPTS = 6;
 /** Padding kept around the aligned speech when cutting non-speech at the edges. */
 const EDGE_PAD_LEAD_S = 0.1;
 const EDGE_PAD_TAIL_S = 0.2;
@@ -75,8 +88,17 @@ export interface LockEntry {
   pauseRemoved?: number;
   /** Failed checks of the kept attempt (empty when it passed). */
   checks?: string[];
-  /** Median pitch (Hz) of the voiced frames, for voice consistency across sentences. */
-  f0?: number;
+  /** Median pitch (Hz) of the voiced frames, for voice consistency (null: too few voiced frames). */
+  f0?: number | null;
+  /**
+   * Ending: last fifth of the voiced frames against the median, semitones (null: unmeasurable).
+   * Measured on the lock wav, as heard: pause compression and tempo keep the voiced frames' pitch,
+   * but voiced sound cut away after the last word is not counted.
+   */
+  ending?: number | null;
+  /** Similarity with the voice reference clip, and the reference it was measured against. */
+  sim?: number;
+  voiceRef?: string;
 }
 
 export interface LockManifest {
@@ -170,20 +192,11 @@ export interface TtsOptions {
   log: (msg: string) => void;
 }
 
-/** A sentence's median pitch may differ from its voice's median by at most this many semitones. */
-export const PITCH_LIMIT_ST = 2.0;
-/** Extra attempts spent on bringing a pitch outlier back in line. */
-const PITCH_RETRIES = 4;
-
-const semitones = (hz: number, ref: number) => 12 * Math.log2(hz / ref);
-
 interface SentenceJob {
   id: string;
   text: string;
   member: CastMember;
   target: VoiceTarget;
-  /** Sentences sharing a voice group are expected to sound like one speaker. */
-  voiceGroup: string;
   ttsText: string;
   alignText: string;
   synthKey: string;
@@ -201,6 +214,15 @@ interface Attempt {
   info: { model: string; seed: number };
   assessment: SentenceAssessment;
   f0: number | null;
+  ending: number | null;
+  sim: number | null;
+  /** The reference the take was checked against (null: not checked). */
+  voiceRef: string | null;
+}
+
+interface PitchResult {
+  median_hz: number | null;
+  ending_st: number | null;
 }
 
 export async function synthesizeScript(
@@ -232,6 +254,7 @@ export async function synthesizeScript(
       models: Record<string, { revision: string }>;
     }
   ).models;
+  const revisions = Object.fromEntries(Object.entries(models).map(([k, v]) => [k, v.revision]));
 
   const mock = mockEnabled();
   if (mock) opts.log('S2V_TTS=mock: synthetic audio, no models');
@@ -259,6 +282,82 @@ export async function synthesizeScript(
     started = true;
   };
   const save = () => writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+  // ---------- voice references (acting plan 3.6) ----------
+  // Draft and mock audio is not checked. A missing reference is made on first use (20 takes).
+  const checkVoices = !mock && !opts.draft;
+  const services: RefServices = { tts, aligner, ensure: () => ensureServices() };
+  const vectors = new ClipVectors(tts);
+  const references = new Map<string, Promise<LoadedReference | null>>();
+  const refVoice = (job: SentenceJob): RefVoice => ({
+    engine: job.target.engine,
+    voice: job.target.voice,
+    lang: meta.lang,
+    modelName: job.target.modelName,
+    ...(job.target.engine === 'qwen' && job.member.style ? { style: job.member.style } : {}),
+    ...(job.target.ref ? { ref: job.target.ref } : {}),
+  });
+  // A voice whose reference cannot be read, made or embedded is left unchecked with a warning, like
+  // a failing take (Q3): the consistency check never stops a run.
+  const voiceKey = (v: RefVoice) =>
+    JSON.stringify([v.engine, v.voice, v.style ?? '', v.ref?.sha256 ?? '']);
+  const unchecked = (v: RefVoice, e: unknown) => {
+    warnings.push(
+      `${describeVoice(v)}: not checked for pitch and similarity (${(e as Error).message.slice(0, 200)})`,
+    );
+    references.set(voiceKey(v), Promise.resolve(null));
+    return null;
+  };
+  const referenceFor = (job: SentenceJob): Promise<LoadedReference | null> => {
+    const v = refVoice(job);
+    const key = voiceKey(v);
+    if (!references.has(key))
+      references.set(
+        key,
+        (async () => {
+          try {
+            const scriptDir = dirname(scriptPath);
+            const { loaded, stale, warning } = loadReference(v, scriptDir, revisions);
+            if (warning) warnings.push(warning);
+            let r = loaded;
+            if (!loaded || stale) {
+              opts.log(
+                stale
+                  ? `voice reference of ${describeVoice(v)} is out of date (${stale})`
+                  : `no voice reference for ${describeVoice(v)} yet`,
+              );
+              r = await createReference(v, scriptDir, repoRoot, revisions, services, opts.log);
+            }
+            await ensureServices();
+            await vectors.get(r!);
+            return r;
+          } catch (e) {
+            return unchecked(v, e);
+          }
+        })(),
+      );
+    return references.get(key)!;
+  };
+  /** Similarity of a wav with its voice reference clip (null: the voice is unchecked). */
+  const similarity = async (job: SentenceJob, wavPath: string) => {
+    const r = await referenceFor(job);
+    if (!r) return null;
+    try {
+      return { r, sim: cosine(await embed(tts, wavPath), await vectors.get(r)) };
+    } catch (e) {
+      return unchecked(refVoice(job), e);
+    }
+  };
+  /** Pitch and similarity of a take against its voice reference. */
+  const consistency = async (job: SentenceJob, wavPath: string, f0: number | null) => {
+    const s = await similarity(job, wavPath);
+    if (!s) return { sim: null, voiceRef: null, reasons: [] };
+    return {
+      sim: s.sim,
+      voiceRef: s.r.sha,
+      reasons: consistencyReasons({ text: job.text, f0, sim: s.sim }, s.r.ref),
+    };
+  };
 
   // ---------- jobs ----------
   const jobs: SentenceJob[] = [];
@@ -332,7 +431,6 @@ export async function synthesizeScript(
           text: sentence.text,
           member,
           target,
-          voiceGroup: `${target.engine}:${target.voice}:${target.ref?.sha256 ?? ''}:${synthFields.instruct}:${member.speed}`,
           ttsText,
           alignText: toAlignText(sentence.text, meta.pronounce, meta.lang).tts,
           synthKey,
@@ -367,6 +465,9 @@ export async function synthesizeScript(
         info: { model: 'mock', seed: 0 },
         assessment,
         f0: null,
+        ending: null,
+        sim: null,
+        voiceRef: null,
       };
     }
     await ensureServices();
@@ -436,9 +537,34 @@ export async function synthesizeScript(
         `  ${job.id} attempt ${attempt}: cut non-speech outside the words (kept ${from.toFixed(2)}–${to.toFixed(2)}s)`,
       );
     }
-    const f0 = (await aligner.post<{ median_hz: number | null }>('/pitch', { wav_path: wavPath }))
-      .data.median_hz;
-    return { attempt, wavPath, words, heard, removed, info, assessment, f0 };
+    const pitch = (await aligner.post<PitchResult>('/pitch', { wav_path: wavPath })).data;
+    const f0 = pitch.median_hz;
+    let sim: number | null = null;
+    let voiceRef: string | null = null;
+    if (checkVoices) {
+      const c = await consistency(job, wavPath, f0);
+      sim = c.sim;
+      voiceRef = c.voiceRef;
+      if (c.reasons.length)
+        assessment = {
+          ...assessment,
+          ok: false,
+          reasons: [...assessment.reasons, ...c.reasons],
+        };
+    }
+    return {
+      attempt,
+      wavPath,
+      words,
+      heard,
+      removed,
+      info,
+      assessment,
+      f0,
+      ending: pitch.ending_st,
+      sim,
+      voiceRef,
+    };
   };
 
   const commit = (job: SentenceJob, chosen: Attempt, tried: Attempt[]) => {
@@ -458,13 +584,55 @@ export async function synthesizeScript(
       attempt: chosen.attempt,
       pauseRemoved: Number(chosen.removed.toFixed(3)),
       checks: chosen.assessment.reasons,
-      ...(chosen.f0 ? { f0: Number(chosen.f0.toFixed(1)) } : {}),
+      f0: chosen.f0 ? Number(chosen.f0.toFixed(1)) : null,
+      ending: chosen.ending !== null ? Number(chosen.ending.toFixed(2)) : null,
+      ...(chosen.sim !== null && chosen.voiceRef
+        ? { sim: Number(chosen.sim.toFixed(4)), voiceRef: chosen.voiceRef }
+        : {}),
     };
     save();
   };
 
+  /** `--recheck` of a locked sentence: the per-sentence checks and its voice reference. */
+  const recheckReasons = async (job: SentenceJob, e: LockEntry): Promise<string[]> => {
+    const wav = join(lockDir, e.src);
+    const { reasons } = assessSentence({
+      text: job.text,
+      lang: meta.lang,
+      duration: e.duration,
+      words: e.words,
+      cer: opts.asr ? e.cer : null,
+      speed: job.member.speed,
+      loudness: loudnessReader(wav),
+    });
+    if (!checkVoices) return reasons;
+    const r = await referenceFor(job);
+    if (!r) return reasons;
+    if (e.f0 === undefined || e.ending === undefined) {
+      await ensureServices();
+      const p = (await aligner.post<PitchResult>('/pitch', { wav_path: wav })).data;
+      e.f0 = p.median_hz ? Number(p.median_hz.toFixed(1)) : null;
+      e.ending = p.ending_st !== null ? Number(p.ending_st.toFixed(2)) : null;
+    }
+    if (e.voiceRef !== r.sha || e.sim === undefined) {
+      await ensureServices();
+      const m = await similarity(job, wav);
+      if (!m) {
+        save();
+        return reasons;
+      }
+      e.sim = Number(m.sim.toFixed(4));
+      e.voiceRef = r.sha;
+    }
+    save();
+    return [
+      ...reasons,
+      ...consistencyReasons({ text: job.text, f0: e.f0 ?? null, sim: e.sim }, r.ref),
+    ];
+  };
+
   try {
-    // ---------- pass 1: every sentence passes the per-sentence checks ----------
+    // ---------- every sentence passes the per-sentence checks ----------
     if (opts.frozen) {
       const missing = [...jobs, ...recorded.flatMap((r) => r.items)].filter((j) => {
         const e = manifest.entries[j.key];
@@ -540,30 +708,22 @@ export async function synthesizeScript(
       const first = retried(job.id) && existing ? existing.attempt + 1 : 0;
       if (first > 0) opts.log(`  ${job.id} retry requested → new takes from attempt ${first}`);
       if (first === 0 && existing && existsSync(join(lockDir, existing.src))) {
-        const check = opts.recheck
-          ? assessSentence({
-              text: job.text,
-              lang: meta.lang,
-              duration: existing.duration,
-              words: existing.words,
-              cer: opts.asr ? existing.cer : null,
-              speed: job.member.speed,
-              loudness: loudnessReader(join(lockDir, existing.src)),
-            })
-          : null;
-        if (!check || check.ok) {
+        // Sentences already in the lock are not checked again unless asked (Q9).
+        const reasons = opts.recheck ? await recheckReasons(job, existing) : [];
+        if (reasons.length === 0) {
           reused++;
           continue;
         }
-        opts.log(`  ${job.id} recheck failed: ${check.reasons.join('; ')} → re-synthesizing`);
+        opts.log(`  ${job.id} recheck failed: ${reasons.join('; ')} → re-synthesizing`);
       }
       const tried: Attempt[] = [];
-      for (let attempt = first; attempt <= first + MAX_RETRIES; attempt++) {
+      const last = first + MAX_ATTEMPTS - 1;
+      for (let attempt = first; attempt <= last; attempt++) {
         const a = await runAttempt(job, attempt);
         tried.push(a);
         if (a.assessment.ok) break;
         opts.log(
-          `  ${job.id} attempt ${attempt}: ${a.assessment.reasons.join('; ')}${attempt < first + MAX_RETRIES ? ' → retrying' : ''}`,
+          `  ${job.id} attempt ${attempt}: ${a.assessment.reasons.join('; ')}${attempt < last ? ' → retrying' : ''}`,
         );
       }
       const chosen = tried[tried.length - 1]!.assessment.ok
@@ -582,65 +742,6 @@ export async function synthesizeScript(
           (chosen.removed > 0 ? ` (-${chosen.removed.toFixed(2)}s pauses)` : '') +
           ` cer=${(chosen.assessment.cer ?? 0).toFixed(2)}`,
       );
-    }
-
-    if (opts.draft || mock) return { manifestPath, synthesized, reused, warnings };
-    // ---------- pass 2: one speaker should keep one pitch across sentences ----------
-    // Sentences are sampled independently, so an LLM TTS sometimes picks a clearly different pitch
-    // for one sentence and it sounds like another person. Measure each sentence's median F0, and
-    // re-synthesize the ones too far from their voice's median.
-    for (const job of jobs) {
-      const e = manifest.entries[job.key]!;
-      if (e.f0 === undefined) {
-        await ensureServices();
-        const hz = (
-          await aligner.post<{ median_hz: number | null }>('/pitch', {
-            wav_path: join(lockDir, e.src),
-          })
-        ).data.median_hz;
-        if (hz) e.f0 = Number(hz.toFixed(1));
-      }
-    }
-    save();
-    const groups = new Map<string, SentenceJob[]>();
-    for (const job of jobs)
-      groups.set(job.voiceGroup, [...(groups.get(job.voiceGroup) ?? []), job]);
-    for (const [group, members] of groups) {
-      const pitched = members.filter((j) => manifest.entries[j.key]!.f0);
-      if (pitched.length < 3) continue;
-      const logs = pitched
-        .map((j) => Math.log2(manifest.entries[j.key]!.f0!))
-        .sort((a, b) => a - b);
-      const ref = Math.pow(2, logs[Math.floor(logs.length / 2)]!);
-      for (const job of pitched) {
-        const e = manifest.entries[job.key]!;
-        const dev = semitones(e.f0!, ref);
-        if (Math.abs(dev) <= PITCH_LIMIT_ST) continue;
-        opts.log(
-          `  ${job.id} pitch ${e.f0}Hz is ${dev > 0 ? '+' : ''}${dev.toFixed(1)} st from ${group.split(':')[1]}'s median ${ref.toFixed(0)}Hz → re-synthesizing`,
-        );
-        const tried: Attempt[] = [];
-        let best: Attempt | null = null;
-        for (let k = 1; k <= PITCH_RETRIES; k++) {
-          const a = await runAttempt(job, e.attempt + k);
-          tried.push(a);
-          const d = a.f0 ? Math.abs(semitones(a.f0, ref)) : Infinity;
-          if (a.assessment.ok && (!best || d < Math.abs(semitones(best.f0!, ref)))) best = a;
-          if (a.assessment.ok && d <= PITCH_LIMIT_ST) break;
-        }
-        if (best && Math.abs(semitones(best.f0!, ref)) < Math.abs(dev)) {
-          commit(job, best, tried);
-          synthesized++;
-          opts.log(
-            `  ${job.id} pitch now ${best.f0!.toFixed(0)}Hz (${semitones(best.f0!, ref) > 0 ? '+' : ''}${semitones(best.f0!, ref).toFixed(1)} st)`,
-          );
-        } else {
-          for (const t of tried) if (existsSync(t.wavPath)) unlinkSync(t.wavPath);
-          warnings.push(
-            `${job.id}: pitch stays ${dev.toFixed(1)} st from the voice median after ${PITCH_RETRIES} attempts`,
-          );
-        }
-      }
     }
   } finally {
     tts.stop();

@@ -7,3 +7,7 @@ videos/
 out/
 .s2v-cache/
 .claude/
+# generated voice references (s2v voice refs)
+**/voices/_qwen/
+**/voices/_supertonic/
+**/voices/*/*.f0.json

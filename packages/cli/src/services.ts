@@ -13,6 +13,8 @@ export interface ServiceSpec {
   id: string;
   dir: string;
   port: number;
+  /** The server's WRAPPER_VERSION this CLI speaks to (endpoints and fields). */
+  wrapper: string;
 }
 
 export interface Health {
@@ -75,6 +77,11 @@ export class Service {
           `port ${this.spec.port} is used by another server (${running.id}, lock ${running.lock_hash}); stop it or change the port`,
         );
       }
+      if (running.wrapper_version !== this.spec.wrapper)
+        throw new Error(
+          `${this.spec.id} on port ${this.spec.port} is version ${String(running.wrapper_version)}, ` +
+            `this s2v needs ${this.spec.wrapper}; stop that server so a current one starts`,
+        );
       return running;
     }
     this.child = spawn(
@@ -136,5 +143,15 @@ export class Service {
   }
 }
 
-export const TTS_SERVER: ServiceSpec = { id: 'script2video-tts', dir: 'tts-server', port: 47861 };
-export const ALIGNER: ServiceSpec = { id: 'script2video-aligner', dir: 'aligner', port: 47862 };
+export const TTS_SERVER: ServiceSpec = {
+  id: 'script2video-tts',
+  dir: 'tts-server',
+  port: 47861,
+  wrapper: '0.3.0',
+};
+export const ALIGNER: ServiceSpec = {
+  id: 'script2video-aligner',
+  dir: 'aligner',
+  port: 47862,
+  wrapper: '0.3.0',
+};

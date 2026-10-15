@@ -6,6 +6,7 @@
 import { normalizeForCer } from './cer.js';
 import type { Lang } from './schema.js';
 import type { AlignedWord } from './timeline.js';
+import { failureWeight } from './voice-check.js';
 
 export const CER_LIMIT: Record<Lang, number> = { ko: 0.15, ja: 0.15, en: 0.1 };
 /** Plausible speaking rate in normalized characters per second at speed 1.0. */
@@ -73,7 +74,10 @@ export function assessSentence(input: {
   return { ok: reasons.length === 0, cer, rate, tail, reasons };
 }
 
-/** Pick the best attempt: passing first, then fewest failed checks, lowest CER, most typical rate. */
+/**
+ * Pick the best attempt: passing first, then fewest failed checks (a wrong voice or an added sound
+ * counts double), lowest CER, most typical rate.
+ */
 export function bestAttempt<T extends { assessment: SentenceAssessment }>(
   attempts: T[],
   lang: Lang,
@@ -83,7 +87,7 @@ export function bestAttempt<T extends { assessment: SentenceAssessment }>(
   return [...attempts].sort(
     (a, b) =>
       Number(b.assessment.ok) - Number(a.assessment.ok) ||
-      a.assessment.reasons.length - b.assessment.reasons.length ||
+      failureWeight(a.assessment.reasons) - failureWeight(b.assessment.reasons) ||
       (a.assessment.cer ?? 0) - (b.assessment.cer ?? 0) ||
       Math.abs(a.assessment.rate - mid) - Math.abs(b.assessment.rate - mid),
   )[0]!;

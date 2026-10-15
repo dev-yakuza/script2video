@@ -44,6 +44,10 @@ export interface PersonaClip {
   candidate: number;
   /** Loudness the clip was leveled to (absent: not leveled). */
   lufs?: number;
+  /** How the clip was finished from the raw VoiceDesign output (pauses, fades, end pad). */
+  finish?: string;
+  /** Reference checks it failed when it was a candidate (empty: passed). */
+  gates?: string[];
   created: string;
 }
 

@@ -65,6 +65,8 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `dev <script> [--video]`                                                               | 편집 루프: 저장할 때마다 lint → tts → snapshot  |
 | `pick <image>`                                                                         | 스크린샷을 클릭 / 드래그해 cue 좌표 얻기        |
 | `voice create / pick`                                                                  | 페르소나 목소리를 설계하고 후보 중에서 고르기   |
+| `voice check <voices/id.yaml>`                                                         | 페르소나 참조 음성 판정(잡음·쉼·끝 잘림·음높이) |
+| `voice refs <script> [--refresh]`                                                      | 문장을 비교할 기준 음성                         |
 | `audio prune <script>`                                                                 | 대본에서 더 이상 쓰지 않는 음성 삭제            |
 | `export-script <script>`                                                               | 내레이션을 직접 녹음할 때 읽을 대본 만들기      |
 | `import-recording <script> <take.wav> [--write]`                                       | 한 번에 녹음한 파일을 문단별로 나누기(`:audio`) |
@@ -100,12 +102,26 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 # voices/minsu.yaml  (대본 옆, 또는 여러 영상이 함께 쓰도록 레포 루트까지의 상위 폴더 어디든)
 #   description: 30대 남성, 차분하고 약간 낮은 목소리, 또렷한 발음, 친근한 말투
 node packages/cli/dist/main.js voice create voices/minsu.yaml --lang ko --candidates 4
-# → 음높이 / 속도 / 오독 표시가 붙은 후보와 청취 페이지. 그중 하나를 고릅니다:
+# → 판정을 거쳐 통과한 후보부터 나열하고 청취 페이지를 만듭니다. 그중 하나를 고릅니다:
 node packages/cli/dist/main.js voice pick voices/minsu.yaml 2 --lang ko
 ```
 
 그다음 `cast:`에서 `voice: "persona:minsu"`를 씁니다. 모든 문장이 고른 음성을 복제해 합성하므로
 목소리가 일정하게 유지됩니다. 설계한 목소리는 실존 인물을 흉내 내지 않습니다.
+
+복제는 참조 음성의 잡음·리듬·끝맺음까지 따라 하므로 후보를 판정합니다: 틀리게 읽지 않았는지, 설명의
+성별(`남성`/`male`/`男性` 또는 `여성`/`female`/`女性`)에 맞는 음높이인지, 잡음이 작은지, 문장 사이에 쉼이
+있는지, 끝이 잘리지 않았는지. 숨소리는 지우지 않습니다. 이미 쓰는 음성은
+`voice check voices/minsu.yaml`로 같은 판정을 해 볼 수 있습니다(원본 출력이 없는 마무리된 음성은 잡음과
+끝맺음을 판정하지 않습니다).
+
+**모든 문장이 같은 목소리로.** 목소리마다(페르소나, `style`을 포함한 기본 화자, Supertonic 목소리) 기준
+음성이 있습니다. 고정 문장 20테이크를 한 번 재서 커밋합니다(`voices/<id>/<lang>.f0.json`,
+`voices/_qwen/…`, `voices/_supertonic/…`). `tts`는 없으면 만들고(몇 분, 판정에 Base 모델을 함께 올려 메모리를 약 4GB 더 씀), 새 테이크마다 음높이와
+목소리 닮음(Qwen3-TTS Base 모델의 speaker encoder)을 기준과 비교합니다. 벗어난 테이크는 다른 시드로
+다시 만듭니다(최대 6테이크). 이미 오디오 lock에 있는 문장은 `tts --recheck`를 실행할 때만 다시
+판정합니다. `voice refs <script>`는 기준 음성을 보여 주고, `--refresh` 뒤에는 이제 실패하는 lock 문장을
+알려 줍니다.
 
 ### 캐릭터
 

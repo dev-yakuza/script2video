@@ -6,6 +6,8 @@
  *   s2v check <script.md>
  *   s2v voice create <voices/id.yaml> [--lang ko] [--candidates 3] [--play]
  *   s2v voice pick <voices/id.yaml> <n> [--lang ko]
+ *   s2v voice check <voices/id.yaml> [--lang ko]   (judge a persona's reference clip)
+ *   s2v voice refs <script.md> [--refresh]   (reference voices for the consistency checks)
  *   s2v tts <script.md> [--no-asr] [--recheck] [--retry <scene[:paragraph[:sentence]]> ...]
  *   s2v sentences <script.md>   (sentence ids for --retry)
  *   s2v export-script <script.md>   (reading script for a recording session)
@@ -76,7 +78,7 @@ import { dev } from './dev.js';
 import { importRecording } from './import-recording.js';
 import { doctor } from './doctor.js';
 import { scaffold } from './scaffold.js';
-import { createVoice, pickVoice } from './persona.js';
+import { checkVoice, createVoice, pickVoice } from './persona.js';
 import { buildNarration, concatAndMux, ensureFonts, master, probe } from './media.js';
 import {
   lintAssets,
@@ -89,6 +91,7 @@ import { pick } from './pick.js';
 import { runResident, say } from './say.js';
 import { snapshot } from './snapshot.js';
 import { loadAudioManifest, pruneAudio, synthesizeScript } from './tts.js';
+import { voiceRefs } from './voice-refs.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -97,6 +100,8 @@ function usage(): never {
     'usage: s2v <lint|check|sentences|tts|timeline|render|snapshot|pick|say> <file|text> [options]\n' +
       '       s2v voice create <voices/id.yaml> [--lang ko] [--candidates 3] [--play]\n' +
       '       s2v voice pick <voices/id.yaml> <n> [--lang ko]\n' +
+      '       s2v voice check <voices/id.yaml> [--lang ko]\n' +
+      '       s2v voice refs <script.md> [--refresh]\n' +
       '       s2v character import <ymm4 folder|zip> --out <characters/id> [--name <character>]\n' +
       '       s2v character setup [--max-memory-gb N]   (image generation models; Apple silicon)\n' +
       '       s2v character create <dir> [--candidates 4]   (round 1: candidate front images)\n' +
@@ -216,6 +221,7 @@ async function main(): Promise<void> {
       except: { type: 'string', multiple: true },
       seed: { type: 'string' },
       apply: { type: 'boolean', default: false },
+      refresh: { type: 'boolean', default: false },
     },
   });
   const file = positionals[0];
@@ -286,6 +292,19 @@ async function main(): Promise<void> {
     const lang = (values.lang ?? 'ko') as Lang;
     if (!yamlPath || !['ko', 'ja', 'en'].includes(lang)) usage();
     const log = (m: string) => console.error(m);
+    if (sub === 'refs') {
+      const scriptPath = resolve(yamlPath);
+      await voiceRefs(scriptPath, load(scriptPath), REPO_ROOT, {
+        refresh: values.refresh === true,
+        log,
+      });
+      return;
+    }
+    if (sub === 'check') {
+      const fails = await checkVoice(resolve(yamlPath), lang, REPO_ROOT, log);
+      if (fails.length) process.exitCode = 1;
+      return;
+    }
     if (sub === 'create') {
       await createVoice(resolve(yamlPath), REPO_ROOT, {
         lang,

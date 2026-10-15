@@ -66,6 +66,8 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `dev <script> [--video]`                                                               | edit loop: lint → tts → snapshot on every save                        |
 | `pick <image>`                                                                         | click / drag on a screenshot to get cue coordinates                   |
 | `voice create / pick`                                                                  | design a persona voice and pick a candidate                           |
+| `voice check <voices/id.yaml>`                                                         | judge a persona's reference clip (noise, pauses, cut ending, pitch)   |
+| `voice refs <script> [--refresh]`                                                      | reference voices the sentences are checked against                    |
 | `audio prune <script>`                                                                 | remove audio the script no longer uses                                |
 | `export-script <script>`                                                               | a reading script for recording the narration yourself                 |
 | `import-recording <script> <take.wav> [--write]`                                       | split one recorded take into paragraphs (`:audio`)                    |
@@ -100,12 +102,27 @@ A persona is a voice designed from a description, for extra speakers beyond the 
 # voices/minsu.yaml  (next to the script, or in any folder above it up to the repository root to share it)
 #   description: 30대 남성, 차분하고 약간 낮은 목소리, 또렷한 발음, 친근한 말투
 node packages/cli/dist/main.js voice create voices/minsu.yaml --lang ko --candidates 4
-# → candidates with pitch / speed / misread hints and a listening page; then pick one:
+# → candidates checked and listed passing first, with a listening page; then pick one:
 node packages/cli/dist/main.js voice pick voices/minsu.yaml 2 --lang ko
 ```
 
 Then use `voice: "persona:minsu"` in `cast:`. Every sentence clones the picked clip, so the voice
 stays the same. Designed voices imitate no real person.
+
+A clone copies the clip's noise, rhythm and ending, so candidates are checked: read without
+mistakes, a pitch that fits the described gender (`남성`/`male`/`男性` or `여성`/`female`/`女性`), a
+quiet noise floor, pauses between the sentences and an ending that is not cut. Breaths are kept.
+`voice check voices/minsu.yaml` runs the same checks on a clip you already use (on a finished clip
+whose raw output is gone, noise and ending are not judged).
+
+**Same voice in every sentence.** Each voice (a persona, a preset speaker with its `style`, a
+Supertonic voice) has a reference: 20 takes of fixed sentences, measured once and committed
+(`voices/<id>/<lang>.f0.json`, `voices/_qwen/…`, `voices/_supertonic/…`). `tts` makes a missing
+one (a few minutes; the check loads the Base model next to the voice's model, about 4 GB more) and checks every new take against it: its pitch and its voice similarity
+(the speaker encoder of the Qwen3-TTS Base model). A take that drifts is made again with another
+seed, up to 6 takes. Sentences already in the audio lock are not checked again unless you run
+`tts --recheck`. `voice refs <script>` shows the references and, after `--refresh`, lists the locked
+sentences that would now fail.
 
 ### Characters
 

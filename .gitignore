@@ -10,3 +10,5 @@ out/
 experiments/m0a/out/
 .DS_Store
 .ruff_cache/
+# persona voice candidates (only the picked clip is committed)
+**/voices/*/candidates/

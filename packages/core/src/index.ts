@@ -77,3 +77,25 @@ export {
   type SubtitleCue,
 } from './publish.js';
 export { sfxEvents, type SfxEvent } from './sfx.js';
+export {
+  analyzeLevels,
+  consistencyReasons,
+  cosine,
+  describedGender,
+  expectedPauses,
+  failureWeight,
+  GENDER_F0,
+  medoid,
+  pitchRange,
+  REF_SEEDS,
+  REF_SENTENCES,
+  referenceGateFailures,
+  semitones,
+  simFloor,
+  summarizeTakes,
+  VOICE_REF_VERSION,
+  type Gender,
+  type LevelAnalysis,
+  type ReferenceMeasure,
+  type VoiceReference,
+} from './voice-check.js';

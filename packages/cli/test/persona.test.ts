@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { DEFAULT_REFERENCE, parsePersona, parseScript } from '@script2video/core';
 import { describe, expect, it } from 'vitest';
 import { lintCast } from '../src/lint-assets.js';
-import { genderMismatch, personaSearchDirs, resolvePersona } from '../src/persona.js';
+import { personaSearchDirs, resolvePersona } from '../src/persona.js';
 
 const DESC = '30대 남성, 차분한 목소리';
 
@@ -68,14 +68,6 @@ describe('persona files', () => {
     const withClip = fixture(true);
     writeFileSync(join(withClip.root, 'voices', 'minsu', 'ko.wav'), 'edited');
     expect(resolvePersona('minsu', 'ko', withClip.video)).toMatch(/changed since it was picked/);
-  });
-
-  it('flags a designed voice whose pitch contradicts the described gender', () => {
-    expect(genderMismatch('30대 남성', 230)).toMatch(/sounds female/);
-    expect(genderMismatch('30대 남성', 125)).toBeNull();
-    expect(genderMismatch('a young woman', 120)).toMatch(/sounds male/);
-    expect(genderMismatch('20代の女性', 240)).toBeNull();
-    expect(genderMismatch('calm narrator', 300)).toBeNull();
   });
 });
 
