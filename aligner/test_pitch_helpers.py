@@ -23,7 +23,6 @@ class EndingTest(unittest.TestCase):
         self.assertIsNone(ending_semitones([120.0] * 9 + [math.nan] * 40))
 
 
-
 class NonSpeechTest(unittest.TestCase):
     def test_sound_frames_relative_to_the_loud_part(self):
         rms = [0.0] * 5 + [0.2] * 20 + [0.005] * 5
@@ -42,7 +41,10 @@ class NonSpeechTest(unittest.TestCase):
         self.assertAlmostEqual(r["noise_s"], 0.07)
 
     def test_no_voice(self):
-        self.assertEqual(edges_and_noise([False] * 3, [True] * 3, 0.01), {"lead_s": 0.0, "tail_s": 0.0, "noise_s": 0.03})
+        self.assertEqual(
+            edges_and_noise([False] * 3, [True] * 3, 0.01), {"lead_s": 0.0, "tail_s": 0.0, "noise_s": 0.03}
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
