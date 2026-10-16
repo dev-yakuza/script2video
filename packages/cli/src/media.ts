@@ -102,8 +102,13 @@ function writeFloatWav(path: string, samples: Float32Array, rate: number): void 
  * blown up; sentences too short to measure keep their speaker's median gain.
  */
 export const SPEECH_LUFS = -20;
-const MAX_BOOST_DB = 20;
-const MAX_CUT_DB = 12;
+export const MAX_BOOST_DB = 20;
+export const MAX_CUT_DB = 12;
+/** The normalizing gain is clamped so a near-silent take is not blown up (render and `s2v takes`). */
+export const clampGain = (db: number) => Math.max(-MAX_CUT_DB, Math.min(MAX_BOOST_DB, db));
+/** Median as render takes it for the per-speaker fallback gain. */
+export const medianOf = (v: number[]) =>
+  [...v].sort((x, y) => x - y)[Math.floor(v.length / 2)] ?? 0;
 
 /** Integrated loudness per sentence wav (LUFS), cached next to the mix by path + size + mtime. */
 async function sentenceLoudness(paths: string[], cachePath: string) {
@@ -139,21 +144,19 @@ export async function buildNarration(
     audio.map(({ a }) => a.src),
     join(dirname(outPath), 'loudness.json'),
   );
-  const clampGain = (db: number) => Math.max(-MAX_CUT_DB, Math.min(MAX_BOOST_DB, db));
   // Fallback for unmeasurable sentences: the median gain of the same speaker.
   const byCast = new Map<string, number[]>();
   for (const { a } of audio) {
     const l = loud.get(a.src);
     if (l != null) byCast.set(a.cast, [...(byCast.get(a.cast) ?? []), SPEECH_LUFS - l]);
   }
-  const median = (v: number[]) => [...v].sort((x, y) => x - y)[Math.floor(v.length / 2)] ?? 0;
   const gains: Record<string, number> = {};
   for (const { scene, a } of audio) {
     const l = loud.get(a.src);
     // the line's own level (volume, power) goes on top of the normalization (acting plan 3.4);
     // the per-speaker fallback above is taken without it
     const db =
-      clampGain(l != null ? SPEECH_LUFS - l : median(byCast.get(a.cast) ?? [])) + (a.gain ?? 0);
+      clampGain(l != null ? SPEECH_LUFS - l : medianOf(byCast.get(a.cast) ?? [])) + (a.gain ?? 0);
     gains[a.sentenceId] = Number(db.toFixed(1));
     const g = 10 ** (db / 20);
     const { rate, samples } = readPcm16(a.src);

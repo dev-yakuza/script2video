@@ -23,7 +23,10 @@ import { mockSynthesize, mockTokens } from '../src/mock-tts.js';
 import { ALIGNER, Service, TTS_SERVER } from '../src/services.js';
 import type { PicksFile } from '../src/picks.js';
 import { listTakes, pickTakes, unpickTakes } from '../src/takes.js';
+import { buildTakesPage, type PageData } from '../src/takes-page.js';
+import { integratedLoudness } from '../src/media.js';
 import {
+  makeTakeWav,
   planSentences,
   synthesizeScript,
   takeKeyOf,
@@ -463,5 +466,67 @@ describe('stage 3 takes against stub servers', { timeout: 120_000 }, () => {
     const e = faster.lock().entries[faster.lock().sentences['one:0:0']!]!;
     expect(e).toMatchObject({ attempt: p.n, select: { pick: p.n } });
     expect(r.warnings.join('\n')).not.toMatch(/sounds different|re-synthesized|your pick/);
+  });
+
+  // ---------- stage 3b-2: the listening page ----------
+  const page = async (s: { path: string; parsed: ReturnType<typeof parseScript>['script'] }) => {
+    const r = await buildTakesPage(s.path, s.parsed!, root, { all: false, ids: [], log: () => {} });
+    const html = readFileSync(r.html, 'utf8');
+    const m = /<script id="data" type="application\/json">([\s\S]*?)<\/script>/.exec(html)!;
+    return { ...r, dir: dirname(r.html), data: JSON.parse(m[1]!) as PageData };
+  };
+  const cacheFiles = () =>
+    ['tts-takes', 'tts-raw']
+      .flatMap((d) => readdirSync(join(root, '.s2v-cache', d)).map((f) => `${d}/${f}`))
+      .sort();
+
+  it('builds the page from the caches, without a server and without writing them', async () => {
+    const p = await picked('청취 페이지에 나오는 테이크예요.');
+    const calls = { ...stub.calls };
+    const before = cacheFiles();
+    const r = await page(p.s);
+    expect(stub.calls).toEqual(calls);
+    expect(cacheFiles()).toEqual(before);
+    const l = r.data.lines.find((x) => x.id === 'one:0:0')!;
+    expect(l).toMatchObject({ target: true, pick: { take: p.n, by: 'human' } });
+    expect(l.takes.map((t) => t.n)).toEqual([0, 1, 2]);
+    for (const t of l.takes) expect(readFileSync(join(r.dir, t.wav!)).length).toBeGreaterThan(44);
+    expect(l.takes.find((t) => t.n === l.lockTake)!.source).toBe('lock');
+    // the page's level is render's: −20 LUFS, less a page-wide cut when something would clip
+    const cut = r.notes.map((n) => /all wavs (-[\d.]+) dB/.exec(n)).find(Boolean);
+    const lufs = (await integratedLoudness(join(r.dir, l.lockWav!))).lufs;
+    expect(Math.abs(lufs - (-20 + (cut ? Number(cut[1]) : 0)))).toBeLessThan(1);
+  });
+
+  it('makes a raw-only take as tts makes it, in the page folder only', async () => {
+    const p = await picked('원본만 남은 테이크도 들을 수 있어요.');
+    const takeWav = join(p.takes, `${p.tk}.wav`);
+    const tts = readFileSync(takeWav);
+    const again = join(stub.scratch, 'again.wav');
+    await makeTakeWav(p.raw, again, p.job.tempo, 0.35);
+    expect(readFileSync(again).equals(tts)).toBe(true);
+    rmSync(takeWav);
+    const before = cacheFiles();
+    const r = await page(p.s);
+    expect(cacheFiles()).toEqual(before);
+    const t = r.data.lines.find((x) => x.id === 'one:0:0')!.takes.find((x) => x.n === p.n)!;
+    expect(t.source).toBe('raw');
+    expect(readFileSync(join(r.dir, t.wav!)).length).toBeGreaterThan(44);
+  });
+
+  it('shows a take with nothing cached as not playable, and stops on unreadable files', async () => {
+    const p = await picked('캐시가 없는 테이크는 들을 수 없어요.');
+    rmSync(p.raw);
+    rmSync(join(p.takes, `${p.tk}.wav`));
+    const r = await page(p.s);
+    expect(r.data.lines[0]!.takes.find((x) => x.n === p.n)).toMatchObject({
+      wav: null,
+      source: 'none',
+    });
+    writeFileSync(p.picksPath, '{ broken');
+    await expect(page(p.s)).rejects.toThrow(/cannot read/);
+    rmSync(p.picksPath);
+    writeFileSync(p.s.lockPath, '{ half');
+    await expect(page(p.s)).rejects.toThrow(/is tts running/);
   });
 });

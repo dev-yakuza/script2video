@@ -30,7 +30,7 @@ import {
   type TakeRecord,
 } from './tts.js';
 
-interface Context {
+export interface Context {
   scriptPath: string;
   scriptArg: string;
   lockDir: string;
@@ -43,7 +43,7 @@ interface Context {
   mock: boolean;
 }
 
-function context(scriptPath: string, script: Script, repoRoot: string): Context {
+export function context(scriptPath: string, script: Script, repoRoot: string): Context {
   const mock = mockEnabled();
   // pick keys follow S2V_TTS like tts (3b plan 6)
   const plan = planSentences(scriptPath, script, repoRoot, { draft: false, mock });
@@ -58,11 +58,21 @@ function context(scriptPath: string, script: Script, repoRoot: string): Context 
     maxPause: script.meta.pacing.maxPause,
     jobs: plan.jobs,
     plan,
-    lock: existsSync(manifestPath)
-      ? (JSON.parse(readFileSync(manifestPath, 'utf8')) as LockManifest)
-      : null,
+    lock: readLock(manifestPath),
     mock,
   };
+}
+
+/** The audio lock (null: none yet). A half-written one (tts writing it) is an error. */
+function readLock(path: string): LockManifest | null {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as LockManifest;
+  } catch (e) {
+    throw new Error(`${path}: cannot read — is tts running? Try again when it is done`, {
+      cause: e,
+    });
+  }
 }
 
 /** Lock entries made from the same raw takes (any lock key of the synthesis key). */
@@ -88,7 +98,7 @@ function takeInfo(c: Context, job: SentenceJob, n: number) {
 }
 
 /** The highest take number made for a line (3b plan 5a). */
-function lastTake(c: Context, job: SentenceJob, pickTried: number): number {
+export function lastTake(c: Context, job: SentenceJob, pickTried: number): number {
   return Math.max(
     pickTried,
     ...relatedEntries(c, job).map(madeOf),
@@ -97,7 +107,7 @@ function lastTake(c: Context, job: SentenceJob, pickTried: number): number {
   );
 }
 
-const matches = (id: string, filters: string[]) =>
+export const matches = (id: string, filters: string[]) =>
   filters.length === 0 || filters.some((f) => id === f || id.startsWith(`${f}:`));
 
 /** `s2v takes <script> --list [--id …]`: the takes of each line as text. */

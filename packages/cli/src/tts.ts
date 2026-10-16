@@ -164,6 +164,27 @@ export function lastRawTakeIn(rawDir: string, synthKey: string): number {
   }
   return last;
 }
+/**
+ * A take wav from its raw take: post-processing (trim, 48 kHz, tempo) and pause compression,
+ * written whole. Returns the seconds of pauses removed. `s2v takes` makes the same wav to listen.
+ */
+export async function makeTakeWav(
+  raw: string,
+  out: string,
+  tempo: number | null,
+  maxPause: number,
+): Promise<number> {
+  const tmp = `${out}.${process.pid}.tmp.wav`;
+  try {
+    await postprocess(raw, tmp, tempo);
+    const removed = compressPausesInFile(tmp, maxPause);
+    renameSync(tmp, out);
+    return removed;
+  } finally {
+    if (existsSync(tmp)) unlinkSync(tmp);
+  }
+}
+
 /** What made a take wav (`<take key>.json` in the take cache). */
 export interface TakeMade {
   wavSha: string;
@@ -951,15 +972,8 @@ export async function synthesizeScript(
     if (!madeOk) {
       const { raw, info, synthesized: s } = await rawTake(job, n);
       synthesized = s;
-      const tmp = `${wav}.${process.pid}.tmp.wav`;
-      try {
-        await postprocess(raw, tmp, job.tempo);
-        const removed = compressPausesInFile(tmp, meta.pacing.maxPause);
-        renameSync(tmp, wav);
-        made = { wavSha: sha16(wav), rawSha: sha16(raw), removed, info };
-      } finally {
-        if (existsSync(tmp)) unlinkSync(tmp);
-      }
+      const removed = await makeTakeWav(raw, wav, job.tempo, meta.pacing.maxPause);
+      made = { wavSha: sha16(wav), rawSha: sha16(raw), removed, info };
       atomicWrite(meta3, JSON.stringify(made));
     }
     const wavSha = made!.wavSha;

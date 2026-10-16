@@ -3,7 +3,15 @@
  * `takes pick/unpick` (6) and inspect (8). Mock pick keys never match real ones, so the "pick no
  * longer applies" warning is tested in picks.test.ts and against stub servers.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +20,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { inspectScript } from '../src/inspect.js';
 import type { PicksFile } from '../src/picks.js';
 import { listTakes, pickTakes, unpickTakes } from '../src/takes.js';
+import { buildTakesPage, type PageData } from '../src/takes-page.js';
 import { planSentences, pruneAudio, synthesizeScript, type LockManifest } from '../src/tts.js';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -495,5 +504,34 @@ describe('stage 3b picks (mock)', () => {
     await t.run();
     expect(t.picks()).toEqual({});
     expect(t.lock().entries.orphan!.select).toMatchObject({ retry: false });
+  });
+
+  it('the page shows emotion lines and picked lines, or all, or the ids asked', async () => {
+    const t = setup(`${SAD}\n\nhost: 평범한 첫 문장이에요. 평범한 둘째 문장이에요.`);
+    await t.run();
+    t.pick('one:1:1=0');
+    // the page goes to <repo>/out: a temporary repo root
+    copyFileSync(join(REPO, 'models.lock.json'), join(t.dir, 'models.lock.json'));
+    const shown = async (all: boolean, ids: string[]) => {
+      const r = await buildTakesPage(t.path, t.script(), t.dir, { all, ids, log: () => {} });
+      const html = readFileSync(r.html, 'utf8');
+      const data = JSON.parse(
+        /<script id="data" type="application\/json">([\s\S]*?)<\/script>/.exec(html)![1]!,
+      ) as PageData;
+      return { data, notes: r.notes };
+    };
+    const def = await shown(false, []);
+    expect(def.data.lines.filter((l) => l.target).map((l) => l.id)).toEqual(['one:0:0', 'one:1:1']);
+    // the line before a shown one is carried for the context playback
+    expect(def.data.lines.filter((l) => !l.target).map((l) => l.id)).toEqual(['one:1:0']);
+    expect(def.notes.join('\n')).toMatch(/S2V_TTS=mock/);
+    // mock: no take cache, the lock take only
+    expect(def.data.lines[0]!.takes.map((x) => [x.n, x.source])).toEqual([
+      [def.data.lines[0]!.lockTake, 'lock'],
+    ]);
+    expect((await shown(true, [])).data.lines.filter((l) => l.target)).toHaveLength(3);
+    expect(
+      (await shown(false, ['one:1:0'])).data.lines.filter((l) => l.target).map((l) => l.id),
+    ).toEqual(['one:1:0']);
   });
 });
