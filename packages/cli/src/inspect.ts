@@ -31,6 +31,7 @@ import {
   type InspectError,
   type Script,
   type ScreenText,
+  engineOf,
 } from '@script2video/core';
 import {
   assignSides,
@@ -254,12 +255,16 @@ export function inspectScript(
             maxPause: meta.pacing.maxPause,
             ref: (j.synthFields as { ref?: string }).ref,
             refText: (j.synthFields as { refText?: string }).refText,
+            // a trained persona speaker (stage 4): its vector is the voice
+            speaker: (j.synthFields as { speaker?: string }).speaker,
           });
         }
       }
     voice = hashOf({ lang: meta.lang, sentences });
     for (const j of plan.jobs)
       if (j.target.ref) files.sha(relative(scriptDir, j.target.ref.wavPath), 'voice');
+    for (const j of plan.jobs)
+      if (j.target.speaker?.path) files.sha(relative(scriptDir, j.target.speaker.path), 'voice');
     // audio: (lock key, wav sha) of every sentence, from the committed lock
     const lockDir = join(scriptDir, 'audio', meta.lang);
     const manifestPath = join(lockDir, 'manifest.json');
@@ -485,7 +490,7 @@ export function inspectScript(
   const voices = Object.entries(meta.cast).map(([key, m]) => ({
     cast: key,
     voice: m.voice,
-    engine: m.voice.split(':')[0]!,
+    engine: engineOf(m),
     lang: meta.lang,
   }));
   const version = (

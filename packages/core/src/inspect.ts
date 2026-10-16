@@ -105,6 +105,7 @@ export const FRONTMATTER: Record<string, Kind> = {
   lang: 'structure',
   'cast.*.voice': 'voice',
   'cast.*.style': 'voice',
+  'cast.*.personaModel': 'voice',
   'cast.*.speed': 'voice',
   'cast.*.name': 'text',
   'cast.*.draftVoice': 'structure',

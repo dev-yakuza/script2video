@@ -26,6 +26,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   ACTING_VERSION,
+  actsEmotion,
   analyzeLevels,
   endsWithQuestion,
   ESTIMATE_RATE,
@@ -34,6 +35,7 @@ import {
   MAX_TAKES,
   selectTake,
   takeBudgetDone,
+  type Engine,
   type Neighbor,
   type TakeContext,
   type TakeFacts,
@@ -87,7 +89,7 @@ import {
   type TakeJob,
   type WavFacts,
 } from './take-judge.js';
-import { resolvePersona, type PersonaRef } from './persona.js';
+import { isTrainedProblem, resolvePersona, resolveTrained, type PersonaRef } from './persona.js';
 import { ALIGNER, Service, TTS_SERVER } from './services.js';
 import {
   ClipVectors,
@@ -95,6 +97,7 @@ import {
   describeVoice,
   embed,
   loadReference,
+  synthesisBody,
   type LoadedReference,
   type RefServices,
   type RefVoice,
@@ -122,9 +125,10 @@ function hashKey(fields: unknown): string {
 const TAKE_MEASURE_VERSION = 1;
 const MEASURE_CONSTANTS = { EDGE_PAD_LEAD_S, EDGE_PAD_TAIL_S, levels: 'analyzeLevels-v1' };
 /** Seconds per take, synthesis and measuring (2a runs: 2.7–6.7 s), for the time estimate. */
-const TAKE_SECONDS: Record<'qwen' | 'persona' | 'supertonic', number> = {
+const TAKE_SECONDS: Record<Engine, number> = {
   qwen: 5,
   persona: 5,
+  trained: 5,
   supertonic: 2,
 };
 /** Takes a line needs on average (stage 3 plan 9), takes of a new voice reference, server start. */
@@ -299,11 +303,13 @@ export interface LockManifest {
 }
 
 interface VoiceTarget {
-  engine: 'qwen' | 'persona' | 'supertonic';
+  engine: Engine;
   voice: string;
   modelName: string;
   /** persona only: the reference clip the Base model clones. */
   ref?: PersonaRef;
+  /** trained only: the speaker file and its vector sha (stage 4). */
+  speaker?: { path: string; vectorSha: string };
 }
 
 export function voiceTarget(member: CastMember, lang: Lang, scriptDir: string): VoiceTarget {
@@ -312,9 +318,39 @@ export function voiceTarget(member: CastMember, lang: Lang, scriptDir: string): 
     return { engine: 'qwen', voice: name, modelName: 'qwen3-tts-1.7b-customvoice' };
   if (kind === 'supertonic')
     return { engine: 'supertonic', voice: name, modelName: 'supertonic-3' };
+  if (member.personaModel === 'trained') {
+    // the CustomVoice model with the trained speaker row; the clip is not part of the voice
+    const t = resolveTrained(name, lang, scriptDir);
+    if (isTrainedProblem(t)) throw new Error(t.message);
+    return {
+      engine: 'trained',
+      voice: name,
+      modelName: 'qwen3-tts-1.7b-customvoice',
+      speaker: { path: t.path, vectorSha: t.vectorSha },
+    };
+  }
   const ref = resolvePersona(name, lang, scriptDir);
   if (typeof ref === 'string') throw new Error(ref);
   return { engine: 'persona', voice: name, modelName: 'qwen3-tts-1.7b-base', ref };
+}
+
+/**
+ * A persona target for mock runs: no clip needed; a trained one keys on its speaker file when it
+ * exists (so a new vector re-synthesizes), else on a placeholder.
+ */
+function mockPersonaTarget(member: CastMember, lang: Lang, scriptDir: string): VoiceTarget {
+  const voice = member.voice.slice(8);
+  if (member.personaModel !== 'trained')
+    return { engine: 'persona', voice, modelName: 'qwen3-tts-1.7b-base' };
+  const t = resolveTrained(voice, lang, scriptDir);
+  return {
+    engine: 'trained',
+    voice,
+    modelName: 'qwen3-tts-1.7b-customvoice',
+    speaker: isTrainedProblem(t)
+      ? { path: '', vectorSha: 'mock' }
+      : { path: t.path, vectorSha: t.vectorSha },
+  };
 }
 
 export function wavDuration(path: string): number {
@@ -519,7 +555,8 @@ export function planSentences(
     const voice =
       member.draftVoice ??
       `supertonic:${DRAFT_VOICES[castOrder.indexOf(castKey) % DRAFT_VOICES.length]}`;
-    return { ...member, voice, style: undefined };
+    // a draft speaks plainly: no style, and its voice is no trained speaker
+    return { ...member, voice, style: undefined, personaModel: undefined };
   };
   const models = (
     JSON.parse(readFileSync(join(repoRoot, 'models.lock.json'), 'utf8')) as {
@@ -558,12 +595,12 @@ export function planSentences(
         continue;
       }
       const member = memberFor(block.cast);
-      // Mock runs need no persona reference clips (CI has none).
+      // Mock runs need no persona reference clips or trained speakers (CI has none).
       let target: VoiceTarget;
       try {
         target =
           mock && member.voice.startsWith('persona:')
-            ? { engine: 'persona', voice: member.voice.slice(8), modelName: 'qwen3-tts-1.7b-base' }
+            ? mockPersonaTarget(member, meta.lang, dirname(scriptPath))
             : voiceTarget(member, meta.lang, dirname(scriptPath));
       } catch (e) {
         plan.errors.push({ id: sentenceId(scene.id, bi, 0), message: (e as Error).message });
@@ -574,8 +611,8 @@ export function planSentences(
         const acting = sentence.acting;
         // a draft speaks plainly (plan 3: no template or say, whatever the draft voice is)
         const { instruct, template } =
-          target.engine === 'qwen' && !opts.draft
-            ? instructFor(meta, member.style, acting)
+          actsEmotion(target.engine) && !opts.draft
+            ? instructFor(meta, member.style, acting, target.engine)
             : { instruct: '', template: false };
         const speed = speedProduct(meta, member, acting);
         const id = sentenceId(scene.id, bi, si);
@@ -613,6 +650,8 @@ export function planSentences(
           voice: target.voice,
           // persona: the exact reference clip and its sentence define the voice
           ...(target.ref ? { ref: target.ref.sha256, refText: target.ref.text } : {}),
+          // trained: the speaker row (stage 4) — a new vector is a new voice
+          ...(target.speaker ? { speaker: target.speaker.vectorSha } : {}),
           instruct,
           lang: meta.lang,
           speed: synthSpeed,
@@ -767,13 +806,20 @@ export async function synthesizeScript(
     voice: job.target.voice,
     lang: meta.lang,
     modelName: job.target.modelName,
-    ...(job.target.engine === 'qwen' && job.member.style ? { style: job.member.style } : {}),
+    ...(actsEmotion(job.target.engine) && job.member.style ? { style: job.member.style } : {}),
     ...(job.target.ref ? { ref: job.target.ref } : {}),
+    ...(job.target.speaker ? { speaker: job.target.speaker } : {}),
   });
   // A voice whose reference cannot be read, made or embedded is left unchecked with a warning, like
   // a failing take (Q3): the consistency check never stops a run.
   const voiceKey = (v: RefVoice) =>
-    JSON.stringify([v.engine, v.voice, v.style ?? '', v.ref?.sha256 ?? '']);
+    JSON.stringify([
+      v.engine,
+      v.voice,
+      v.style ?? '',
+      v.ref?.sha256 ?? '',
+      v.speaker?.vectorSha ?? '',
+    ]);
   const unchecked = (v: RefVoice, e: unknown) => {
     warnings.push(
       `${describeVoice(v)}: not checked for pitch and similarity (${(e as Error).message.slice(0, 200)})`,
@@ -893,15 +939,11 @@ export async function synthesizeScript(
     if (info && existsSync(raw)) return { raw, info, synthesized: false };
     await ensureServices();
     const { data: wav, headers } = await tts.post<Buffer>('/synthesize', {
-      engine: job.target.engine,
-      voice: job.target.voice,
+      ...synthesisBody(job.target),
       lang: meta.lang,
       text: job.ttsText,
       ...(job.synthFields.instruct ? { instruct: job.synthFields.instruct } : {}),
       speed: job.synthFields.speed,
-      ...(job.target.ref
-        ? { ref_wav_path: job.target.ref.wavPath, ref_text: job.target.ref.text }
-        : {}),
       seed_material: `${job.synthKey}:${n}`,
     });
     const meta2 = JSON.parse(headers.get('x-s2v-meta') ?? '{}') as { model: string; seed: number };

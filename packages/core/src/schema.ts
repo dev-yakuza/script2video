@@ -15,6 +15,11 @@ export const castMemberSchema = z.object({
   name: z.string().optional(),
   style: z.string().optional(),
   speed: z.number().min(0.5).max(2).default(1),
+  /**
+   * A persona voice as a clone of its reference (default), or as the speaker trained from it by
+   * `s2v voice train` (acting stage 4): the trained speaker follows emotion instructions.
+   */
+  personaModel: z.enum(['clone', 'trained']).optional(),
   draftVoice: voiceSpecSchema.optional(),
   avatar: z.string().optional(),
   /**

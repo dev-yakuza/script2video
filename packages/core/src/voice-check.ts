@@ -55,10 +55,12 @@ export const PITCH_RISING_ST = 1;
 /** Measured reference voice, committed next to the voice (see voice-refs.ts in the CLI). */
 export interface VoiceReference {
   version: number;
-  engine: 'qwen' | 'persona' | 'supertonic';
+  engine: 'qwen' | 'persona' | 'trained' | 'supertonic';
   voice: string;
   lang: Lang;
-  /** qwen: the cast's style instruction the takes were made with. */
+  /** trained: sha of the speaker vector the takes were made with (stage 4). */
+  vectorSha?: string;
+  /** qwen, trained: the cast's style instruction the takes were made with. */
   style?: string;
   /** Synthesis model and revision of the takes. */
   model: string;

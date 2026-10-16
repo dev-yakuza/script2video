@@ -18,8 +18,10 @@ import { dirname, join } from 'node:path';
 import {
   consistencyReasons,
   cosine,
+  actsEmotion,
   emotionSentence,
   engineOf,
+  type Engine,
   medoid,
   normalizeForCer,
   REF_SEEDS,
@@ -40,13 +42,41 @@ import { postprocess, voiceTarget, wavDuration } from './tts.js';
 const EMBED_MODEL = 'qwen3-tts-1.7b-base';
 
 export interface RefVoice {
-  engine: 'qwen' | 'persona' | 'supertonic';
+  engine: Engine;
   voice: string;
   lang: Lang;
   modelName: string;
-  /** qwen: the cast's style instruction (part of the voice). */
+  /** qwen, trained: the cast's style instruction (part of the voice). */
   style?: string;
   ref?: PersonaRef;
+  /** trained: the speaker file and its vector (stage 4). */
+  speaker?: { path: string; vectorSha: string };
+}
+
+/**
+ * The voice part of a `/synthesize` request: a trained speaker goes to the server's
+ * `persona-trained` engine with its file and sha (checked there), a persona with its clip.
+ */
+export function synthesisBody(v: {
+  engine: Engine;
+  voice: string;
+  ref?: PersonaRef;
+  speaker?: { path: string; vectorSha: string };
+}): Record<string, string> {
+  if (v.engine === 'trained') {
+    if (!v.speaker) throw new Error(`trained ${v.voice} has no speaker file`);
+    return {
+      engine: 'persona-trained',
+      voice: v.voice,
+      speaker_path: v.speaker.path,
+      vector_sha: v.speaker.vectorSha,
+    };
+  }
+  return {
+    engine: v.engine,
+    voice: v.voice,
+    ...(v.ref ? { ref_wav_path: v.ref.wavPath, ref_text: v.ref.text } : {}),
+  };
 }
 
 export interface LoadedReference {
@@ -67,6 +97,8 @@ export function describeVoice(v: RefVoice): string {
 
 /** Where the reference of a voice is (or would be created): relative path inside a voices dir. */
 function relativePath(v: RefVoice): { json: string; clip: string } {
+  if (v.engine === 'trained')
+    throw new Error('a trained speaker keeps its reference next to its speaker file');
   if (v.engine === 'qwen') {
     const base = join('_qwen', v.voice, `${v.lang}-${styleHash(v.style)}`);
     return { json: `${base}.json`, clip: `${base}.wav` };
@@ -84,6 +116,16 @@ export function referenceLocation(
     const dir = dirname(v.ref.wavPath);
     const jsonPath = join(dir, `${v.lang}.f0.json`);
     return { jsonPath, clipPath: v.ref.wavPath, exists: existsSync(jsonPath) };
+  }
+  if (v.engine === 'trained') {
+    // next to the speaker file; a styled cast has its own (the speaker follows the style)
+    if (!v.speaker?.path) throw new Error(`trained ${v.voice} has no speaker file`);
+    const base = join(
+      dirname(v.speaker.path),
+      `${v.lang}.trained${v.style ? `-${styleHash(v.style)}` : ''}`,
+    );
+    const jsonPath = `${base}.json`;
+    return { jsonPath, clipPath: `${base}.wav`, exists: existsSync(jsonPath) };
   }
   const rel = relativePath(v);
   const dirs = personaSearchDirs(scriptDir);
@@ -121,6 +163,9 @@ export function loadReference(
     return { loaded, stale: `recipe v${ref.version} → v${VOICE_REF_VERSION}`, warning: null };
   if (v.engine === 'persona' && ref.refSha !== v.ref?.sha256)
     return { loaded, stale: 'the persona reference clip changed', warning: null };
+  // measured from the voice itself: a new vector needs a new reference (stage 4 plan 3)
+  if (v.engine === 'trained' && ref.vectorSha !== v.speaker?.vectorSha)
+    return { loaded, stale: 'the trained speaker changed', warning: null };
   if (!existsSync(loc.clipPath) || sha256(readFileSync(loc.clipPath)) !== ref.clipSha)
     return { loaded, stale: `${loc.clipPath} is missing or was edited`, warning: null };
   const warnings = [
@@ -169,6 +214,8 @@ export async function createReference(
       v.ref?.sha256 ?? '',
       revisions[v.modelName],
       TTS_SERVER.wrapper,
+      // trained: takes of another vector are another voice
+      ...(v.speaker ? [v.speaker.vectorSha] : []),
     ]),
   ).slice(0, 24);
   const work = join(repoRoot, '.s2v-cache', 'voice-refs', id);
@@ -187,13 +234,11 @@ export async function createReference(
         seed = (JSON.parse(readFileSync(metaPath, 'utf8')) as { seed: number }).seed;
       } else {
         const { data, headers } = await services.tts.post<Buffer>('/synthesize', {
-          engine: v.engine,
-          voice: v.voice,
+          ...synthesisBody(v),
           lang: v.lang,
           text,
           ...(v.style ? { instruct: v.style } : {}),
           speed: 1,
-          ...(v.ref ? { ref_wav_path: v.ref.wavPath, ref_text: v.ref.text } : {}),
           seed_material: JSON.stringify(['voice-ref', id, s, n]),
         });
         seed = (JSON.parse(headers.get('x-s2v-meta') ?? '{}') as { seed: number }).seed;
@@ -243,6 +288,7 @@ export async function createReference(
     model: v.modelName,
     revision: revisions[v.modelName]!,
     ...(v.ref ? { refSha: v.ref.sha256 } : {}),
+    ...(v.speaker ? { vectorSha: v.speaker.vectorSha } : {}),
     embedder: { model: EMBED_MODEL, revision: revisions[EMBED_MODEL]! },
     clip: loc.clipPath.split(/[\\/]/).pop()!,
     clipSha: sha256(readFileSync(loc.clipPath)),
@@ -401,11 +447,18 @@ export async function voiceRefs(
         voice: t.voice,
         lang: meta.lang,
         modelName: t.modelName,
-        ...(t.engine === 'qwen' && member.style ? { style: member.style } : {}),
+        ...(actsEmotion(t.engine) && member.style ? { style: member.style } : {}),
         ...(t.ref ? { ref: t.ref } : {}),
+        ...(t.speaker ? { speaker: t.speaker } : {}),
       };
       // Cast members sharing a voice share its reference: made once per run.
-      const key = JSON.stringify([v.engine, v.voice, v.style ?? '', v.ref?.sha256 ?? '']);
+      const key = JSON.stringify([
+        v.engine,
+        v.voice,
+        v.style ?? '',
+        v.ref?.sha256 ?? '',
+        v.speaker?.vectorSha ?? '',
+      ]);
       const { loaded, stale, warning } = loadReference(v, scriptDir, revisions);
       let r = loaded;
       let made = false;

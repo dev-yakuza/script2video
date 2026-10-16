@@ -37,14 +37,16 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
 sys.path.insert(0, str(HERE / "scripts"))
 from fetch_models import load_lock, snapshot_path  # noqa: E402
-from helpers import qwen_token_cap, sentence_seed  # noqa: E402
+from helpers import qwen_token_cap, read_speaker, sentence_seed, trained_request_error  # noqa: E402
 
 SERVER_ID = "script2video-tts"
-WRAPPER_VERSION = "0.3.0"
+WRAPPER_VERSION = "0.4.0"
 QWEN_LANG = {"ko": "Korean", "ja": "Japanese", "en": "English"}
 QWEN_MODELS = {"1.7b": "qwen3-tts-1.7b-customvoice", "0.6b": "qwen3-tts-0.6b-customvoice"}
 BASE_MODEL = "qwen3-tts-1.7b-base"
 DESIGN_MODEL = "qwen3-tts-1.7b-voicedesign"
+# a trained persona speaker is given in place of this preset (it only passes validation)
+TRAINED_SLOT = "aiden"
 SUPERTONIC_DEFAULT_SPEED = 1.05  # our speed 1.0 maps to Supertonic's default (PLAN 5.2)
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -57,7 +59,7 @@ def lock_hash() -> str:
 
 
 class SynthesizeRequest(BaseModel):
-    engine: Literal["qwen", "persona", "supertonic"]
+    engine: Literal["qwen", "persona", "persona-trained", "supertonic"]
     voice: str = Field(description="qwen speaker (e.g. Sohee), supertonic voice (F1-F5, M1-M5) or persona id")
     lang: Literal["ko", "ja", "en"]
     text: str = Field(min_length=1, max_length=2000)
@@ -69,6 +71,9 @@ class SynthesizeRequest(BaseModel):
     # persona only: the reference clip (made by /design) and the sentence it says
     ref_wav_path: str | None = None
     ref_text: str | None = None
+    # persona-trained only: the speaker file and the vector sha the request was planned with
+    speaker_path: str | None = None
+    vector_sha: str | None = None
 
 
 class DesignRequest(BaseModel):
@@ -96,6 +101,7 @@ class Engines:
         self._qwen: dict[str, object] = {}
         self._extra: dict[str, object] = {}  # Base / VoiceDesign
         self._prompts: dict[str, object] = {}  # voice clone prompts by reference hash
+        self._speakers: dict[str, object] = {}  # trained speaker vectors by sha
         self._supertonic = None
         self._lock = threading.Lock()  # torch/numpy seeds are global: one inference at a time
 
@@ -138,6 +144,22 @@ class Engines:
                 ref_audio=(wav, sr), ref_text=ref_text
             )
         return self._prompts[key]
+
+    def _speaker(self, path: str, planned_sha: str):
+        """The trained vector as a tensor; the file must still be the one the request was planned with."""
+        import torch
+
+        try:
+            vector, sha = read_speaker(path)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        if sha != planned_sha:
+            raise HTTPException(409, f"{path} changed since the request was planned (vector sha {sha[:12]})")
+        if sha not in self._speakers:
+            self._speakers[sha] = torch.tensor(vector, dtype=torch.float32)
+        return self._speakers[sha]
 
     def _sync(self) -> None:
         if self.device == "mps":
@@ -206,6 +228,32 @@ class Engines:
                 )
                 self._sync()
                 return Synthesized(np.asarray(wavs[0], dtype=np.float32), sr, QWEN_MODELS[req.model_size], seed)
+            if req.engine == "persona-trained":
+                import torch
+
+                problem = trained_request_error(req.model_size, req.speaker_path, req.vector_sha)
+                if problem:
+                    raise HTTPException(400, problem)
+                vector = self._speaker(req.speaker_path, req.vector_sha)
+                model = self._qwen_model("1.7b")
+                torch.manual_seed(seed)
+                # the vector goes where the speaker row would (a voice clone prompt in x-vector
+                # mode): the model itself is never changed (acting stage 4 plan 4)
+                wavs, sr = model.generate_custom_voice(
+                    text=req.text,
+                    speaker=TRAINED_SLOT,
+                    language=QWEN_LANG[req.lang],
+                    instruct=req.instruct,
+                    max_new_tokens=cap,
+                    voice_clone_prompt={
+                        "ref_code": [None],
+                        "ref_spk_embedding": [vector],
+                        "x_vector_only_mode": [True],
+                        "icl_mode": [False],
+                    },
+                )
+                self._sync()
+                return Synthesized(np.asarray(wavs[0], dtype=np.float32), sr, QWEN_MODELS["1.7b"], seed)
             if req.engine == "persona":
                 import torch
 

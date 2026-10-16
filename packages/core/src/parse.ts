@@ -1047,7 +1047,14 @@ export function parseScript(source: string): ParseResult {
     }
   }
   for (const [key, member] of Object.entries(meta.cast)) {
-    const usesPersonaOrSmall = member.voice.startsWith('persona:');
+    const persona = member.voice.startsWith('persona:');
+    if (member.personaModel !== undefined && !persona)
+      diags.error(
+        'persona-model',
+        `cast.${key}.personaModel is for persona voices only (${member.voice})`,
+      );
+    // a trained persona speaker takes instructions like the Qwen presets (stage 4)
+    const usesPersonaOrSmall = persona && member.personaModel !== 'trained';
     if (member.style && usesPersonaOrSmall) {
       diags.error(
         'style-unsupported',
@@ -1078,7 +1085,8 @@ export function parseScript(source: string): ParseResult {
   for (const scene of scenes)
     for (const b of scene.blocks) {
       if (b.kind !== 'paragraph' || b.audio) continue;
-      if (!isCast(b.cast) || !meta.cast[b.cast]!.voice.startsWith('persona:')) continue;
+      const m = isCast(b.cast) ? meta.cast[b.cast]! : undefined;
+      if (!m || !m.voice.startsWith('persona:') || m.personaModel === 'trained') continue;
       if (b.sentences.some((x) => x.acting?.say !== undefined))
         diags.error(
           'say-unsupported',

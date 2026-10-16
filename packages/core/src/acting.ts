@@ -67,6 +67,14 @@ export const TEMPLATES_V1: Record<Emotion, string> = {
   moved: 'Sound touched and grateful: warm and soft, sincere, speaking from the heart.',
   playful: 'Sound playful: teasing and light, a mischievous smile in the voice, bouncy rhythm.',
 };
+
+/**
+ * The strong wording of a template (stage 4 plan 2): "Sound very …" where the E1b experiments put
+ * their power slot. Only a trained speaker's `power=strong` emotion lines use it.
+ */
+export const STRONG_TEMPLATES_V1: Record<Emotion, string> = Object.fromEntries(
+  Object.entries(TEMPLATES_V1).map(([emo, t]) => [emo, t.replace(/^Sound /, 'Sound very ')]),
+) as Record<Emotion, string>;
 /** Appended to every emotion instruction: emotional prompts invite sighs and breaths (E1). */
 export const CLOSE = ' Say only the words, with no sighs, breaths, laughter or other sounds.';
 
@@ -173,6 +181,7 @@ export function actingTable(): unknown {
   return {
     version: ACTING_VERSION,
     templates: TEMPLATES_V1,
+    strong: STRONG_TEMPLATES_V1,
     close: CLOSE,
     sets: { HIGH_PITCH, LOW_AROUSAL, ENDING_LIFT },
     motion: EMOTION_MOTION,
@@ -186,7 +195,14 @@ export function actingTable(): unknown {
   };
 }
 
-export type Engine = 'qwen' | 'persona' | 'supertonic';
+/**
+ * Engines: Qwen preset speakers, a persona as a clone of its reference, a persona as its trained
+ * speaker (stage 4), Supertonic.
+ */
+export type Engine = 'qwen' | 'persona' | 'trained' | 'supertonic';
+
+/** Engines that follow an instruction: emotion templates, `say` and the cast style. */
+export const actsEmotion = (engine: Engine) => engine === 'qwen' || engine === 'trained';
 
 /** Speeds Supertonic takes (the server accepts 1.05 × speed within 0.7–2.0, tts-server/server.py). */
 export const SUPERTONIC_SPEED: [number, number] = [0.7 / 1.05, 2.0 / 1.05];
@@ -194,7 +210,9 @@ export const SUPERTONIC_SPEED: [number, number] = [0.7 / 1.05, 2.0 / 1.05];
 /** The engine of a cast voice as written in the script. */
 export function engineOf(member: CastMember): Engine {
   const kind = member.voice.split(':')[0];
-  return kind === 'qwen' ? 'qwen' : kind === 'supertonic' ? 'supertonic' : 'persona';
+  if (kind === 'qwen') return 'qwen';
+  if (kind === 'supertonic') return 'supertonic';
+  return member.personaModel === 'trained' ? 'trained' : 'persona';
 }
 
 const userEmotion = (meta: Frontmatter, emo: string | undefined): UserEmotion | undefined =>
@@ -203,25 +221,28 @@ const userEmotion = (meta: Frontmatter, emo: string | undefined): UserEmotion | 
     : undefined;
 
 /**
- * An emotion line: an emotion template goes into the instruction (qwen, emo other than neutral).
- * Only these get the new gates and, from stage 3, several takes.
+ * An emotion line: an emotion template goes into the instruction (an engine that acts, emo other
+ * than neutral). Only these get the new gates and, from stage 3, several takes.
  */
 export function emotionSentence(
   engine: Engine,
   acting: Acting | undefined,
   draft = false,
 ): boolean {
-  return !draft && engine === 'qwen' && acting?.emo !== undefined && acting.emo !== 'neutral';
+  return !draft && actsEmotion(engine) && acting?.emo !== undefined && acting.emo !== 'neutral';
 }
 
 /**
  * The instruction sent to the model: `[style] [template or user emotion voice + CLOSE] [say]`.
- * Without `emo` and `say` it is the cast style alone, as before (A3).
+ * Without `emo` and `say` it is the cast style alone, as before (A3). A trained speaker's
+ * `power=strong` emotion line takes the strong wording (stage 4 plan 2; the Qwen presets choose a
+ * stronger take instead).
  */
 export function instructFor(
   meta: Frontmatter,
   style: string | undefined,
   acting: Acting | undefined,
+  engine: Engine,
 ): { instruct: string; template: boolean } {
   const parts: string[] = [];
   if (style) parts.push(style);
@@ -229,9 +250,12 @@ export function instructFor(
   const emo = acting?.emo;
   if (emo !== undefined) {
     const user = userEmotion(meta, emo);
+    const strong =
+      engine === 'trained' && acting?.power === 'strong' && emotionSentence(engine, acting);
     // CLOSE is part of the acting table: a user emotion's instruction is versioned too.
-    if (user) parts.push(user.voice.trim() + CLOSE);
-    else if (isStandardEmotion(emo)) parts.push(TEMPLATES_V1[emo] + CLOSE);
+    if (user) parts.push((strong ? 'Very strongly: ' : '') + user.voice.trim() + CLOSE);
+    else if (isStandardEmotion(emo))
+      parts.push((strong ? STRONG_TEMPLATES_V1[emo] : TEMPLATES_V1[emo]) + CLOSE);
     template = !!user || isStandardEmotion(emo);
   }
   if (acting?.say) parts.push(acting.say);
@@ -284,7 +308,9 @@ export function gainFor(meta: Frontmatter, paragraph: Paragraph, sentence: Sente
   if (!a) return 0;
   let db = a.volume ? VOLUME_DB[a.volume] : 0;
   const member = meta.cast[paragraph.cast];
-  if (!paragraph.audio && a.power && member && engineOf(member) !== 'qwen') db += POWER_DB[a.power];
+  // engines that act choose a take by power instead (stage 3)
+  if (!paragraph.audio && a.power && member && !actsEmotion(engineOf(member)))
+    db += POWER_DB[a.power];
   return db;
 }
 

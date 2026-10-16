@@ -11,7 +11,10 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "scripts"))
 
 from fetch_models import snapshot_path  # noqa: E402
-from helpers import qwen_token_cap, sentence_seed  # noqa: E402
+import json  # noqa: E402
+import tempfile  # noqa: E402
+
+from helpers import qwen_token_cap, read_speaker, sentence_seed, trained_request_error, vector_sha  # noqa: E402
 
 
 class HelpersTest(unittest.TestCase):
@@ -31,6 +34,51 @@ class HelpersTest(unittest.TestCase):
         # packages/cli/src/doctor.ts builds the same name; both must agree.
         p = snapshot_path("qwen3-tts-1.7b-customvoice", "0c0e3051f131929182e2c023b9537f8b1c68adfe")
         self.assertEqual(p.name, "qwen3_tts_1_7b_customvoice__0c0e3051f131")
+
+
+# the same vector and sha as packages/cli/test/trained.test.ts (TS vectorShaOf)
+VECTOR = [(i % 97) / 97 - 0.5 for i in range(2048)]
+VECTOR_SHA = "19951df2c2bbb16a0591221c3f18bdff4e47c8d7a8d72891f706b9d7ccbe6512"
+
+
+class SpeakerTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def write(self, data: object) -> str:
+        p = Path(self.tmp.name) / f"s{len(list(Path(self.tmp.name).iterdir()))}.json"
+        p.write_text(json.dumps(data))
+        return str(p)
+
+    def test_sha_matches_the_cli(self) -> None:
+        self.assertEqual(vector_sha(VECTOR), VECTOR_SHA)
+
+    def test_reads_a_good_file_and_refuses_a_damaged_one(self) -> None:
+        good = {"version": 1, "vector": VECTOR, "vectorSha": VECTOR_SHA}
+        self.assertEqual(read_speaker(self.write(good))[1], VECTOR_SHA)
+        for bad in (
+            {**good, "vector": VECTOR[:-1]},
+            {**good, "vector": [0.1] + VECTOR[1:]},
+            {**good, "version": 2},
+            # a bool in place of 1.0, with the sha it would have: refused for being a bool
+            {**good, "vector": [True] + VECTOR[1:], "vectorSha": vector_sha([1.0] + VECTOR[1:])},
+            {**good, "vector": [10**400] + VECTOR[1:]},
+            {**good, "vector": [3.5e38] + VECTOR[1:]},
+            [1, 2, 3],
+        ):
+            with self.assertRaises(ValueError):
+                read_speaker(self.write(bad))
+        with self.assertRaises(FileNotFoundError):
+            read_speaker("/nonexistent/speaker.json")
+
+    def test_request_checks(self) -> None:
+        self.assertIsNone(trained_request_error("1.7b", "/a.json", "abc"))
+        self.assertIsNotNone(trained_request_error("0.6b", "/a.json", "abc"))
+        self.assertIsNotNone(trained_request_error("1.7b", None, "abc"))
+        self.assertIsNotNone(trained_request_error("1.7b", "/a.json", None))
 
 
 if __name__ == "__main__":

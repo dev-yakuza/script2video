@@ -3,8 +3,8 @@
  * screenshots that will look soft because they are enlarged too much on screen.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import {
   bgmOf,
   logoOf,
@@ -13,6 +13,7 @@ import {
   sentenceFace,
   type Diagnostic,
   type Framing,
+  type Lang,
   type Script,
 } from '@script2video/core';
 import {
@@ -26,7 +27,7 @@ import {
   type CharacterSpec,
 } from '@script2video/renderer-remotion';
 import { importedFaceProblems, partsFaceProblems } from './cast-faces.js';
-import { resolvePersona } from './persona.js';
+import { isTrainedProblem, resolvePersona, resolveTrained, type PersonaRef } from './persona.js';
 import { loadGraph } from './character-gen/commands.js';
 import { PROVENANCE, status } from './character-gen/state.js';
 
@@ -239,9 +240,13 @@ export function lintCast(script: Script, scriptDir: string): Diagnostic[] {
         message: `cast.${key}.avatar not found: ${m.avatar}`,
       });
     if (m.voice.startsWith('persona:') && speaking.has(key)) {
-      const ref = resolvePersona(m.voice.slice('persona:'.length), meta.lang, scriptDir);
+      const id = m.voice.slice('persona:'.length);
+      const ref = resolvePersona(id, meta.lang, scriptDir);
+      if (m.personaModel === 'trained')
+        out.push(...lintTrained(key, id, meta.lang, scriptDir, ref));
       // Not an error: draft renders use draftVoice / Supertonic and need no reference clip.
-      if (typeof ref === 'string') out.push({ severity: 'warning', code: 'persona', message: ref });
+      else if (typeof ref === 'string')
+        out.push({ severity: 'warning', code: 'persona', message: ref });
     }
   }
   for (const key of speaking) {
@@ -539,4 +544,66 @@ export function lintPartsCharacter(
     }
   }
   return out;
+}
+
+/**
+ * A trained persona speaker (acting stage 4): the file must be there and intact; trained from
+ * another reference clip or model revision, it still plays but should be trained again.
+ */
+function lintTrained(
+  key: string,
+  id: string,
+  lang: Lang,
+  scriptDir: string,
+  ref: PersonaRef | string,
+): Diagnostic[] {
+  const t = resolveTrained(id, lang, scriptDir);
+  // not trained yet: a warning (drafts and mock runs need no speaker; tts stops on it), a damaged
+  // file: an error
+  if (isTrainedProblem(t))
+    return [
+      {
+        severity: t.kind === 'missing' ? 'warning' : 'error',
+        code: 'persona-trained',
+        message: `cast.${key}: ${t.message}`,
+      },
+    ];
+  const out: Diagnostic[] = [];
+  if (typeof ref === 'string')
+    out.push({
+      severity: 'warning',
+      code: 'persona-trained',
+      message: `cast.${key}: cannot compare the trained speaker with the current reference (${ref})`,
+    });
+  else if (ref.sha256 !== t.referenceSha)
+    out.push({
+      severity: 'warning',
+      code: 'persona-trained',
+      message: `cast.${key}: persona "${id}" was trained from another ${lang} reference clip — train it again (s2v voice train)`,
+    });
+  const revision = customVoiceRevision(scriptDir);
+  if (revision && revision !== t.revision)
+    out.push({
+      severity: 'warning',
+      code: 'persona-trained',
+      message: `cast.${key}: persona "${id}" was trained for another model revision — training it again is recommended (s2v voice train)`,
+    });
+  return out;
+}
+
+/** The CustomVoice revision in the nearest models.lock.json above the script (null: none). */
+function customVoiceRevision(scriptDir: string): string | null {
+  for (let dir = resolve(scriptDir); ; dir = dirname(dir)) {
+    const p = join(dir, 'models.lock.json');
+    if (existsSync(p))
+      try {
+        return (
+          (JSON.parse(readFileSync(p, 'utf8')) as { models: Record<string, { revision: string }> })
+            .models['qwen3-tts-1.7b-customvoice']?.revision ?? null
+        );
+      } catch {
+        return null;
+      }
+    if (dirname(dir) === dir) return null;
+  }
 }

@@ -155,7 +155,7 @@ export const TTS_SERVER: ServiceSpec = {
   get port() {
     return portFrom('S2V_TTS_PORT', 47861);
   },
-  wrapper: '0.3.0',
+  wrapper: '0.4.0',
 };
 export const ALIGNER: ServiceSpec = {
   id: 'script2video-aligner',

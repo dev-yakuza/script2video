@@ -95,6 +95,107 @@ export function resolvePersona(id: string, lang: Lang, scriptDir: string): Perso
   return { id, lang, wavPath, text: clip.text, sha256 };
 }
 
+// ---------- trained speakers (acting stage 4) ----------
+
+/** Dimension of a CustomVoice speaker row (Qwen3-TTS 1.7B). */
+export const SPEAKER_DIM = 2048;
+
+/** `voices/<id>/<lang>.speaker.json`: the speaker row trained by `s2v voice train`. */
+export interface SpeakerFile {
+  version: 1;
+  vector: number[];
+  model: string;
+  revision: string;
+  referenceSha: string;
+  vectorSha: string;
+  [k: string]: unknown;
+}
+
+/** Largest float32: a larger value would become Infinity when the vector is hashed or used. */
+const FLOAT32_MAX = 3.4028234663852886e38;
+
+/** sha256 of the vector as float32 little-endian bytes (the same in tts-server/helpers.py). */
+export function vectorShaOf(vector: readonly number[]): string {
+  const buf = Buffer.alloc(vector.length * 4);
+  vector.forEach((x, i) => buf.writeFloatLE(x, i * 4));
+  return createHash('sha256').update(buf).digest('hex');
+}
+
+/** A speaker file read and checked, or what is wrong with it. */
+export function readSpeaker(path: string): SpeakerFile | string {
+  let f: SpeakerFile;
+  try {
+    f = JSON.parse(readFileSync(path, 'utf8')) as SpeakerFile;
+  } catch (e) {
+    return `${path}: cannot read (${(e as Error).message})`;
+  }
+  if (typeof f !== 'object' || f === null || Array.isArray(f)) return `${path}: not a speaker file`;
+  if (f.version !== 1) return `${path}: version ${String(f.version)} is not supported`;
+  if (
+    !Array.isArray(f.vector) ||
+    f.vector.length !== SPEAKER_DIM ||
+    !f.vector.every((x) => typeof x === 'number' && Math.abs(x) <= FLOAT32_MAX)
+  )
+    return `${path}: vector must be ${SPEAKER_DIM} finite numbers`;
+  // the file's own sha is not trusted: a damaged or hand-edited vector is an error
+  if (vectorShaOf(f.vector) !== f.vectorSha)
+    return `${path}: vectorSha does not match the vector (damaged or edited) — train again`;
+  return f;
+}
+
+/** Why there is no usable trained speaker: not made yet (or no persona), or a damaged file. */
+export interface TrainedProblem {
+  kind: 'missing' | 'damaged';
+  message: string;
+}
+export const isTrainedProblem = (t: TrainedSpeaker | TrainedProblem): t is TrainedProblem =>
+  'kind' in t;
+
+export interface TrainedSpeaker {
+  id: string;
+  lang: Lang;
+  path: string;
+  vectorSha: string;
+  referenceSha: string;
+  revision: string;
+}
+
+/**
+ * The trained speaker of a persona, from the folder next to its yaml only (not another voices/
+ * folder), or an error saying what to run. It does not need the reference clip to be current: a
+ * changed clip is a lint warning (train again), not an error.
+ */
+export function resolveTrained(
+  id: string,
+  lang: Lang,
+  scriptDir: string,
+): TrainedSpeaker | TrainedProblem {
+  const yaml = findPersonaYaml(id, scriptDir);
+  if (!yaml)
+    return {
+      kind: 'missing',
+      message: `persona "${id}" not found (looked for ${personaSearchDirs(scriptDir)
+        .map((d) => join(d, `${id}.yaml`))
+        .join(', ')})`,
+    };
+  const path = join(dirname(yaml), id, `${lang}.speaker.json`);
+  if (!existsSync(path))
+    return {
+      kind: 'missing',
+      message: `persona "${id}" has no trained ${lang} speaker: run \`s2v voice train ${yaml} --lang ${lang}\` (or use personaModel: clone)`,
+    };
+  const f = readSpeaker(path);
+  if (typeof f === 'string') return { kind: 'damaged', message: f };
+  return {
+    id,
+    lang,
+    path,
+    vectorSha: f.vectorSha,
+    referenceSha: f.referenceSha,
+    revision: f.revision,
+  };
+}
+
 function loadPersona(yamlPath: string): { id: string; persona: Persona; dir: string } {
   const id = basename(yamlPath).replace(/\.ya?ml$/, '');
   if (!PERSONA_ID.test(id))

@@ -7,6 +7,7 @@
 import {
   emotionFace,
   emotionSentence,
+  actsEmotion,
   engineOf,
   sentenceFace,
   speedProduct,
@@ -56,11 +57,14 @@ export function lintActing(script: Script): Diagnostic[] {
           if (!b.audio) speedCheck(b.cast, speedProduct(meta, member, a), engine, line);
           continue;
         }
-        if (!b.audio && a.emo !== undefined && engine !== 'qwen')
+        if (!b.audio && a.emo !== undefined && !actsEmotion(engine))
           push({
             severity: 'info',
             code: 'acting-voice',
-            message: `${b.cast} (${member.voice}) cannot act emotions: emo=${a.emo} changes the face and motion only`,
+            message:
+              engine === 'persona'
+                ? `${b.cast} (${member.voice}) cannot act emotions as a clone: emo=${a.emo} changes the face and motion only — train it (s2v voice train) and set personaModel: trained`
+                : `${b.cast} (${member.voice}) cannot act emotions: emo=${a.emo} changes the face and motion only`,
             line,
           });
         if (!b.audio && a.say !== undefined && engine === 'supertonic')
@@ -71,7 +75,7 @@ export function lintActing(script: Script): Diagnostic[] {
             line,
           });
         // on an emotion line power picks the weakest / strongest take (stage 3)
-        if (!b.audio && a.power !== undefined && engine === 'qwen' && !emotionSentence(engine, a))
+        if (!b.audio && a.power !== undefined && actsEmotion(engine) && !emotionSentence(engine, a))
           push({
             severity: 'info',
             code: 'acting-power',

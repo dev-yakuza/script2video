@@ -228,16 +228,21 @@ describe('acting rules', () => {
   ).script!.meta;
 
   it('builds the instruction from style, template and say', () => {
-    expect(instructFor(meta, 'calm', undefined)).toEqual({ instruct: 'calm', template: false });
-    expect(instructFor(meta, undefined, { say: '속삭이듯' })).toEqual({
+    expect(instructFor(meta, 'calm', undefined, 'qwen')).toEqual({
+      instruct: 'calm',
+      template: false,
+    });
+    expect(instructFor(meta, undefined, { say: '속삭이듯' }, 'qwen')).toEqual({
       instruct: '속삭이듯',
       template: false,
     });
-    expect(instructFor(meta, 'calm', { emo: 'sad', say: '천천히' })).toEqual({
+    expect(instructFor(meta, 'calm', { emo: 'sad', say: '천천히' }, 'qwen')).toEqual({
       instruct: `calm ${TEMPLATES_V1.sad}${CLOSE} 천천히`,
       template: true,
     });
-    expect(instructFor(meta, undefined, { emo: 'sleepy' }).instruct).toBe(`Sound drowsy.${CLOSE}`);
+    expect(instructFor(meta, undefined, { emo: 'sleepy' }, 'qwen').instruct).toBe(
+      `Sound drowsy.${CLOSE}`,
+    );
   });
 
   it('multiplies the speeds', () => {
