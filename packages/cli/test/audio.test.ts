@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { Script } from '@script2video/core';
 import { pruneAudio } from '../src/tts.js';
 
 describe('pruneAudio', () => {
@@ -20,7 +21,8 @@ describe('pruneAudio', () => {
         env: {},
       }),
     );
-    const r = pruneAudio(join(dir, 'script.ko.md'), 'ko');
+    // no picks.json: the script is not planned
+    const r = pruneAudio(join(dir, 'script.ko.md'), {} as Script, 'ko', dir);
     expect(r).toMatchObject({ entries: 1, files: 2 });
     expect(readdirSync(lock).sort()).toEqual(['keep.wav', 'manifest.json']);
     expect(

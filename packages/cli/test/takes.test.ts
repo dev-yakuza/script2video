@@ -6,6 +6,7 @@ import { parseScript } from '@script2video/core';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { takeBudgetDone } from '@script2video/core';
 import { mockMeasure } from '../src/mock-tts.js';
+import type { PicksFile } from '../src/picks.js';
 import { neighborFor, planSentences, synthesizeScript, type LockManifest } from '../src/tts.js';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -27,6 +28,8 @@ function setup(body: string) {
       readFileSync(join(dir, 'video', 'audio', 'ko', 'manifest.json'), 'utf8'),
     ) as LockManifest;
   const lockPath = join(dir, 'video', 'audio', 'ko', 'manifest.json');
+  const picks = () =>
+    JSON.parse(readFileSync(join(dir, 'video', 'audio', 'ko', 'picks.json'), 'utf8')) as PicksFile;
   const run = async (extra: { retry?: string[]; recheck?: boolean } = {}) => {
     const logs: string[] = [];
     const r = await synthesizeScript(path, script, REPO, {
@@ -37,7 +40,7 @@ function setup(body: string) {
     return { ...r, logs };
   };
   const job = () => planSentences(path, script, REPO, { draft: false, mock: true }).jobs[0]!;
-  return { run, lock, job, rewrite, lockPath };
+  return { run, lock, job, rewrite, lockPath, picks, path };
 }
 
 describe('stage 3 takes (mock)', () => {
@@ -112,28 +115,38 @@ describe('stage 3 takes (mock)', () => {
     expect(r.synthesized).toBe(1);
     let [e] = Object.values(t.lock().entries);
     expect(Object.keys(e!.takes!)).toEqual(['3', '4', '5']);
-    expect(e!.select!.retry).toBe(true);
+    // the retry's choice is a pick (stage 3b plan 4)
+    expect(e!.select).toEqual({ pick: e!.attempt, by: 'retry' });
+    expect(t.picks().picks[t.job().pickKey]).toMatchObject({ take: e!.attempt, by: 'retry' });
     expect(e!.tried).toBe(5);
 
     process.env.S2V_TTS_MOCK_FAIL = `${t.job().synthKey.slice(0, 8)}:6,7,8`;
     const kept = await t.run({ retry: [id] });
     expect(kept).toMatchObject({ synthesized: 0, reused: 1 });
-    expect(kept.warnings.join('\n')).toMatch(/kept the locked take/);
+    expect(kept.warnings.join('\n')).toMatch(/kept your pick/);
     [e] = Object.values(t.lock().entries);
     expect(e!.attempt).toBeGreaterThanOrEqual(3);
     expect(e!.attempt).toBeLessThanOrEqual(5);
     expect(e!.tried).toBe(8);
+    expect(t.picks().picks[t.job().pickKey]!.tried).toBe(8);
   });
 
-  it('warns when a --retry choice is lost to a key change, and retries after the old takes', async () => {
+  it('keeps a --retry choice over a speed change, and retries after the old takes', async () => {
     const t = setup('host{emo=sad}: 오늘은 조금 슬픈 이야기를 해 볼게요.');
     await t.run();
     const id = Object.keys(t.lock().sentences)[0]!;
     await t.run({ retry: [id] });
-    // the same line with power: a new lock key over the same raw takes
+    const picked = Object.values(t.lock().entries)[0]!.attempt;
+    // speed is post-processing tempo: a new lock key, the same pick key
+    t.rewrite('host{emo=sad speed=1.1}: 오늘은 조금 슬픈 이야기를 해 볼게요.');
+    await t.run();
+    expect(t.lock().entries[t.lock().sentences[id]!]!).toMatchObject({
+      attempt: picked,
+      select: { pick: picked, by: 'retry' },
+    });
+    // power: a new pick key over the same raw takes (the pick no longer applies)
     t.rewrite('host{emo=sad power=weak}: 오늘은 조금 슬픈 이야기를 해 볼게요.');
-    const r = await t.run();
-    expect(r.warnings.join('\n')).toMatch(/chosen with --retry before is not used/);
+    await t.run();
     const again = await t.run({ retry: [id] });
     expect(again.synthesized).toBe(1);
     const e = t.lock().entries[t.lock().sentences[id]!]!;
@@ -206,7 +219,7 @@ describe('stage 3 takes (mock)', () => {
     expect(e.select).toBeUndefined();
   });
 
-  it('warns when --recheck replaces a take chosen with --retry', async () => {
+  it('judges a picked take on --recheck but never replaces it', async () => {
     const t = setup('host{emo=sad}: 오늘은 조금 슬픈 이야기를 해 볼게요.');
     await t.run();
     const id = Object.keys(t.lock().sentences)[0]!;
@@ -216,13 +229,11 @@ describe('stage 3 takes (mock)', () => {
     m.entries[m.sentences[id]!]!.duration = 60;
     m.entries[m.sentences[id]!]!.words = [{ text: '오늘은', start: 0, end: 59 }];
     writeFileSync(t.lockPath, JSON.stringify(m));
+    const picked = m.entries[m.sentences[id]!]!.attempt;
     const r = await t.run({ recheck: true });
-    expect(r.warnings.join('\n')).toMatch(/chosen with --retry is replaced/);
-    // chosen again by the budget among takes 0–2, takes rewritten
-    const e = t.lock().entries[t.lock().sentences[id]!]!;
-    expect(e.attempt).toBeLessThanOrEqual(2);
-    expect(e.select!.retry).toBe(false);
-    expect(Object.keys(e.takes!)).toEqual(['0', '1', '2']);
+    expect(r.warnings.join('\n')).toMatch(new RegExp(`picked take ${picked} still fails`));
+    expect(r.synthesized).toBe(0);
+    expect(t.lock().entries[t.lock().sentences[id]!]!.attempt).toBe(picked);
   });
 
   it('falls back to the budget for an emotion line when a retry fails and the key is new', async () => {

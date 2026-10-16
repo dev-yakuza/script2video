@@ -51,28 +51,30 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 
 ## 명령어
 
-| 명령어                                                                                 | 하는 일                                         |
-| -------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `doctor`                                                                               | Node, ffmpeg, uv, Python 환경, 모델, 폰트 점검  |
-| `new <dir> [--lang ko]`                                                                | 시작용 대본이 든 새 영상 폴더 만들기            |
-| `lint <script>`                                                                        | 정적 검사: 문법, 에셋, 발음, 자막 분량, 길이    |
-| `check <script>`                                                                       | 모든 자막을 실제 렌더러로 배치해 넘침 확인      |
-| `sentences <script>`                                                                   | 문장 id 목록(`tts --retry`용)                   |
-| `say "<text>" --script <script>`                                                       | 한 문장을 합성해 재생(발음 확인)                |
-| `tts <script> [--retry id]`                                                            | 오디오 잠금에 합성(바뀐 부분만)                 |
-| `render <script> --output <name> [--draft] [--frozen-audio]`                           | 영상 + `.srt` `.vtt` 챕터, 설명문 초안, 썸네일  |
-| `snapshot <script> --output <name>`                                                    | 장면마다 정지 화면 한 장을 모아 몇 초 만에 확인 |
-| `dev <script> [--video]`                                                               | 편집 루프: 저장할 때마다 lint → tts → snapshot  |
-| `pick <image>`                                                                         | 스크린샷을 클릭 / 드래그해 cue 좌표 얻기        |
-| `voice create / pick`                                                                  | 페르소나 목소리를 설계하고 후보 중에서 고르기   |
-| `voice check <voices/id.yaml>`                                                         | 페르소나 참조 음성 판정(잡음·쉼·끝 잘림·음높이) |
-| `voice refs <script> [--refresh]`                                                      | 문장을 비교할 기준 음성                         |
-| `audio prune <script>`                                                                 | 대본에서 더 이상 쓰지 않는 음성 삭제            |
-| `inspect <script> --json`                                                              | 대본의 구성과 변경 종류별 해시(도구용)          |
-| `export-script <script>`                                                               | 내레이션을 직접 녹음할 때 읽을 대본 만들기      |
-| `import-recording <script> <take.wav> [--write]`                                       | 한 번에 녹음한 파일을 문단별로 나누기(`:audio`) |
-| `tts-server start`                                                                     | 명령어 사이에 TTS 서버를 계속 띄워 두기         |
-| `character import / setup / create / pick / build / review / approve / redo / missing` | 캐릭터 그림: YMM4 가져오기와 생성(아래 참조)    |
+| 명령어                                                                                 | 하는 일                                            |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `doctor`                                                                               | Node, ffmpeg, uv, Python 환경, 모델, 폰트 점검     |
+| `new <dir> [--lang ko]`                                                                | 시작용 대본이 든 새 영상 폴더 만들기               |
+| `lint <script>`                                                                        | 정적 검사: 문법, 에셋, 발음, 자막 분량, 길이       |
+| `check <script>`                                                                       | 모든 자막을 실제 렌더러로 배치해 넘침 확인         |
+| `sentences <script>`                                                                   | 문장 id 목록(`tts --retry`용)                      |
+| `say "<text>" --script <script>`                                                       | 한 문장을 합성해 재생(발음 확인)                   |
+| `tts <script> [--retry id]`                                                            | 오디오 잠금에 합성(바뀐 부분만)                    |
+| `render <script> --output <name> [--draft] [--frozen-audio]`                           | 영상 + `.srt` `.vtt` 챕터, 설명문 초안, 썸네일     |
+| `snapshot <script> --output <name>`                                                    | 장면마다 정지 화면 한 장을 모아 몇 초 만에 확인    |
+| `dev <script> [--video]`                                                               | 편집 루프: 저장할 때마다 lint → tts → snapshot     |
+| `takes <script> --list [--id id]`                                                      | 문장별 테이크: wav 경로, 통과 여부, 음높이, 빠르기 |
+| `takes pick <script> <id>=<n> …` / `takes unpick <script> <id> …`                      | 테이크를 직접 고르기(`pick <image>`와 다름)        |
+| `pick <image>`                                                                         | 스크린샷을 클릭 / 드래그해 cue 좌표 얻기           |
+| `voice create / pick`                                                                  | 페르소나 목소리를 설계하고 후보 중에서 고르기      |
+| `voice check <voices/id.yaml>`                                                         | 페르소나 참조 음성 판정(잡음·쉼·끝 잘림·음높이)    |
+| `voice refs <script> [--refresh]`                                                      | 문장을 비교할 기준 음성                            |
+| `audio prune <script>`                                                                 | 대본에서 더 이상 쓰지 않는 음성 삭제               |
+| `inspect <script> --json`                                                              | 대본의 구성과 변경 종류별 해시(도구용)             |
+| `export-script <script>`                                                               | 내레이션을 직접 녹음할 때 읽을 대본 만들기         |
+| `import-recording <script> <take.wav> [--write]`                                       | 한 번에 녹음한 파일을 문단별로 나누기(`:audio`)    |
+| `tts-server start`                                                                     | 명령어 사이에 TTS 서버를 계속 띄워 두기            |
+| `character import / setup / create / pick / build / review / approve / redo / missing` | 캐릭터 그림: YMM4 가져오기와 생성(아래 참조)       |
 
 `node packages/cli/dist/main.js <command> …` 형태로 실행합니다. `S2V_TTS=mock`을 붙이면 모델 없이
 합성 음성으로 전체를 돌려 볼 수 있어 레이아웃 작업과 CI에 편리합니다.
@@ -159,6 +161,14 @@ persona·Supertonic 목소리는 감정을 연기하지 못합니다(표정과 �
 앞 문장에 가장 가까운 쪽으로 기웁니다. 이미 오디오 lock에 있는 문장은 테이크가 바뀌지 않습니다.
 `tts --retry <id>`는 지금까지 만든 테이크 뒤로 새 테이크 3개를 만들고, 통과한 것이 없으면 lock의
 테이크를 그대로 둡니다. `tts`는 먼저 예상 시간을 알려 줍니다.
+
+**테이크 직접 고르기.** `s2v takes <script> --list`가 문장마다 모든 테이크와 wav 경로를 보여 주므로
+아무 플레이어로 들어 볼 수 있습니다. `s2v takes pick <script> 1:0:2=3 1:2:0=1`은 `1:0:2`의 테이크 3과
+`1:2:0`의 테이크 1을 고르고, 다음 `tts`가 그 테이크를 오디오 lock에 넣습니다. 고른 것은 lock 옆
+`audio/<lang>/picks.json`에 저장되니 커밋하세요. 속도(Qwen·persona 목소리 — Supertonic은 속도가 목소리의 일부)·쉼·후처리만 바뀌면 그대로 남고, 대사·목소리·연기·
+`power`가 바뀌면 적용되지 않습니다(`tts`가 옛 대사와 새 대사를 나란히 알려 줌). `tts --retry <id>`의
+선택도 pick으로 저장됩니다. 장면 전체를 retry하면 직접 고른 문장은 건너뜁니다. `s2v takes unpick
+<script> <id>`로 자동 선택으로 돌아가고, `audio prune`은 쓰이지 않는 pick을 지웁니다.
 
 ### 캐릭터
 

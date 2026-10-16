@@ -10,6 +10,8 @@
  *   s2v voice refs <script.md> [--refresh]   (reference voices for the consistency checks)
  *   s2v tts <script.md> [--no-asr] [--recheck] [--retry <scene[:paragraph[:sentence]]> ...]
  *   s2v sentences <script.md>   (sentence ids for --retry)
+ *   s2v takes <script.md> --list [--id <scene[:paragraph[:sentence]]> ...]   (takes of each line)
+ *   s2v takes pick <script.md> <id>=<take> ... | unpick <script.md> <id> ...   (choose a take)
  *   s2v inspect <script.md> --json [--hash-version 1]   (what the script is made of, hashed by kind)
  *   s2v export-script <script.md>   (reading script for a recording session)
  *   s2v import-recording <script.md> <take.wav> [--write]   (one take → per-paragraph files)
@@ -88,6 +90,7 @@ import { pick } from './pick.js';
 import { runResident, say } from './say.js';
 import { snapshot } from './snapshot.js';
 import { loadAudioManifest, pruneAudio, synthesizeScript } from './tts.js';
+import { listTakes, pickTakes, unpickTakes } from './takes.js';
 import { voiceRefs } from './voice-refs.js';
 import { inspectScript } from './inspect.js';
 
@@ -110,6 +113,7 @@ function usage(): never {
       '       s2v character redo <dir> <item>... [--seed N]\n' +
       '       s2v character missing <script.md> [--apply]\n' +
       '       s2v audio prune <script.md>\n' +
+      '       s2v takes <script.md> --list [--id <id>] | takes pick <script.md> <id>=<take> ... | takes unpick <script.md> <id> ...\n' +
       '       s2v inspect <script.md> --json [--hash-version 1]\n' +
       '       s2v export-script <script.md>   (reading script for recording)\n' +
       '       s2v import-recording <script.md> <take.wav> [--write]\n' +
@@ -205,6 +209,8 @@ function parseCli(rest: string[]) {
       refresh: { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
       'hash-version': { type: 'string' },
+      list: { type: 'boolean', default: false },
+      id: { type: 'string', multiple: true },
     },
   });
 }
@@ -307,10 +313,32 @@ async function main(): Promise<void> {
     if (sub !== 'prune' || !scriptFile) usage();
     const scriptPath = resolve(scriptFile);
     const script = load(scriptPath);
-    const r = pruneAudio(scriptPath, script.meta.lang);
+    const r = pruneAudio(scriptPath, script, script.meta.lang, REPO_ROOT);
     console.error(
       `removed ${r.entries} unused entries and ${r.files} files (${(r.bytes / 1e6).toFixed(1)} MB) from audio/${script.meta.lang}`,
     );
+    console.error(r.picks);
+    return;
+  }
+  if (command === 'takes') {
+    // `s2v takes pick|unpick <script> …` or `s2v takes <script> --list` (not `s2v pick <image>`)
+    const [first, ...more] = positionals;
+    const sub = first === 'pick' || first === 'unpick' ? first : null;
+    const scriptFile = sub ? more[0] : first;
+    if (!scriptFile) usage();
+    const scriptPath = resolve(scriptFile);
+    const script = load(scriptPath);
+    try {
+      let lines: string[];
+      if (sub === 'pick') lines = pickTakes(scriptPath, script, REPO_ROOT, more.slice(1));
+      else if (sub === 'unpick') lines = unpickTakes(scriptPath, script, REPO_ROOT, more.slice(1));
+      else if (values.list) lines = listTakes(scriptPath, script, REPO_ROOT, values.id ?? []);
+      else throw new Error('the listening page comes later — use s2v takes <script> --list');
+      for (const l of lines) console.log(l);
+    } catch (e) {
+      console.error(`error: ${(e as Error).message}`);
+      process.exit(1);
+    }
     return;
   }
   if (command === 'voice') {

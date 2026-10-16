@@ -48,8 +48,10 @@ import {
   RECORDING_VERSION,
   TTS_DECODING,
   TTS_WRAPPER,
+  unappliedPicks,
   type LockManifest,
 } from './tts.js';
+import { readPicks } from './picks.js';
 
 const sha256 = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 const hashOf = (value: unknown) => sha256(canonical(value));
@@ -277,11 +279,23 @@ export function inspectScript(
           hashOf({ wav: sha256(readFileSync(wav)), duration: e.duration, words: e.words }),
         );
     }
+    // a pick not in the lock yet changes the audio on the next tts (stage 3b plan 8)
+    let unapplied: string[] = [];
+    try {
+      unapplied = unappliedPicks(lockPlan.jobs, lock, readPicks(lockDir)).map((u) => u.id);
+    } catch (e) {
+      reasons.audio = [(e as Error).message];
+    }
     if (missing.length > 0)
       reasons.audio = [
         `${missing.length} sentence(s) not synthesized: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ', …' : ''}`,
       ];
-    else audio = hashOf([...pairs.entries()].sort(([a], [b]) => (a < b ? -1 : 1)));
+    else if (unapplied.length > 0)
+      reasons.audio = [
+        `${unapplied.length} picked take(s) not applied — run s2v tts: ${unapplied.slice(0, 5).join(', ')}${unapplied.length > 5 ? ', …' : ''}`,
+      ];
+    else if (!reasons.audio)
+      audio = hashOf([...pairs.entries()].sort(([a], [b]) => (a < b ? -1 : 1)));
   }
 
   // ---------- engine ----------

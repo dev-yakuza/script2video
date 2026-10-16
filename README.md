@@ -64,6 +64,8 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `render <script> --output <name> [--draft] [--frozen-audio]`                           | video + `.srt` `.vtt` chapters, description draft, thumbnail          |
 | `snapshot <script> --output <name>`                                                    | one still per scene, tiled, in seconds                                |
 | `dev <script> [--video]`                                                               | edit loop: lint → tts → snapshot on every save                        |
+| `takes <script> --list [--id id]`                                                      | the takes of each line: take wav, pass/fail, pitch, pace              |
+| `takes pick <script> <id>=<n> …` / `takes unpick <script> <id> …`                      | choose a take yourself (not `pick <image>`)                           |
 | `pick <image>`                                                                         | click / drag on a screenshot to get cue coordinates                   |
 | `voice create / pick`                                                                  | design a persona voice and pick a candidate                           |
 | `voice check <voices/id.yaml>`                                                         | judge a persona's reference clip (noise, pauses, cut ending, pitch)   |
@@ -164,6 +166,16 @@ paragraph has the same emotion, power, speed and `say`, it leans toward the take
 pitch and pace. A sentence already in the audio lock keeps its take; `tts --retry <id>` makes 3 new
 takes after all earlier ones and keeps the locked take when none passes. `tts` prints an estimate of
 the time first.
+
+**Choosing a take yourself.** `s2v takes <script> --list` shows every take of each line with the
+path of its wav, so you can listen in any player; `s2v takes pick <script> 1:0:2=3 1:2:0=1` keeps
+take 3 of `1:0:2` and take 1 of `1:2:0`, and the next `tts` puts them into the audio lock. Picks
+are saved in `audio/<lang>/picks.json` next to the lock: commit it. A pick stays when only speed (Qwen and
+persona voices; for Supertonic speed is part of the voice),
+pauses or post-processing change, and stops applying when the line's text, voice, acting or `power`
+changes (`tts` says which line, with the old and the new text). `tts --retry <id>` writes its choice
+as a pick too; a retry of a whole scene leaves the lines you picked alone. `s2v takes unpick
+<script> <id>` goes back to the automatic choice, and `audio prune` removes picks no line uses.
 
 ### Characters
 

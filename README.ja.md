@@ -63,6 +63,8 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `render <script> --output <name> [--draft] [--frozen-audio]`                           | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル  |
 | `snapshot <script> --output <name>`                                                    | シーンごとの静止画を並べて数秒で確認                         |
 | `dev <script> [--video]`                                                               | 編集ループ: 保存のたびに lint → tts → snapshot               |
+| `takes <script> --list [--id id]`                                                      | 文ごとのテイク: wav のパス、合否、音の高さ、速さ             |
+| `takes pick <script> <id>=<n> …` / `takes unpick <script> <id> …`                      | テイクを自分で選ぶ（`pick <image>` とは別）                  |
 | `pick <image>`                                                                         | スクリーンショットをクリック / ドラッグして cue の座標を得る |
 | `voice create / pick`                                                                  | ペルソナ音声を設計し、候補から選ぶ                           |
 | `voice check <voices/id.yaml>`                                                         | ペルソナの参照音声を判定（雑音・間・語尾の途切れ・音の高さ） |
@@ -158,6 +160,15 @@ persona・Supertonic の声は感情を演じられません（表情とモー�
 高さと速さが直前の文に最も近いほうに寄せます。すでにオーディオ lock にある文はテイクが変わりません。
 `tts --retry <id>` はこれまでのテイクの後に新しいテイクを 3 つ作り、通るものがなければ lock のテイクを
 そのまま残します。`tts` は最初に予想時間を表示します。
+
+**テイクを自分で選ぶ。** `s2v takes <script> --list` が文ごとにすべてのテイクと wav のパスを表示するので、
+好きなプレーヤーで聞けます。`s2v takes pick <script> 1:0:2=3 1:2:0=1` は `1:0:2` のテイク 3 と `1:2:0`
+のテイク 1 を選び、次の `tts` がそれをオーディオ lock に入れます。選んだものは lock の隣の
+`audio/<lang>/picks.json` に保存されるので、コミットしてください。速さ（Qwen・persona の声。Supertonic では速さも声の一部）・間・後処理だけが変わっても残り、
+セリフ・声・演技・`power` が変わると適用されません（`tts` が前後のセリフを並べて知らせます）。
+`tts --retry <id>` の選択も pick として保存されます。シーン全体を retry すると、自分で選んだ文は
+飛ばします。`s2v takes unpick <script> <id>` で自動の選択に戻り、`audio prune` は使われない pick を
+消します。
 
 ### キャラクター
 

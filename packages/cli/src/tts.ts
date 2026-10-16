@@ -22,7 +22,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   ACTING_VERSION,
@@ -64,6 +64,19 @@ import {
 } from '@script2video/core';
 import { compressPausesInFile, cropFile, loudnessReader, readPcm16 } from './pauses.js';
 import { MOCK_REF_F0, mockEnabled, mockFails, mockMeasure, mockSynthesize } from './mock-tts.js';
+import {
+  dropStaleWithId,
+  pickText,
+  PICKS_VERSION,
+  picksPath,
+  readPicks,
+  shellQuote,
+  stalePicks,
+  writePicks,
+  type Pick as PickEntry,
+  type PickLine,
+  type PicksFile,
+} from './picks.js';
 import { splitRecording } from './recording.js';
 import {
   cropFor,
@@ -121,6 +134,52 @@ const SERVER_START_S = 30;
 
 const sha16 = (path: string) => sha256File(path).slice(0, 16);
 
+/** Cache folders of the takes (stage 3 plan 2): raw model output and post-processed takes. */
+export const rawDirOf = (repoRoot: string) => join(repoRoot, '.s2v-cache', 'tts-raw');
+export const takesDirOf = (repoRoot: string) => join(repoRoot, '.s2v-cache', 'tts-takes');
+/** Take cache key: the raw take and how it was post-processed (no power, no alignment). */
+export const takeKeyOf = (
+  job: Pick<SentenceJob, 'synthKey' | 'tempo'>,
+  maxPause: number,
+  n: number,
+) =>
+  hashKey({
+    synthKey: job.synthKey,
+    tempo: job.tempo,
+    maxPause,
+    postprocess: POSTPROCESS_VERSION,
+    n,
+  });
+/** Raw take n of a synthesis key (take 0 has no suffix). */
+export const rawPathOf = (rawDir: string, synthKey: string, n: number) =>
+  join(rawDir, n === 0 ? `${synthKey}.wav` : `${synthKey}.a${n}.wav`);
+/** The highest take number in the raw cache for a synthesis key (-1: none). */
+export function lastRawTakeIn(rawDir: string, synthKey: string): number {
+  let last = -1;
+  if (!existsSync(rawDir)) return last;
+  for (const f of readdirSync(rawDir)) {
+    if (f === `${synthKey}.wav`) last = Math.max(last, 0);
+    const m = new RegExp(`^${synthKey}\\.a(\\d+)\\.wav$`).exec(f);
+    if (m) last = Math.max(last, Number(m[1]));
+  }
+  return last;
+}
+/** What made a take wav (`<take key>.json` in the take cache). */
+export interface TakeMade {
+  wavSha: string;
+  rawSha: string;
+  removed: number;
+  info: { model: string; seed: number };
+}
+/** The take record when it still describes the take wav next to it. */
+export function takeMadeOf(takesDir: string, tk: string): TakeMade | null {
+  const wav = join(takesDir, `${tk}.wav`);
+  const made = readJson<TakeMade>(join(takesDir, `${tk}.json`));
+  if (!made || !existsSync(wav) || made.wavSha !== sha16(wav)) return null;
+  if (typeof made.removed !== 'number' || typeof made.info?.model !== 'string') return null;
+  return made;
+}
+
 /** Write a cache file whole: other s2v processes share the cache (stage 3 plan 2). */
 function atomicWrite(path: string, data: string | Buffer): void {
   const tmp = `${path}.${process.pid}.tmp`;
@@ -177,11 +236,26 @@ export interface LockEntry {
   tried?: number;
   /** Takes made for the choice: number → passed, and what selection read (rounded). */
   takes?: Record<string, TakeRecord>;
-  /** How the take was chosen (emotion lines and retries). */
-  select?: { n: number; rank: number; neighbor: boolean; retry: boolean };
+  /** How the take was chosen: by selection (emotion lines), or a pick (stage 3b). */
+  select?: AutoSelect | PickSelect;
   /** Non-speech cut at the edges (seconds of the take wav). */
   crop?: { from: number; to: number };
 }
+
+/** Selection among the takes (stage 3a; `retry` only in locks made before 3b). */
+export interface AutoSelect {
+  n: number;
+  rank: number;
+  neighbor: boolean;
+  retry: boolean;
+}
+/** The take of a pick in picks.json (stage 3b). */
+export interface PickSelect {
+  pick: number;
+  by: 'human' | 'retry';
+}
+export const isPickSelect = (s: LockEntry['select']): s is PickSelect =>
+  !!s && typeof (s as PickSelect).pick === 'number';
 
 /** One take in a lock entry (stage 3): enough to see why it was or was not chosen. */
 export interface TakeRecord {
@@ -355,6 +429,9 @@ interface Attempt {
   sim: number | null;
   /** The reference the take was checked against (null: not checked). */
   voiceRef: string | null;
+  /** The raw take it was made from (absent in mock), and whether this run synthesized it. */
+  rawSha?: string;
+  synthesized?: boolean;
   /** Emotion gate measurements (emotion lines in ko only). */
   emotion?: EmotionTakeMeasure & { ending: number | null };
   /** Raw take inside the words (every emotion line). */
@@ -588,7 +665,7 @@ export async function synthesizeScript(
 
   const mock = mockEnabled();
   if (mock) opts.log('S2V_TTS=mock: synthetic audio, no models');
-  const rawDir = join(repoRoot, '.s2v-cache', 'tts-raw');
+  const rawDir = rawDirOf(repoRoot);
   mkdirSync(rawDir, { recursive: true });
   const tts = new Service(TTS_SERVER, repoRoot);
   const aligner = new Service(ALIGNER, repoRoot);
@@ -618,7 +695,11 @@ export async function synthesizeScript(
   // E7 (stage 3 plan 6): make all six takes of emotion lines; the choice stays the budget's
   const takesAll = process.env.S2V_TAKES_ALL === '6';
   /** Tell how long synthesis will take (stage 3 plan 9). */
-  const estimateTime = (todo: SentenceJob[], retry: (j: SentenceJob) => boolean) => {
+  const estimateTime = (
+    todo: SentenceJob[],
+    retry: (j: SentenceJob) => boolean,
+    takesOf = new Map<SentenceJob, number>(),
+  ) => {
     if (mock || todo.length === 0) return;
     // highest raw take per synthesis key, read once
     const rawMax = new Map<string, number>();
@@ -629,9 +710,10 @@ export async function synthesizeScript(
     let seconds = 0;
     const seenRefs = new Set<string>();
     for (const j of todo) {
-      const takes = j.emotional ? EXPECTED_TAKES.emotion : EXPECTED_TAKES.plain;
+      const fixed = takesOf.get(j);
+      const takes = fixed ?? (j.emotional ? EXPECTED_TAKES.emotion : EXPECTED_TAKES.plain);
       // a retry makes new takes; otherwise cached raw takes are only measured
-      const cached = retry(j) ? 0 : (rawMax.get(j.synthKey) ?? -1) + 1;
+      const cached = fixed !== undefined || retry(j) ? 0 : (rawMax.get(j.synthKey) ?? -1) + 1;
       seconds += Math.max(0.3, takes - cached) * TAKE_SECONDS[j.target.engine];
       if (checkVoices) {
         const v = refVoice(j);
@@ -757,18 +839,19 @@ export async function synthesizeScript(
   for (const n of plan.notes) opts.log(`  ${n}`);
   const { jobs, recorded } = plan;
   Object.assign(manifest.sentences, plan.sentences);
+  // picks (stage 3b plan 1): a draft or another lock folder neither reads nor writes them
+  const usePicks = !opts.draft && !opts.lockDir;
+  const picks: PicksFile = usePicks ? readPicks(lockDir) : { version: PICKS_VERSION, picks: {} };
+  const savePicks = () => {
+    if (usePicks) writePicks(lockDir, picks);
+  };
+  const pickLines: PickLine[] = jobs.map((j) => ({ id: j.id, pickKey: j.pickKey, text: j.text }));
+  const scriptArg = shellQuote(relative(process.cwd(), scriptPath) || scriptPath);
 
   // ---------- takes (stage 3 plan 2–3): raw take → take wav → measurements → judgement ----------
-  const takesDir = join(repoRoot, '.s2v-cache', 'tts-takes');
+  const takesDir = takesDirOf(repoRoot);
   if (!mock) mkdirSync(takesDir, { recursive: true });
-  const takeKey = (job: SentenceJob, n: number) =>
-    hashKey({
-      synthKey: job.synthKey,
-      tempo: job.tempo,
-      maxPause: meta.pacing.maxPause,
-      postprocess: POSTPROCESS_VERSION,
-      n,
-    });
+  const takeKey = (job: SentenceJob, n: number) => takeKeyOf(job, meta.pacing.maxPause, n);
   const measureKey = (job: SentenceJob) =>
     hashKey({
       alignText: job.alignText,
@@ -779,24 +862,14 @@ export async function synthesizeScript(
       constants: MEASURE_CONSTANTS,
       version: TAKE_MEASURE_VERSION,
     });
-  const rawPath = (job: SentenceJob, n: number) =>
-    join(rawDir, n === 0 ? `${job.synthKey}.wav` : `${job.synthKey}.a${n}.wav`);
-  /** The highest take number in the raw cache for a synthesis key (-1: none). */
-  const lastRawTake = (synthKey: string) => {
-    let last = -1;
-    for (const f of readdirSync(rawDir)) {
-      if (f === `${synthKey}.wav`) last = Math.max(last, 0);
-      const m = new RegExp(`^${synthKey}\\.a(\\d+)\\.wav$`).exec(f);
-      if (m) last = Math.max(last, Number(m[1]));
-    }
-    return last;
-  };
+  const rawPath = (job: SentenceJob, n: number) => rawPathOf(rawDir, job.synthKey, n);
+  const lastRawTake = (synthKey: string) => lastRawTakeIn(rawDir, synthKey);
 
   /** The raw take (cached) and its synthesis info. */
   const rawTake = async (job: SentenceJob, n: number) => {
     const raw = rawPath(job, n);
     const info = readJson<{ model: string; seed: number }>(`${raw}.json`);
-    if (info && existsSync(raw)) return { raw, info };
+    if (info && existsSync(raw)) return { raw, info, synthesized: false };
     await ensureServices();
     const { data: wav, headers } = await tts.post<Buffer>('/synthesize', {
       engine: job.target.engine,
@@ -813,7 +886,7 @@ export async function synthesizeScript(
     const meta2 = JSON.parse(headers.get('x-s2v-meta') ?? '{}') as { model: string; seed: number };
     atomicWrite(raw, wav);
     atomicWrite(`${raw}.json`, JSON.stringify(meta2));
-    return { raw, info: meta2 };
+    return { raw, info: meta2, synthesized: true };
   };
 
   /** Measurements of one take before any crop (cached by take and measurement key). */
@@ -827,36 +900,57 @@ export async function synthesizeScript(
     /** Raw take inside the words (every emotion line). */
     raw?: { duration: number; pause: number; ending: number | null };
   }
-  const measureTake = async (job: SentenceJob, n: number) => {
+  /**
+   * A picked take (stage 3b plan 2): the take wav the person heard is trusted even without its raw
+   * take, unless the raw take the pick was made from is still there to rebuild it from.
+   */
+  interface PickMode {
+    rawSha?: string;
+  }
+  /** `raw` of an emotion take measured before (another measurement key, same take wav). */
+  const borrowRaw = (tk: string, wavSha: string) => {
+    const re = new RegExp(`^${tk}\\.[0-9a-f]{24}\\.json$`);
+    for (const f of readdirSync(takesDir)) {
+      if (!re.test(f)) continue;
+      const c = readJson<TakeMeasure>(join(takesDir, f));
+      if (c && c.wavSha === wavSha && c.raw) return c.raw;
+    }
+    return undefined;
+  };
+  const measureTake = async (job: SentenceJob, n: number, pick?: PickMode) => {
     const tk = takeKey(job, n);
     const wav = join(takesDir, `${tk}.wav`);
     const meta3 = join(takesDir, `${tk}.json`);
-    type Made = {
-      wavSha: string;
-      rawSha: string;
-      removed: number;
-      info: { model: string; seed: number };
-    };
-    let made = readJson<Made>(meta3);
+    let made = readJson<TakeMade>(meta3);
     const wavSha0 = existsSync(wav) ? sha16(wav) : null;
     // the take wav and what made it belong together (a crash between the two writes)
     const raw0 = rawPath(job, n);
-    // an emotion line also measures the raw take: it must be the one the take wav was made from
-    const madeOk =
+    const rawSha0 = existsSync(raw0) ? sha16(raw0) : null;
+    const madeBase =
       !!made &&
       made.wavSha === wavSha0 &&
       typeof made.removed === 'number' &&
-      typeof made.info?.model === 'string' &&
-      (!job.emotional || (existsSync(raw0) && made.rawSha === sha16(raw0)));
+      typeof made.info?.model === 'string';
+    // an emotion line also measures the raw take: it must be the one the take wav was made from
+    const madeOk = pick
+      ? madeBase && !(pick.rawSha && made!.rawSha !== pick.rawSha && rawSha0 === pick.rawSha)
+      : madeBase && (!job.emotional || made!.rawSha === rawSha0);
     const path = join(takesDir, `${tk}.${measureKey(job)}.json`);
+    // a pick may go without the raw measurement, unless its raw take is there to measure
+    const rawHere = () => (existsSync(raw0) ? sha16(raw0) : null);
     const valid = (c: TakeMeasure | null, sha: string | null) =>
-      !!c && c.wavSha === sha && (!job.emotional || !!c.raw);
+      !!c &&
+      c.wavSha === sha &&
+      (!job.emotional || !!c.raw || (!!pick && rawHere() !== (made?.rawSha ?? null)));
     let cached = readJson<TakeMeasure>(path);
-    if (madeOk && valid(cached, wavSha0)) return { tk, wav, m: cached! };
+    if (madeOk && valid(cached, wavSha0))
+      return { tk, wav, m: cached!, rawSha: made!.rawSha, synthesized: false };
     // the raw measurement of an emotion line needs the raw take: without it, the take is made
     // again from a new raw take (plain lines measure the take wav only)
+    let synthesized = false;
     if (!madeOk) {
-      const { raw, info } = await rawTake(job, n);
+      const { raw, info, synthesized: s } = await rawTake(job, n);
+      synthesized = s;
       const tmp = `${wav}.${process.pid}.tmp.wav`;
       try {
         await postprocess(raw, tmp, job.tempo);
@@ -869,8 +963,9 @@ export async function synthesizeScript(
       atomicWrite(meta3, JSON.stringify(made));
     }
     const wavSha = made!.wavSha;
+    const rawSha = made!.rawSha;
     cached = readJson<TakeMeasure>(path);
-    if (valid(cached, wavSha)) return { tk, wav, m: cached! };
+    if (valid(cached, wavSha)) return { tk, wav, m: cached!, rawSha, synthesized };
     await ensureServices();
     const { data: aligned } = await aligner.post<{ words: AlignedWord[] }>('/align', {
       wav_path: wav,
@@ -882,6 +977,12 @@ export async function synthesizeScript(
           .data.text
       : '';
     const pitch = (await aligner.post<PitchResult>('/pitch', { wav_path: wav })).data;
+    // a picked take whose raw take is gone keeps the raw measurement made before, if any
+    const raw = !job.emotional
+      ? undefined
+      : existsSync(raw0) && sha16(raw0) === rawSha
+        ? await measureRaw(job, raw0, n)
+        : borrowRaw(tk, wavSha);
     const m: TakeMeasure = {
       wavSha,
       words: aligned.words,
@@ -889,10 +990,10 @@ export async function synthesizeScript(
       removed: made!.removed,
       info: made!.info,
       pitch,
-      ...(job.emotional ? { raw: await measureRaw(job, rawPath(job, n), n) } : {}),
+      ...(raw ? { raw } : {}),
     };
     atomicWrite(path, JSON.stringify(m));
-    return { tk, wav, m };
+    return { tk, wav, m, rawSha, synthesized };
   };
 
   /** What the take checks need of a job (stage 3 plan 3). */
@@ -914,10 +1015,12 @@ export async function synthesizeScript(
   });
 
   /** The final wav of a take (cropped when the crop rule says so), its words and pitch. */
-  const finalTake = async (job: SentenceJob, n: number) => {
-    const { tk, wav, m } = await measureTake(job, n);
+  const finalTake = async (job: SentenceJob, n: number, pick?: PickMode) => {
+    const { tk, wav, m, rawSha, synthesized } = await measureTake(job, n, pick);
+    const made = { rawSha, synthesized };
     const crop = cropFor(takeJob(job), m.words, m.pitch, wavFacts(wav));
-    if (!crop) return { tk, m, wav, words: m.words, pitch: m.pitch, crop: null, tag: 'full' };
+    if (!crop)
+      return { tk, m, wav, words: m.words, pitch: m.pitch, crop: null, tag: 'full', ...made };
     const tag = `crop-${crop.from.toFixed(3)}-${crop.to.toFixed(3)}`;
     const cut = join(takesDir, `${tk}.${tag}.${m.wavSha}.wav`);
     if (!existsSync(cut)) {
@@ -940,7 +1043,7 @@ export async function synthesizeScript(
       };
       atomicWrite(pitchPath, JSON.stringify(p));
     }
-    return { tk, m, wav: cut, words, pitch: p.pitch, crop, tag };
+    return { tk, m, wav: cut, words, pitch: p.pitch, crop, tag, ...made };
   };
 
   /** Similarity of a final take with the voice reference (cached per reference), or null. */
@@ -987,7 +1090,11 @@ export async function synthesizeScript(
   };
 
   // ---------- one attempt: synthesize → post-process → align → ASR → assess ----------
-  const runAttempt = async (job: SentenceJob, attempt: number): Promise<Attempt> => {
+  const runAttempt = async (
+    job: SentenceJob,
+    attempt: number,
+    pick?: PickMode,
+  ): Promise<Attempt> => {
     if (mock) {
       const wavPath = join(lockDir, `${job.key}.try${attempt}.wav`);
       const words = mockSynthesize(job.alignText, meta.lang, job.speedProduct, wavPath);
@@ -1037,7 +1144,7 @@ export async function synthesizeScript(
         rejudge: () => {},
       };
     }
-    const f = await finalTake(job, attempt);
+    const f = await finalTake(job, attempt, pick);
     const r = checkVoices ? await referenceFor(job) : null;
     const sim = r ? await takeSimilarity(job, f, r) : null;
     const ref = r && sim !== null ? r : null;
@@ -1053,6 +1160,8 @@ export async function synthesizeScript(
       ending: f.pitch.ending_st,
       sim,
       voiceRef: ref ? ref.sha : null,
+      rawSha: f.rawSha,
+      synthesized: f.synthesized,
       ...(f.m.raw ? { raw: f.m.raw } : {}),
       facts: {
         n: attempt,
@@ -1210,7 +1319,7 @@ export async function synthesizeScript(
     job: SentenceJob,
     chosen: Attempt,
     tried: Attempt[],
-    extra: { tried: number; select?: LockEntry['select'] },
+    extra: { tried: number; select?: LockEntry['select']; takes?: Record<string, TakeRecord> },
   ) => {
     const src = `${job.key}.wav`;
     // mock takes live in the lock folder; real takes stay in the take cache
@@ -1256,19 +1365,22 @@ export async function synthesizeScript(
       synthKey: job.synthKey,
       pickKey: job.pickKey,
       tried: extra.tried,
-      takes: Object.fromEntries(
-        tried.map((t) => {
-          const r = (x: number | null, d: number) => (x === null ? null : Number(x.toFixed(d)));
-          const rec: TakeRecord = {
-            ok: t.assessment.ok,
-            f0: r(t.facts.f0, 1),
-            raw: r(t.facts.rawDuration, 3),
-            ending: r(t.facts.rawEnding, 2),
-            rate: r(t.facts.rate, 2),
-          };
-          return [String(t.attempt), rec];
-        }),
-      ),
+      takes: {
+        ...extra.takes,
+        ...Object.fromEntries(
+          tried.map((t) => {
+            const r = (x: number | null, d: number) => (x === null ? null : Number(x.toFixed(d)));
+            const rec: TakeRecord = {
+              ok: t.assessment.ok,
+              f0: r(t.facts.f0, 1),
+              raw: r(t.facts.rawDuration, 3),
+              ending: r(t.facts.rawEnding, 2),
+              rate: r(t.facts.rate, 2),
+            };
+            return [String(t.attempt), rec];
+          }),
+        ),
+      },
       ...(extra.select ? { select: extra.select } : {}),
       ...(chosen.crop ? { crop: chosen.crop } : {}),
     };
@@ -1353,6 +1465,15 @@ export async function synthesizeScript(
             .map((j) => `${j.id} "${j.text}"`)
             .join(', ')}${missing.length > 5 ? ', …' : ''}`,
         );
+      // the lock must hold the picked takes (3b plan 7); nothing is written for picks
+      const unapplied = usePicks ? unappliedPicks(jobs, manifest, picks) : [];
+      if (unapplied.length > 0)
+        throw new Error(
+          `--frozen-audio: ${unapplied
+            .slice(0, 5)
+            .map((u) => u.message)
+            .join('; ')}${unapplied.length > 5 ? '; …' : ''}`,
+        );
       save();
       return { manifestPath, synthesized: 0, reused: jobs.length, warnings };
     }
@@ -1408,129 +1529,363 @@ export async function synthesizeScript(
       unlinkSync(whole);
       save();
     }
-    const retried = (id: string) =>
-      (opts.retry ?? []).some((r) => id === r || id.startsWith(`${r}:`));
-    estimateTime(
-      jobs.filter((j) => {
-        const e = manifest.entries[j.key];
-        return retried(j.id) || !e || !existsSync(join(lockDir, e.src));
-      }),
-      (j) => retried(j.id),
-    );
-    for (const job of jobs) {
-      const existing = manifest.entries[job.key];
-      const hasLock = !!existing && existsSync(join(lockDir, existing.src));
-      // the entry this sentence had before its key changed (power added, text edited, …)
-      const oldKey = previous?.sentences[job.id];
-      const old = oldKey && oldKey !== job.key ? previous?.entries[oldKey] : undefined;
-      if (!existing && old?.select?.retry)
-        warnings.push(
-          `${job.id}: the take chosen with --retry before is not used (the sentence's key changed) — "${job.text}"`,
+    // ---------- picks (stage 3b plan 1–4) ----------
+    if (usePicks) {
+      // old 3a retry choices become picks; picks.json is written first, so a crash keeps them
+      const migrated: [LockEntry, number][] = [];
+      let cleared = false;
+      const seen = new Set<string>();
+      const live = new Set(Object.values(manifest.sentences));
+      for (const j of jobs) {
+        if (seen.has(j.pickKey)) continue;
+        seen.add(j.pickKey);
+        const cands = Object.entries(manifest.entries).filter(
+          ([, e]) => e.pickKey === j.pickKey && !isPickSelect(e.select) && e.select?.retry,
         );
-      const wantRetry = retried(job.id);
-      const base = existing ?? old;
-      // takes already made from the same raw takes (the old entry when only power changed)
-      const madeBefore = Math.max(
-        // a 2a entry has no synthKey: count it (new seeds either way)
-        ...[existing, !old?.synthKey || old.synthKey === job.synthKey ? old : undefined].map((e) =>
-          e ? Math.max(e.tried ?? e.attempt, e.attempt) : -1,
-        ),
-      );
-      let first = 0;
-      if (wantRetry) {
-        if (base) {
-          // new seeds: after every take made so far for this synthesis key (A4)
-          first = Math.max(madeBefore, lastRawTake(job.synthKey)) + 1;
-          opts.log(`  ${job.id} retry requested → new takes from ${first}`);
-        } else opts.log(`  ${job.id} retry: no lock entry — synthesizing it`);
-      }
-      if (!wantRetry && hasLock) {
-        // Sentences already in the lock are not checked again unless asked (Q9).
-        const reasons = opts.recheck ? await recheckReasons(job, existing!) : [];
-        if (reasons.length === 0) {
-          reused++;
-          continue;
+        if (cands.length === 0) continue;
+        const made = (e: LockEntry) => e.tried ?? e.attempt;
+        // one becomes the pick, unless a pick exists; none is moved again later (unpick)
+        // only a choice a line still uses becomes a pick (an orphaned entry did not apply in 3a)
+        const usable = cands.filter(([k]) => live.has(k));
+        let chosen: LockEntry | undefined;
+        if (!picks.picks[j.pickKey] && usable.length > 0) {
+          [, chosen] =
+            usable.find(([k]) => k === j.key) ??
+            usable.sort(([, a], [, b]) => made(b) - made(a))[0]!;
+          picks.picks[j.pickKey] = {
+            take: chosen.attempt,
+            id: j.id,
+            text: pickText(j.text),
+            tried: Math.max(...cands.map(([, c]) => made(c))),
+            by: 'retry',
+          };
+          migrated.push([chosen, chosen.attempt]);
+          opts.log(
+            `  ${j.id}: the take chosen with --retry (take ${chosen.attempt}) is now a pick`,
+          );
         }
-        opts.log(`  ${job.id} recheck failed: ${reasons.join('; ')} → re-synthesizing`);
-        if (existing!.select?.retry)
-          warnings.push(`${job.id}: the take chosen with --retry is replaced by a budget take`);
-      }
-      const retrying = wantRetry && first > 0;
-      let tried: Attempt[] = [];
-      let chosen: Attempt;
-      let select: LockEntry['select'] | undefined;
-      if (job.emotional) {
-        const r = await emotionTakes(job, first, retrying);
-        tried = r.tried;
-        const c = choose(job, r.candidates, r.ctx, neighborOf(job));
-        chosen = c.chosen;
-        select = c.select ? { ...c.select, retry: retrying } : undefined;
-        if (retrying && !c.select) {
-          if (hasLock) {
-            warnings.push(
-              `${job.id}: no new take passed (${chosen.assessment.reasons.join('; ')}) — kept the locked take`,
-            );
-            for (const t of tried)
-              if (dirname(t.wavPath) === lockDir && existsSync(t.wavPath)) unlinkSync(t.wavPath);
-            existing!.tried = Math.max(
-              existing!.tried ?? existing!.attempt,
-              first + tried.length - 1,
-            );
-            save();
-            reused++;
-            continue;
+        for (const [, other] of cands)
+          if (other !== chosen) {
+            other.select = { ...(other.select as AutoSelect), retry: false };
+            cleared = true;
           }
-          // no entry under the current key: the budget takes instead, so the line has audio
-          const b = await emotionTakes(job, 0, false);
-          const c2 = choose(job, b.candidates, b.ctx, neighborOf(job));
-          tried = [
-            ...tried.filter((t) => !b.tried.some((x) => x.attempt === t.attempt)),
-            ...b.tried,
-          ];
-          chosen = c2.chosen;
-          select = c2.select ? { ...c2.select, retry: false } : undefined;
-        }
-      } else {
-        tried = await plainTakes(job, first);
-        const retryTakes = new Set(tried);
-        chosen = firstPassing(tried);
-        if (retrying && !chosen.assessment.ok && !hasLock) {
-          // no entry under the current key: the budget takes instead, so the line has audio
-          const b = await plainTakes(job, 0);
-          tried = [...tried.filter((t) => !b.some((x) => x.attempt === t.attempt)), ...b];
-          chosen = firstPassing(b);
-        } else if (retrying && !chosen.assessment.ok) {
-          warnings.push(
-            `${job.id}: no new take passed (${chosen.assessment.reasons.join('; ')}) — kept the locked take`,
-          );
-          for (const t of tried)
-            if (dirname(t.wavPath) === lockDir && existsSync(t.wavPath)) unlinkSync(t.wavPath);
-          existing!.tried = Math.max(
-            existing!.tried ?? existing!.attempt,
-            first + tried.length - 1,
-          );
-          save();
-          reused++;
-          continue;
-        }
-        if (retrying && retryTakes.has(chosen))
-          select = { n: 1, rank: 0, neighbor: false, retry: true };
       }
-      if (!chosen.assessment.ok) {
-        warnings.push(
-          `${job.id}: kept attempt ${chosen.attempt} despite ${chosen.assessment.reasons.join('; ')} — "${job.text}" → heard "${chosen.heard}"`,
-        );
+      // ids shift when lines are inserted: an applied pick names its first line now
+      let changed = migrated.length > 0;
+      const firstLine = new Map<string, SentenceJob>();
+      for (const j of jobs) if (!firstLine.has(j.pickKey)) firstLine.set(j.pickKey, j);
+      for (const [k, p] of Object.entries(picks.picks)) {
+        const j = firstLine.get(k);
+        if (j && (p.id !== j.id || p.text !== pickText(j.text))) {
+          p.id = j.id;
+          p.text = pickText(j.text);
+          changed = true;
+        }
       }
-      const madeUpTo = Math.max(...tried.map((t) => t.attempt), madeBefore);
-      commit(job, chosen, tried, { tried: madeUpTo, ...(select ? { select } : {}) });
-      synthesized++;
+      if (changed) savePicks();
+      if (migrated.length > 0 || cleared) {
+        for (const [e, n] of migrated) e.select = { pick: n, by: 'retry' };
+        save();
+      }
+    }
+
+    const retryIds = opts.retry ?? [];
+    const exactRetry = (id: string) => retryIds.includes(id);
+    const prefixRetry = (id: string) => retryIds.some((r) => id.startsWith(`${r}:`));
+    /** A retry of this line: a prefix leaves the lines a person picked alone (3b plan 4). */
+    const wantsRetry = (job: SentenceJob) =>
+      exactRetry(job.id) || (prefixRetry(job.id) && picks.picks[job.pickKey]?.by !== 'human');
+    const locked = (job: SentenceJob) => {
+      const e = manifest.entries[job.key];
+      return e && existsSync(join(lockDir, e.src)) ? e : undefined;
+    };
+    {
+      // a pick key is retried once; a pick commit makes at most its one take
+      const retryKeys = new Set<string>();
+      const todo: SentenceJob[] = [];
+      const pickTakes = new Map<SentenceJob, number>();
+      for (const j of jobs) {
+        const e = locked(j);
+        const p = usePicks ? picks.picks[j.pickKey] : undefined;
+        if (wantsRetry(j)) {
+          if (!usePicks || !retryKeys.has(j.pickKey)) todo.push(j);
+          retryKeys.add(j.pickKey);
+        } else if (p && (!e || e.attempt !== p.take)) {
+          todo.push(j);
+          pickTakes.set(j, mock || takeMadeOf(takesDir, takeKey(j, p.take)) ? 0 : 1);
+        } else if (!e || (!p && isPickSelect(e.select))) todo.push(j);
+      }
+      estimateTime(todo, wantsRetry, pickTakes);
+    }
+
+    const logCommitted = (job: SentenceJob, chosen: Attempt, made: number) => {
       const e = manifest.entries[job.key]!;
       opts.log(
         `  ${job.id} ${job.target.engine}:${job.target.voice} ${e.duration.toFixed(2)}s` +
           (chosen.removed > 0 ? ` (-${chosen.removed.toFixed(2)}s pauses)` : '') +
           ` cer=${(chosen.assessment.cer ?? 0).toFixed(2)}` +
-          (job.emotional ? ` take ${chosen.attempt} of ${tried.length}` : ''),
+          (job.emotional || isPickSelect(e.select) ? ` take ${chosen.attempt} of ${made}` : ''),
       );
+    };
+    /** Takes in the lock folder (mock) that were not kept. */
+    const dropTried = (tried: Attempt[], keep?: Attempt) => {
+      for (const t of tried)
+        if (t !== keep && dirname(t.wavPath) === lockDir && existsSync(t.wavPath))
+          unlinkSync(t.wavPath);
+    };
+
+    /** Commit the picked take (3b plan 2, row 3): followed even when it fails its checks. */
+    const commitPick = async (job: SentenceJob, pick: PickEntry, madeBefore: number) => {
+      const a = await runAttempt(job, pick.take, pick.rawSha ? { rawSha: pick.rawSha } : {});
+      await settle(job, [a], false);
+      const listen = `listen again (s2v takes ${scriptArg} --list --id ${job.id})`;
+      if (a.synthesized)
+        warnings.push(
+          `${job.id}: picked take ${pick.take} was re-synthesized — it may not sound like what you chose; ${listen}`,
+        );
+      else if (pick.rawSha && a.rawSha && a.rawSha !== pick.rawSha)
+        warnings.push(
+          `${job.id}: picked take ${pick.take} now sounds different from when you chose it — ${listen}`,
+        );
+      if (!a.assessment.ok)
+        warnings.push(
+          `${job.id}: picked take ${pick.take} fails: ${a.assessment.reasons.join('; ')}`,
+        );
+      const prev = manifest.entries[job.key];
+      const made = Math.max(madeBefore, pick.tried, pick.take, prev?.tried ?? -1);
+      commit(job, a, [a], {
+        tried: made,
+        select: { pick: pick.take, by: pick.by },
+        ...(prev?.takes ? { takes: prev.takes } : {}),
+      });
+      logCommitted(job, a, made + 1);
+    };
+
+    /** The budget takes and the automatic choice (3a). */
+    const budgetJob = async (job: SentenceJob, before: Attempt[], madeBefore: number) => {
+      let tried: Attempt[];
+      let chosen: Attempt;
+      let select: AutoSelect | undefined;
+      if (job.emotional) {
+        const b = await emotionTakes(job, 0, false);
+        const c = choose(job, b.candidates, b.ctx, neighborOf(job));
+        tried = b.tried;
+        chosen = c.chosen;
+        select = c.select ? { ...c.select, retry: false } : undefined;
+      } else {
+        tried = await plainTakes(job, 0);
+        chosen = firstPassing(tried);
+      }
+      tried = [...before.filter((t) => !tried.some((x) => x.attempt === t.attempt)), ...tried];
+      if (!chosen.assessment.ok)
+        warnings.push(
+          `${job.id}: kept attempt ${chosen.attempt} despite ${chosen.assessment.reasons.join('; ')} — "${job.text}" → heard "${chosen.heard}"`,
+        );
+      const made = Math.max(...tried.map((t) => t.attempt), madeBefore);
+      commit(job, chosen, tried, { tried: made, ...(select ? { select } : {}) });
+      logCommitted(job, chosen, tried.length);
+    };
+
+    const retriedKeys = new Set<string>();
+    // pick keys a retry in this run will decide (lines before the retried one wait for it)
+    const plannedRetry = new Set(
+      usePicks ? jobs.filter((j) => wantsRetry(j)).map((j) => j.pickKey) : [],
+    );
+    const keptPickFailures: [string, string][] = [];
+    /** Pick keys whose pick a retry wrote in this run (re-applied to earlier lines after the loop). */
+    const changedPicks = new Set<string>();
+    /** Pick keys whose pick a passing retry replaced (their earlier failure warnings are moot). */
+    const replacedPicks = new Set<string>();
+    for (const job of jobs) {
+      const existing = locked(job);
+      const entry = manifest.entries[job.key];
+      // the entry this sentence had before its key changed (power added, text edited, …)
+      const oldKey = previous?.sentences[job.id];
+      const old = oldKey && oldKey !== job.key ? previous?.entries[oldKey] : undefined;
+      const pick = usePicks ? picks.picks[job.pickKey] : undefined;
+      if (prefixRetry(job.id) && !exactRetry(job.id) && pick?.by === 'human')
+        opts.log(
+          `  ${job.id}: your pick (take ${pick.take}) is kept — name the sentence to retry it`,
+        );
+      // lines sharing a pick key share their raw takes: one retry for them
+      const wantRetry = wantsRetry(job) && !(usePicks && retriedKeys.has(job.pickKey));
+      // takes already made from the same raw takes (the old entry when only power changed)
+      const madeBefore = Math.max(
+        // a 2a entry has no synthKey: count it (new seeds either way)
+        ...[entry, !old?.synthKey || old.synthKey === job.synthKey ? old : undefined].map((e) =>
+          e ? Math.max(e.tried ?? e.attempt, e.attempt) : -1,
+        ),
+      );
+
+      // ---- 1. retry: new takes after every take made so far (3b plan 4) ----
+      if (wantRetry && (entry || old || pick)) {
+        retriedKeys.add(job.pickKey);
+        const first = Math.max(madeBefore, pick?.tried ?? -1, lastRawTake(job.synthKey)) + 1;
+        opts.log(`  ${job.id} retry requested → new takes from ${first}`);
+        let tried: Attempt[];
+        let chosen: Attempt;
+        let passed: boolean;
+        let auto: AutoSelect | undefined;
+        if (job.emotional) {
+          const r = await emotionTakes(job, first, true);
+          const c = choose(job, r.candidates, r.ctx, neighborOf(job));
+          tried = r.tried;
+          chosen = c.chosen;
+          passed = c.select !== null;
+          if (c.select) auto = { ...c.select, retry: true };
+        } else {
+          tried = await plainTakes(job, first);
+          chosen = firstPassing(tried);
+          passed = chosen.assessment.ok;
+          if (passed) auto = { n: 1, rank: 0, neighbor: false, retry: true };
+        }
+        const made = Math.max(...tried.map((t) => t.attempt), madeBefore, pick?.tried ?? -1);
+        if (passed) {
+          let select: LockEntry['select'] = auto;
+          if (usePicks) {
+            if (pick && pick.take !== chosen.attempt)
+              opts.log(`  ${job.id}: pick take ${pick.take} → retry take ${chosen.attempt}`);
+            const firstOf = jobs.find((j) => j.pickKey === job.pickKey)!;
+            picks.picks[job.pickKey] = {
+              take: chosen.attempt,
+              id: firstOf.id,
+              text: pickText(firstOf.text),
+              tried: made,
+              by: 'retry',
+              ...(chosen.rawSha ? { rawSha: chosen.rawSha } : {}),
+            };
+            // stale picks of every line with this pick key (the pick names the first one)
+            if (!mock)
+              for (const l of pickLines)
+                if (l.pickKey === job.pickKey) dropStaleWithId(picks, pickLines, l.id);
+            savePicks();
+            changedPicks.add(job.pickKey);
+            replacedPicks.add(job.pickKey);
+            select = { pick: chosen.attempt, by: 'retry' };
+          }
+          commit(job, chosen, tried, { tried: made, ...(select ? { select } : {}) });
+          synthesized++;
+          logCommitted(job, chosen, tried.length);
+          continue;
+        }
+        const why = chosen.assessment.reasons.join('; ');
+        dropTried(tried);
+        if (pick) {
+          // the pick stays; the lock follows it (frozen and inspect need them to agree)
+          pick.tried = Math.max(pick.tried, made);
+          savePicks();
+          warnings.push(
+            `${job.id}: no new take passed (${why}) — kept your pick (take ${pick.take})`,
+          );
+          changedPicks.add(job.pickKey);
+          if (existing && existing.attempt === pick.take) {
+            existing.tried = Math.max(existing.tried ?? existing.attempt, made);
+            existing.select = { pick: pick.take, by: pick.by };
+            save();
+            reused++;
+          } else {
+            await commitPick(job, pick, made);
+            synthesized++;
+          }
+          continue;
+        }
+        // a lock still holding an unpicked take chooses again (row 4), so lock and picks agree
+        if (existing && !isPickSelect(existing.select)) {
+          warnings.push(`${job.id}: no new take passed (${why}) — kept the locked take`);
+          existing.tried = Math.max(existing.tried ?? existing.attempt, made);
+          save();
+          reused++;
+          continue;
+        }
+        // no entry under the current key (or an unpicked one): the budget takes
+        if (existing)
+          warnings.push(
+            `${job.id}: no new take passed (${why}) — chose again from the first takes`,
+          );
+        await budgetJob(job, tried, made);
+        synthesized++;
+        continue;
+      }
+      if (wantRetry) opts.log(`  ${job.id} retry: no lock entry — synthesizing it`);
+
+      // ---- 2–3. a pick: keep it, or commit its take ----
+      if (pick) {
+        if (existing && existing.attempt === pick.take) {
+          let dirty = false;
+          if (
+            !isPickSelect(existing.select) ||
+            existing.select.pick !== pick.take ||
+            existing.select.by !== pick.by
+          ) {
+            existing.select = { pick: pick.take, by: pick.by };
+            dirty = true;
+          }
+          // a 2a entry learns its keys
+          if (!existing.synthKey || !existing.pickKey) {
+            existing.synthKey = job.synthKey;
+            existing.pickKey = job.pickKey;
+            dirty = true;
+          }
+          if (opts.recheck) {
+            // judged, never replaced: a person chose it
+            const reasons = await recheckReasons(job, existing);
+            if (reasons.length > 0)
+              keptPickFailures.push([
+                job.pickKey,
+                `${job.id}: picked take ${pick.take} still fails: ${reasons.join('; ')}`,
+              ]);
+          } else if ((existing.checks?.length ?? 0) > 0)
+            // every run, as for any kept failure (unless a retry replaces the pick later)
+            keptPickFailures.push([
+              job.pickKey,
+              `${job.id}: picked take ${pick.take} fails: ${existing.checks!.join('; ')}`,
+            ]);
+          if (dirty) save();
+          reused++;
+          continue;
+        }
+        // a retry of this pick key comes later in this run: the re-apply after the loop commits
+        if (plannedRetry.has(job.pickKey) && !retriedKeys.has(job.pickKey)) continue;
+        await commitPick(job, pick, madeBefore);
+        synthesized++;
+        continue;
+      }
+
+      // ---- 4. the pick is gone (unpick, reverted): choose again; 5. 3a ----
+      if (existing && isPickSelect(existing.select)) {
+        opts.log(`  ${job.id}: take ${existing.select.pick} is no longer picked → choosing again`);
+      } else if (existing) {
+        // Sentences already in the lock are not checked again unless asked (Q9).
+        const reasons = opts.recheck ? await recheckReasons(job, existing) : [];
+        if (reasons.length === 0) {
+          reused++;
+          continue;
+        }
+        opts.log(`  ${job.id} recheck failed: ${reasons.join('; ')} → re-synthesizing`);
+      }
+      await budgetJob(job, [], madeBefore);
+      synthesized++;
+    }
+
+    for (const [k, w] of keptPickFailures) if (!replacedPicks.has(k)) warnings.push(w);
+    // every real pick looks stale to mock keys; after the loop, as a retry may have replaced one
+    if (usePicks && !mock)
+      for (const st of stalePicks(picks, pickLines, scriptArg)) warnings.push(st.message);
+
+    // a retry changed a pick that earlier lines share (another speed): they follow it now
+    for (const job of jobs) {
+      if (!changedPicks.has(job.pickKey)) continue;
+      const pick = picks.picks[job.pickKey]!;
+      const e = locked(job);
+      if (e && e.attempt === pick.take) {
+        if (!isPickSelect(e.select) || e.select.pick !== pick.take || e.select.by !== pick.by) {
+          e.select = { pick: pick.take, by: pick.by };
+          save();
+        }
+        continue;
+      }
+      await commitPick(job, pick, e ? (e.tried ?? e.attempt) : -1);
+      synthesized++;
     }
   } finally {
     tts.stop();
@@ -1538,6 +1893,34 @@ export async function synthesizeScript(
   }
   save();
   return { manifestPath, synthesized, reused, warnings };
+}
+
+/**
+ * Lines whose lock does not hold their pick (3b plan 7–8): the picked take is not committed yet, or
+ * the lock holds a pick that is gone.
+ */
+export function unappliedPicks(
+  jobs: Pick<SentenceJob, 'id' | 'key' | 'pickKey'>[],
+  lock: LockManifest | null,
+  picks: PicksFile,
+): { id: string; message: string }[] {
+  const out: { id: string; message: string }[] = [];
+  for (const j of jobs) {
+    const e = lock?.entries[j.key];
+    const p = picks.picks[j.pickKey];
+    if (!e) continue;
+    if (p && e.attempt !== p.take)
+      out.push({
+        id: j.id,
+        message: `${j.id}: picked take ${p.take} is not in the audio lock — run s2v tts`,
+      });
+    else if (!p && isPickSelect(e.select))
+      out.push({
+        id: j.id,
+        message: `${j.id}: take ${e.select.pick} was picked but the pick is gone — run s2v tts`,
+      });
+  }
+  return out;
 }
 
 /** Audio manifest for the timeline (sentence id → audio), resolved from the lock. */
@@ -1558,12 +1941,16 @@ export function loadAudioManifest(
 
 /**
  * Remove audio the script no longer uses from its lock: entries not referenced by the current
- * sentence map (run `tts` first so the map is current) and leftover takes. Returns what was removed.
+ * sentence map (run `tts` first so the map is current) and leftover takes. Picks whose key no line
+ * of the script has are removed too (3b plan 3), unless some paragraph cannot be planned or
+ * picks.json cannot be read. Returns what was removed.
  */
 export function pruneAudio(
   scriptPath: string,
+  script: Script,
   lang: string,
-): { entries: number; files: number; bytes: number } {
+  repoRoot: string,
+): { entries: number; files: number; bytes: number; picks: string } {
   const lockDir = join(dirname(scriptPath), 'audio', lang);
   const manifestPath = join(lockDir, 'manifest.json');
   const m = JSON.parse(readFileSync(manifestPath, 'utf8')) as LockManifest;
@@ -1584,5 +1971,29 @@ export function pruneAudio(
     files++;
   }
   writeFileSync(manifestPath, JSON.stringify(m, null, 2));
-  return { entries, files, bytes };
+  return { entries, files, bytes, picks: prunePicks(scriptPath, script, lockDir, repoRoot) };
+}
+
+function prunePicks(scriptPath: string, script: Script, lockDir: string, repoRoot: string): string {
+  if (!existsSync(picksPath(lockDir))) return 'no picks';
+  let file: PicksFile;
+  try {
+    file = readPicks(lockDir);
+  } catch (e) {
+    return `picks kept: ${(e as Error).message}`;
+  }
+  // real keys, and mock keys (picks written in mock runs and tests)
+  const real = planSentences(scriptPath, script, repoRoot, { draft: false, mock: false });
+  if (real.errors.length > 0)
+    return `picks kept: ${real.errors.length} paragraph(s) cannot be planned (${real.errors[0]!.message})`;
+  const mock = planSentences(scriptPath, script, repoRoot, { draft: false, mock: true });
+  const live = new Set([...real.jobs, ...mock.jobs].map((j) => j.pickKey));
+  let n = 0;
+  for (const k of Object.keys(file.picks))
+    if (!live.has(k)) {
+      delete file.picks[k];
+      n++;
+    }
+  if (n > 0) writePicks(lockDir, file);
+  return `removed ${n} pick(s) no line uses`;
 }
