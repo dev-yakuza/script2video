@@ -27,9 +27,18 @@ import { promisify } from 'node:util';
 import {
   ACTING_VERSION,
   analyzeLevels,
+  endsWithQuestion,
+  ESTIMATE_RATE,
+  FIRST_TAKES,
+  isStandardEmotion,
+  MAX_TAKES,
+  selectTake,
+  takeBudgetDone,
+  type Neighbor,
+  type TakeContext,
+  type TakeFacts,
   assessSentence,
   emotionGateFailures,
-  GATES,
   normalizeForCer,
   bestAttempt,
   emotionSentence,
@@ -54,8 +63,17 @@ import {
   type SentenceAssessment,
 } from '@script2video/core';
 import { compressPausesInFile, cropFile, loudnessReader, readPcm16 } from './pauses.js';
-import { mockEnabled, mockSynthesize } from './mock-tts.js';
+import { MOCK_REF_F0, mockEnabled, mockFails, mockMeasure, mockSynthesize } from './mock-tts.js';
 import { splitRecording } from './recording.js';
+import {
+  cropFor,
+  EDGE_PAD_LEAD_S,
+  EDGE_PAD_TAIL_S,
+  judgeTake,
+  shiftWords,
+  type TakeJob,
+  type WavFacts,
+} from './take-judge.js';
 import { resolvePersona, type PersonaRef } from './persona.js';
 import { ALIGNER, Service, TTS_SERVER } from './services.js';
 import {
@@ -84,11 +102,40 @@ const sha256File = (path: string) => createHash('sha256').update(readFileSync(pa
 function hashKey(fields: unknown): string {
   return createHash('sha256').update(JSON.stringify(fields)).digest('hex').slice(0, 24);
 }
-/** Takes per sentence when they keep failing the checks (acting plan 3.5, Q4). */
-const MAX_ATTEMPTS = 6;
-/** Padding kept around the aligned speech when cutting non-speech at the edges. */
-const EDGE_PAD_LEAD_S = 0.1;
-const EDGE_PAD_TAIL_S = 0.2;
+/**
+ * Take measurement cache (stage 3 plan 2): the constants the measuring code uses, and a version
+ * to bump when that code changes in another way.
+ */
+const TAKE_MEASURE_VERSION = 1;
+const MEASURE_CONSTANTS = { EDGE_PAD_LEAD_S, EDGE_PAD_TAIL_S, levels: 'analyzeLevels-v1' };
+/** Seconds per take, synthesis and measuring (2a runs: 2.7–6.7 s), for the time estimate. */
+const TAKE_SECONDS: Record<'qwen' | 'persona' | 'supertonic', number> = {
+  qwen: 5,
+  persona: 5,
+  supertonic: 2,
+};
+/** Takes a line needs on average (stage 3 plan 9), takes of a new voice reference, server start. */
+const EXPECTED_TAKES = { emotion: 3.4, plain: 1.2 };
+const REFERENCE_TAKES = 20;
+const SERVER_START_S = 30;
+
+const sha16 = (path: string) => sha256File(path).slice(0, 16);
+
+/** Write a cache file whole: other s2v processes share the cache (stage 3 plan 2). */
+function atomicWrite(path: string, data: string | Buffer): void {
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, data);
+  renameSync(tmp, path);
+}
+
+/** A cached JSON file, or null when it is missing or unreadable. */
+function readJson<T>(path: string): T | null {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as T;
+  } catch {
+    return null;
+  }
+}
 
 export interface LockEntry {
   src: string;
@@ -123,6 +170,27 @@ export interface LockEntry {
   lead?: number;
   tail?: number;
   noise?: number;
+  /** Stage 3: the raw takes it came from, and the human-choice key (3b). */
+  synthKey?: string;
+  pickKey?: string;
+  /** Highest take number made so far for this sentence (a retry starts after it). */
+  tried?: number;
+  /** Takes made for the choice: number → passed, and what selection read (rounded). */
+  takes?: Record<string, TakeRecord>;
+  /** How the take was chosen (emotion lines and retries). */
+  select?: { n: number; rank: number; neighbor: boolean; retry: boolean };
+  /** Non-speech cut at the edges (seconds of the take wav). */
+  crop?: { from: number; to: number };
+}
+
+/** One take in a lock entry (stage 3): enough to see why it was or was not chosen. */
+export interface TakeRecord {
+  ok: boolean;
+  f0: number | null;
+  /** Raw length and ending (emotion lines), heard rate (chars/s). */
+  raw: number | null;
+  ending: number | null;
+  rate: number | null;
 }
 
 export interface LockManifest {
@@ -226,7 +294,11 @@ export interface SentenceJob {
   synthKey: string;
   synthFields: { speed: number; instruct: string };
   key: string;
+  /** Key of a human take choice (stage 3b): the raw takes and, for emotion lines, power. */
+  pickKey: string;
   tempo: number | null;
+  /** `power` of an emotion line: it picks a take (stage 3 plan 5). */
+  power?: 'weak' | 'strong';
   /** Voice attributes of the line (acting stage 2). */
   acting?: Acting;
   /** An emotion line: the emotion gates apply (ko) and the emotion pitch window. */
@@ -239,6 +311,35 @@ export interface SentenceJob {
   multiplier: number;
   /** Longest pause allowed inside the raw take. */
   maxPause: number;
+}
+
+/**
+ * The previous sentence for neighbor matching (stage 3 plan 5.6): the sentence right before in the
+ * same paragraph, an emotion line of the same emotion, instruction, power and speed whose locked
+ * take passed.
+ * Its pitch and heard rate come from its lock entry, so a sentence synthesized now and one reused
+ * from the lock give the same neighbor.
+ */
+export function neighborFor(
+  job: SentenceJob,
+  prev: SentenceJob | undefined,
+  entry: Pick<LockEntry, 'f0' | 'words' | 'checks'> | undefined,
+  rate: (job: SentenceJob, words: AlignedWord[]) => number | null,
+): Neighbor | undefined {
+  if (!prev || !entry || !job.emotional || !prev.emotional) return undefined;
+  const [scene, block, sentence] = job.id.split(':');
+  if (prev.id !== `${scene}:${block}:${Number(sentence) - 1}`) return undefined;
+  if (
+    prev.acting?.emo !== job.acting?.emo ||
+    // the instruction holds the emotion template, `say` and the cast style
+    prev.synthFields.instruct !== job.synthFields.instruct ||
+    prev.power !== job.power ||
+    prev.speedProduct !== job.speedProduct
+  )
+    return undefined;
+  // a fallback take (kept despite failures) is not matched
+  if ((entry.checks?.length ?? 0) > 0) return undefined;
+  return { f0: entry.f0 ?? null, rate: rate(prev, entry.words) };
 }
 
 interface Attempt {
@@ -256,6 +357,13 @@ interface Attempt {
   voiceRef: string | null;
   /** Emotion gate measurements (emotion lines in ko only). */
   emotion?: EmotionTakeMeasure & { ending: number | null };
+  /** Raw take inside the words (every emotion line). */
+  raw?: { duration: number; pause: number; ending: number | null };
+  /** What take selection reads. */
+  facts: TakeFacts;
+  crop: { from: number; to: number } | null;
+  /** Judge the take again with another reference (null: none, stage 3 plan 3). */
+  rejudge: (ref: LoadedReference | null) => void;
 }
 
 interface PitchResult {
@@ -418,15 +526,19 @@ export function planSentences(
         };
         const synthKey = hashKey(synthFields);
         const tempo = target.engine !== 'supertonic' && speed !== 1 ? speed : null;
+        const emotional = emotionSentence(target.engine, acting, opts.draft);
+        // power picks a take of an emotion line (stage 3 plan 1): in the lock key, not the
+        // synthesis key, so lines that differ only in power share their raw takes
+        const power = emotional ? acting?.power : undefined;
         const key = hashKey({
           synthKey,
           postprocess: POSTPROCESS_VERSION,
           align: ALIGN_VERSION,
           tempo,
           maxPause: meta.pacing.maxPause,
+          ...(power ? { power } : {}),
         });
         plan.sentences[id] = key;
-        const emotional = emotionSentence(target.engine, acting, opts.draft);
         plan.jobs.push({
           id,
           text: sentence.text,
@@ -437,8 +549,10 @@ export function planSentences(
           synthKey,
           synthFields,
           key,
+          pickKey: hashKey({ synthKey, ...(power ? { power } : {}) }),
           tempo,
           ...(acting ? { acting } : {}),
+          ...(power ? { power } : {}),
           emotional,
           speedProduct: speed,
           template,
@@ -487,6 +601,9 @@ export async function synthesizeScript(
     env: previous?.env ?? {},
   };
   const warnings: string[] = [];
+  const pushOnce = (w: string) => {
+    if (!warnings.includes(w)) warnings.push(w);
+  };
   let synthesized = 0;
   let reused = 0;
   let started = false;
@@ -498,6 +615,43 @@ export async function synthesizeScript(
     started = true;
   };
   const save = () => writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  // E7 (stage 3 plan 6): make all six takes of emotion lines; the choice stays the budget's
+  const takesAll = process.env.S2V_TAKES_ALL === '6';
+  /** Tell how long synthesis will take (stage 3 plan 9). */
+  const estimateTime = (todo: SentenceJob[], retry: (j: SentenceJob) => boolean) => {
+    if (mock || todo.length === 0) return;
+    // highest raw take per synthesis key, read once
+    const rawMax = new Map<string, number>();
+    for (const f of readdirSync(rawDir)) {
+      const m = /^([0-9a-f]+)(?:\.a(\d+))?\.wav$/.exec(f);
+      if (m) rawMax.set(m[1]!, Math.max(rawMax.get(m[1]!) ?? -1, Number(m[2] ?? 0)));
+    }
+    let seconds = 0;
+    const seenRefs = new Set<string>();
+    for (const j of todo) {
+      const takes = j.emotional ? EXPECTED_TAKES.emotion : EXPECTED_TAKES.plain;
+      // a retry makes new takes; otherwise cached raw takes are only measured
+      const cached = retry(j) ? 0 : (rawMax.get(j.synthKey) ?? -1) + 1;
+      seconds += Math.max(0.3, takes - cached) * TAKE_SECONDS[j.target.engine];
+      if (checkVoices) {
+        const v = refVoice(j);
+        const key = voiceKey(v);
+        if (!seenRefs.has(key)) {
+          seenRefs.add(key);
+          let missing = true;
+          try {
+            const { loaded, stale } = loadReference(v, dirname(scriptPath), revisions);
+            missing = !loaded || !!stale;
+          } catch {
+            // counted as missing
+          }
+          if (missing) seconds += REFERENCE_TAKES * TAKE_SECONDS[j.target.engine];
+        }
+      }
+    }
+    if (seconds > todo.length * 0.3 * TAKE_SECONDS.qwen) seconds += SERVER_START_S;
+    opts.log(`about ${Math.max(1, Math.round(seconds / 60))} min for ${todo.length} sentence(s)`);
+  };
 
   // ---------- voice references (acting plan 3.6) ----------
   // Draft and mock audio is not checked. A missing reference is made on first use (20 takes).
@@ -544,8 +698,6 @@ export async function synthesizeScript(
               );
               r = await createReference(v, scriptDir, repoRoot, revisions, services, opts.log);
             }
-            await ensureServices();
-            await vectors.get(r!);
             return r;
           } catch (e) {
             return unchecked(v, e);
@@ -559,6 +711,7 @@ export async function synthesizeScript(
     const r = await referenceFor(job);
     if (!r) return null;
     try {
+      await ensureServices();
       return { r, sim: cosine(await embed(tts, wavPath), await vectors.get(r)) };
     } catch (e) {
       return unchecked(refVoice(job), e);
@@ -567,15 +720,6 @@ export async function synthesizeScript(
   /** Pitch and similarity of a take against its voice reference. */
   const emoOf = (job: SentenceJob) =>
     job.emotional && job.acting?.emo ? { emo: job.acting.emo } : {};
-  const consistency = async (job: SentenceJob, wavPath: string, f0: number | null) => {
-    const s = await similarity(job, wavPath);
-    if (!s) return { sim: null, voiceRef: null, reasons: [] };
-    return {
-      sim: s.sim,
-      voiceRef: s.r.sha,
-      reasons: consistencyReasons({ text: job.text, f0, sim: s.sim, ...emoOf(job) }, s.r.ref),
-    };
-  };
   /** The emotion gates apply to new takes of emotion lines in Korean (stage 2 plan 4). */
   const gated = (job: SentenceJob) => checkVoices && job.emotional && meta.lang === 'ko';
   const charsOf = (job: SentenceJob) => [...normalizeForCer(job.ttsText, meta.lang)].length;
@@ -586,7 +730,7 @@ export async function synthesizeScript(
   const measureRaw = async (job: SentenceJob, raw: string, attempt: number) => {
     const dir = join(repoRoot, '.s2v-cache', 'tts-raw-trim');
     mkdirSync(dir, { recursive: true });
-    const trimmed = join(dir, `${job.synthKey}.a${attempt}.wav`);
+    const trimmed = join(dir, `${job.synthKey}.a${attempt}.${process.pid}.wav`);
     try {
       await postprocess(raw, trimmed, null);
       const { data } = await aligner.post<{ words: AlignedWord[] }>('/align', {
@@ -614,12 +758,240 @@ export async function synthesizeScript(
   const { jobs, recorded } = plan;
   Object.assign(manifest.sentences, plan.sentences);
 
+  // ---------- takes (stage 3 plan 2–3): raw take → take wav → measurements → judgement ----------
+  const takesDir = join(repoRoot, '.s2v-cache', 'tts-takes');
+  if (!mock) mkdirSync(takesDir, { recursive: true });
+  const takeKey = (job: SentenceJob, n: number) =>
+    hashKey({
+      synthKey: job.synthKey,
+      tempo: job.tempo,
+      maxPause: meta.pacing.maxPause,
+      postprocess: POSTPROCESS_VERSION,
+      n,
+    });
+  const measureKey = (job: SentenceJob) =>
+    hashKey({
+      alignText: job.alignText,
+      align: ALIGN_VERSION,
+      aligner: ALIGNER.wrapper,
+      models: [revisions['qwen3-forcedaligner-0.6b'], revisions['qwen3-asr-0.6b']],
+      asr: opts.asr,
+      constants: MEASURE_CONSTANTS,
+      version: TAKE_MEASURE_VERSION,
+    });
+  const rawPath = (job: SentenceJob, n: number) =>
+    join(rawDir, n === 0 ? `${job.synthKey}.wav` : `${job.synthKey}.a${n}.wav`);
+  /** The highest take number in the raw cache for a synthesis key (-1: none). */
+  const lastRawTake = (synthKey: string) => {
+    let last = -1;
+    for (const f of readdirSync(rawDir)) {
+      if (f === `${synthKey}.wav`) last = Math.max(last, 0);
+      const m = new RegExp(`^${synthKey}\\.a(\\d+)\\.wav$`).exec(f);
+      if (m) last = Math.max(last, Number(m[1]));
+    }
+    return last;
+  };
+
+  /** The raw take (cached) and its synthesis info. */
+  const rawTake = async (job: SentenceJob, n: number) => {
+    const raw = rawPath(job, n);
+    const info = readJson<{ model: string; seed: number }>(`${raw}.json`);
+    if (info && existsSync(raw)) return { raw, info };
+    await ensureServices();
+    const { data: wav, headers } = await tts.post<Buffer>('/synthesize', {
+      engine: job.target.engine,
+      voice: job.target.voice,
+      lang: meta.lang,
+      text: job.ttsText,
+      ...(job.synthFields.instruct ? { instruct: job.synthFields.instruct } : {}),
+      speed: job.synthFields.speed,
+      ...(job.target.ref
+        ? { ref_wav_path: job.target.ref.wavPath, ref_text: job.target.ref.text }
+        : {}),
+      seed_material: `${job.synthKey}:${n}`,
+    });
+    const meta2 = JSON.parse(headers.get('x-s2v-meta') ?? '{}') as { model: string; seed: number };
+    atomicWrite(raw, wav);
+    atomicWrite(`${raw}.json`, JSON.stringify(meta2));
+    return { raw, info: meta2 };
+  };
+
+  /** Measurements of one take before any crop (cached by take and measurement key). */
+  interface TakeMeasure {
+    wavSha: string;
+    words: AlignedWord[];
+    heard: string;
+    removed: number;
+    info: { model: string; seed: number };
+    pitch: PitchResult;
+    /** Raw take inside the words (every emotion line). */
+    raw?: { duration: number; pause: number; ending: number | null };
+  }
+  const measureTake = async (job: SentenceJob, n: number) => {
+    const tk = takeKey(job, n);
+    const wav = join(takesDir, `${tk}.wav`);
+    const meta3 = join(takesDir, `${tk}.json`);
+    type Made = {
+      wavSha: string;
+      rawSha: string;
+      removed: number;
+      info: { model: string; seed: number };
+    };
+    let made = readJson<Made>(meta3);
+    const wavSha0 = existsSync(wav) ? sha16(wav) : null;
+    // the take wav and what made it belong together (a crash between the two writes)
+    const raw0 = rawPath(job, n);
+    // an emotion line also measures the raw take: it must be the one the take wav was made from
+    const madeOk =
+      !!made &&
+      made.wavSha === wavSha0 &&
+      typeof made.removed === 'number' &&
+      typeof made.info?.model === 'string' &&
+      (!job.emotional || (existsSync(raw0) && made.rawSha === sha16(raw0)));
+    const path = join(takesDir, `${tk}.${measureKey(job)}.json`);
+    const valid = (c: TakeMeasure | null, sha: string | null) =>
+      !!c && c.wavSha === sha && (!job.emotional || !!c.raw);
+    let cached = readJson<TakeMeasure>(path);
+    if (madeOk && valid(cached, wavSha0)) return { tk, wav, m: cached! };
+    // the raw measurement of an emotion line needs the raw take: without it, the take is made
+    // again from a new raw take (plain lines measure the take wav only)
+    if (!madeOk) {
+      const { raw, info } = await rawTake(job, n);
+      const tmp = `${wav}.${process.pid}.tmp.wav`;
+      try {
+        await postprocess(raw, tmp, job.tempo);
+        const removed = compressPausesInFile(tmp, meta.pacing.maxPause);
+        renameSync(tmp, wav);
+        made = { wavSha: sha16(wav), rawSha: sha16(raw), removed, info };
+      } finally {
+        if (existsSync(tmp)) unlinkSync(tmp);
+      }
+      atomicWrite(meta3, JSON.stringify(made));
+    }
+    const wavSha = made!.wavSha;
+    cached = readJson<TakeMeasure>(path);
+    if (valid(cached, wavSha)) return { tk, wav, m: cached! };
+    await ensureServices();
+    const { data: aligned } = await aligner.post<{ words: AlignedWord[] }>('/align', {
+      wav_path: wav,
+      text: job.alignText,
+      lang: meta.lang,
+    });
+    const heard = opts.asr
+      ? (await aligner.post<{ text: string }>('/transcribe', { wav_path: wav, lang: meta.lang }))
+          .data.text
+      : '';
+    const pitch = (await aligner.post<PitchResult>('/pitch', { wav_path: wav })).data;
+    const m: TakeMeasure = {
+      wavSha,
+      words: aligned.words,
+      heard,
+      removed: made!.removed,
+      info: made!.info,
+      pitch,
+      ...(job.emotional ? { raw: await measureRaw(job, rawPath(job, n), n) } : {}),
+    };
+    atomicWrite(path, JSON.stringify(m));
+    return { tk, wav, m };
+  };
+
+  /** What the take checks need of a job (stage 3 plan 3). */
+  const takeJob = (job: SentenceJob): TakeJob => ({
+    text: job.text,
+    lang: meta.lang,
+    speed: job.speedProduct,
+    tempo: job.tempo,
+    gated: gated(job),
+    chars: charsOf(job),
+    multiplier: job.multiplier,
+    maxPause: job.maxPause,
+    synthSpeed: job.synthFields.speed,
+    ...(job.emotional && job.acting?.emo ? { emo: job.acting.emo } : {}),
+  });
+  const wavFacts = (path: string): WavFacts => ({
+    duration: wavDuration(path),
+    loudness: loudnessReader(path),
+  });
+
+  /** The final wav of a take (cropped when the crop rule says so), its words and pitch. */
+  const finalTake = async (job: SentenceJob, n: number) => {
+    const { tk, wav, m } = await measureTake(job, n);
+    const crop = cropFor(takeJob(job), m.words, m.pitch, wavFacts(wav));
+    if (!crop) return { tk, m, wav, words: m.words, pitch: m.pitch, crop: null, tag: 'full' };
+    const tag = `crop-${crop.from.toFixed(3)}-${crop.to.toFixed(3)}`;
+    const cut = join(takesDir, `${tk}.${tag}.${m.wavSha}.wav`);
+    if (!existsSync(cut)) {
+      const tmp = `${cut}.${process.pid}.tmp.wav`;
+      copyFileSync(wav, tmp);
+      cropFile(tmp, crop.from, crop.to);
+      renameSync(tmp, cut);
+      opts.log(
+        `  ${job.id} take ${n}: cut non-speech outside the words (kept ${crop.from.toFixed(2)}–${crop.to.toFixed(2)}s)`,
+      );
+    }
+    const words = shiftWords(m.words, crop.from);
+    const pitchPath = join(takesDir, `${tk}.${measureKey(job)}.${tag}.pitch.json`);
+    let p = readJson<{ wavSha: string; pitch: PitchResult }>(pitchPath);
+    if (!p || p.wavSha !== m.wavSha) {
+      await ensureServices();
+      p = {
+        wavSha: m.wavSha,
+        pitch: (await aligner.post<PitchResult>('/pitch', { wav_path: cut })).data,
+      };
+      atomicWrite(pitchPath, JSON.stringify(p));
+    }
+    return { tk, m, wav: cut, words, pitch: p.pitch, crop, tag };
+  };
+
+  /** Similarity of a final take with the voice reference (cached per reference), or null. */
+  const takeSimilarity = async (
+    job: SentenceJob,
+    f: Awaited<ReturnType<typeof finalTake>>,
+    r: LoadedReference,
+  ) => {
+    const enc = r.ref.embedder.revision;
+    const path = join(takesDir, `${f.tk}.${f.tag}.sim.${r.sha}.${enc}.${TTS_SERVER.wrapper}.json`);
+    const cached = readJson<{ wavSha: string; sim: number }>(path);
+    if (cached && cached.wavSha === f.m.wavSha) return cached.sim;
+    const s = await similarity(job, f.wav);
+    if (!s) return null;
+    atomicWrite(path, JSON.stringify({ wavSha: f.m.wavSha, sim: s.sim }));
+    return s.sim;
+  };
+
+  /** Judge a measured take (stage 3 plan 3). */
+  const judge = (
+    job: SentenceJob,
+    f: Awaited<ReturnType<typeof finalTake>>,
+    r: LoadedReference | null,
+    sim: number | null,
+  ) =>
+    judgeTake(
+      takeJob(job),
+      {
+        words: f.words,
+        wav: wavFacts(f.wav),
+        pitch: f.pitch,
+        cer: opts.asr ? roundTripCer(job.text, f.m.heard, meta.lang, meta.pronounce) : null,
+        ...(f.m.raw ? { raw: f.m.raw } : {}),
+      },
+      r ? r.ref : null,
+      sim,
+    );
+
+  /** Heard speaking rate of a take: characters over the words of the final wav. */
+  const heardRate = (job: SentenceJob, words: AlignedWord[]) => {
+    if (words.length === 0) return null;
+    const spoken = words[words.length - 1]!.end - words[0]!.start;
+    return spoken > 0 ? charsOf(job) / spoken : null;
+  };
+
   // ---------- one attempt: synthesize → post-process → align → ASR → assess ----------
   const runAttempt = async (job: SentenceJob, attempt: number): Promise<Attempt> => {
     if (mock) {
       const wavPath = join(lockDir, `${job.key}.try${attempt}.wav`);
       const words = mockSynthesize(job.alignText, meta.lang, job.speedProduct, wavPath);
-      const assessment = assessSentence({
+      let assessment = assessSentence({
         text: job.text,
         lang: meta.lang,
         duration: wavDuration(wavPath),
@@ -628,6 +1000,18 @@ export async function synthesizeScript(
         speed: job.speedProduct,
         loudness: loudnessReader(wavPath),
       });
+      if (mockFails(job.synthKey, attempt))
+        assessment = {
+          ...assessment,
+          ok: false,
+          reasons: [...assessment.reasons, 'mock failure (S2V_TTS_MOCK_FAIL)'],
+        };
+      const fake = mockMeasure(
+        job.synthKey,
+        attempt,
+        charsOf(job) * job.multiplier,
+        ESTIMATE_RATE[meta.lang],
+      );
       return {
         attempt,
         wavPath,
@@ -636,147 +1020,205 @@ export async function synthesizeScript(
         removed: 0,
         info: { model: 'mock', seed: 0 },
         assessment,
-        f0: null,
+        // emotion lines keep the mock pitch, so neighbor matching runs on mock locks too
+        f0: job.emotional ? fake.f0 : null,
         ending: null,
         sim: null,
         voiceRef: null,
+        facts: {
+          n: attempt,
+          ok: assessment.ok,
+          f0: fake.f0,
+          rawDuration: fake.rawDuration,
+          rawEnding: fake.rawEnding,
+          rate: heardRate(job, words),
+        },
+        crop: null,
+        rejudge: () => {},
       };
     }
-    await ensureServices();
-    const raw = join(
-      rawDir,
-      attempt === 0 ? `${job.synthKey}.wav` : `${job.synthKey}.a${attempt}.wav`,
-    );
-    const rawMeta = `${raw}.json`;
-    let info: { model: string; seed: number };
-    if (existsSync(raw) && existsSync(rawMeta)) {
-      info = JSON.parse(readFileSync(rawMeta, 'utf8')) as typeof info;
-    } else {
-      const { data: wav, headers } = await tts.post<Buffer>('/synthesize', {
-        engine: job.target.engine,
-        voice: job.target.voice,
-        lang: meta.lang,
-        text: job.ttsText,
-        ...(job.synthFields.instruct ? { instruct: job.synthFields.instruct } : {}),
-        speed: job.synthFields.speed,
-        ...(job.target.ref
-          ? { ref_wav_path: job.target.ref.wavPath, ref_text: job.target.ref.text }
-          : {}),
-        seed_material: `${job.synthKey}:${attempt}`,
-      });
-      info = JSON.parse(headers.get('x-s2v-meta') ?? '{}') as typeof info;
-      writeFileSync(raw, wav);
-      writeFileSync(rawMeta, JSON.stringify(info));
-    }
-    const wavPath = join(lockDir, `${job.key}.try${attempt}.wav`);
-    await postprocess(raw, wavPath, job.tempo);
-    const removed = compressPausesInFile(wavPath, meta.pacing.maxPause);
-    const { data: aligned } = await aligner.post<{ words: AlignedWord[] }>('/align', {
-      wav_path: wavPath,
-      text: job.alignText,
-      lang: meta.lang,
-    });
-    let heard = '';
-    let cer: number | null = null;
-    if (opts.asr) {
-      heard = (
-        await aligner.post<{ text: string }>('/transcribe', { wav_path: wavPath, lang: meta.lang })
-      ).data.text;
-      cer = roundTripCer(job.text, heard, meta.lang, meta.pronounce);
-    }
-    let words = aligned.words;
-    const assess = () =>
-      assessSentence({
-        text: job.text,
-        lang: meta.lang,
-        duration: wavDuration(wavPath),
-        words,
-        cer,
-        speed: job.speedProduct,
-        loudness: loudnessReader(wavPath),
-      });
-    let assessment = assess();
-    let cropped = false;
-    const crop = () => {
-      const from = Math.max(0, words[0]!.start - EDGE_PAD_LEAD_S);
-      const to = Math.min(wavDuration(wavPath), words[words.length - 1]!.end + EDGE_PAD_TAIL_S);
-      cropFile(wavPath, from, to);
-      words = words.map((w) => ({ ...w, start: Math.max(0, w.start - from), end: w.end - from }));
-      cropped = true;
-      assessment = assess();
-      opts.log(
-        `  ${job.id} attempt ${attempt}: cut non-speech outside the words (kept ${from.toFixed(2)}–${to.toFixed(2)}s)`,
-      );
-    };
-    // Non-speech sound before the first / after the last word (laughs, breaths — common on very
-    // short sentences) is cut away instead of re-synthesizing; inside words it cannot be.
-    const edgeOnly = /before the first word|after the last word/;
-    if (!assessment.ok && words.length > 0 && assessment.reasons.some((r) => edgeOnly.test(r)))
-      crop();
-    let pitch = (await aligner.post<PitchResult>('/pitch', { wav_path: wavPath })).data;
-    // emotion lines: sound before / after the voice is cut away too when it fails the edge gate
-    const tempo = job.tempo ?? 1;
-    const edgeFails = () =>
-      pitch.lead_s * tempo > GATES.edgeS || pitch.tail_s * tempo > GATES.edgeS;
-    if (gated(job) && !cropped && words.length > 0 && edgeFails()) {
-      crop();
-      pitch = (await aligner.post<PitchResult>('/pitch', { wav_path: wavPath })).data;
-    }
-    const f0 = pitch.median_hz;
-    let emotion: Attempt['emotion'];
-    if (gated(job)) {
-      const r = await measureRaw(job, raw, attempt);
-      emotion = {
-        chars: charsOf(job),
-        rawDuration: r.duration,
-        rawPause: r.pause,
-        ending: r.ending,
-        lead: pitch.lead_s * tempo,
-        tail: pitch.tail_s * tempo,
-        noise: pitch.noise_s * tempo,
-      };
-      const ref = await referenceFor(job);
-      const failures = emotionGateFailures(
-        emotion,
-        { multiplier: job.multiplier, maxPause: job.maxPause, synthSpeed: job.synthFields.speed },
-        ref?.ref.rate ?? null,
-      );
-      if (failures.length)
-        assessment = { ...assessment, ok: false, reasons: [...assessment.reasons, ...failures] };
-    }
-    let sim: number | null = null;
-    let voiceRef: string | null = null;
-    if (checkVoices) {
-      const c = await consistency(job, wavPath, f0);
-      sim = c.sim;
-      voiceRef = c.voiceRef;
-      if (c.reasons.length)
-        assessment = {
-          ...assessment,
-          ok: false,
-          reasons: [...assessment.reasons, ...c.reasons],
-        };
-    }
-    return {
+    const f = await finalTake(job, attempt);
+    const r = checkVoices ? await referenceFor(job) : null;
+    const sim = r ? await takeSimilarity(job, f, r) : null;
+    const ref = r && sim !== null ? r : null;
+    const a: Attempt = {
       attempt,
-      wavPath,
-      words,
-      heard,
-      removed,
-      info,
-      assessment,
-      f0,
-      ending: pitch.ending_st,
+      wavPath: f.wav,
+      words: f.words,
+      heard: f.m.heard,
+      removed: f.m.removed,
+      info: f.m.info,
+      assessment: null as unknown as SentenceAssessment,
+      f0: f.pitch.median_hz,
+      ending: f.pitch.ending_st,
       sim,
-      voiceRef,
-      ...(emotion ? { emotion } : {}),
+      voiceRef: ref ? ref.sha : null,
+      ...(f.m.raw ? { raw: f.m.raw } : {}),
+      facts: {
+        n: attempt,
+        ok: false,
+        f0: f.pitch.median_hz,
+        rawDuration: f.m.raw?.duration ?? null,
+        rawEnding: f.m.raw?.ending ?? null,
+        rate: heardRate(job, f.words),
+      },
+      crop: f.crop,
+      rejudge: (r2) => {
+        const j = judge(job, f, r2, r2 ? sim : null);
+        a.assessment = j.assessment;
+        a.facts.ok = j.assessment.ok;
+        if (j.emotion) a.emotion = j.emotion;
+        else delete a.emotion;
+        if (!r2) {
+          a.sim = null;
+          a.voiceRef = null;
+        }
+      },
+    };
+    a.rejudge(ref);
+    return a;
+  };
+
+  /** Selection inputs of a job (stage 3 plan 5). */
+  const takeContext = async (job: SentenceJob): Promise<TakeContext> => {
+    const emo = job.acting?.emo;
+    const standard =
+      emo !== undefined && isStandardEmotion(emo) && !meta.acting?.emotions?.[emo]
+        ? emo
+        : undefined;
+    const base = {
+      ...(standard ? { emotion: standard } : {}),
+      ...(job.power ? { power: job.power } : {}),
+      question: endsWithQuestion(job.text),
+    };
+    if (mock) {
+      const rate = ESTIMATE_RATE[meta.lang];
+      return { ...base, refF0: MOCK_REF_F0, expected: (charsOf(job) / rate) * job.multiplier };
+    }
+    const r = checkVoices ? await referenceFor(job) : null;
+    if (!r) return { ...base, refF0: null, expected: null };
+    return {
+      ...base,
+      refF0: r.ref.f0,
+      expected:
+        r.ref.rate > 0
+          ? ((charsOf(job) / r.ref.rate) * job.multiplier) / job.synthFields.speed
+          : null,
     };
   };
 
-  const commit = (job: SentenceJob, chosen: Attempt, tried: Attempt[]) => {
+  /** How many of the takes the budget looks at: where it is done (a retry: its 3 takes). */
+  const budgetStop = (tried: Attempt[], ctx: TakeContext, retry: boolean) => {
+    if (retry) return Math.min(tried.length, FIRST_TAKES);
+    for (let k = FIRST_TAKES; k <= tried.length; k++)
+      if (
+        takeBudgetDone(
+          tried.slice(0, k).map((t) => t.facts),
+          ctx,
+        )
+      )
+        return k;
+    return tried.length;
+  };
+
+  /**
+   * Make takes of an emotion line from `first` until the budget is done (3 first, at most 6), or 3
+   * new takes for a retry; select among the takes the budget looked at.
+   */
+  const emotionTakes = async (job: SentenceJob, first: number, retry: boolean) => {
+    let ctx = await takeContext(job);
+    const tried: Attempt[] = [];
+    const last = retry ? first + FIRST_TAKES - 1 : first + MAX_TAKES - 1;
+    for (let n = first; n <= last; n++) {
+      const a = await runAttempt(job, n);
+      tried.push(a);
+      if (!a.assessment.ok) opts.log(`  ${job.id} take ${n}: ${a.assessment.reasons.join('; ')}`);
+      const enough = retry
+        ? tried.length === FIRST_TAKES
+        : tried.length >= FIRST_TAKES &&
+          takeBudgetDone(
+            tried.map((t) => t.facts),
+            ctx,
+          );
+      if (enough && !takesAll) break;
+    }
+    // a reference that failed mid-sentence: judge every take without it (stage 3 plan 3)
+    if (await settle(job, tried, ctx.refF0 !== null)) ctx = { ...ctx, refF0: null, expected: null };
+    if (checkVoices && !mock && ctx.refF0 === null)
+      pushOnce(
+        `${job.id}: chose a take without the voice reference — run tts --retry ${job.id} later`,
+      );
+    return { ctx, tried, candidates: tried.slice(0, budgetStop(tried, ctx, retry)) };
+  };
+
+  /**
+   * The reference became unusable during the sentence (stage 3 plan 3): judge every take without
+   * it. True when the sentence is now without a reference although selection started with one.
+   */
+  const settle = async (job: SentenceJob, tried: Attempt[], hadRef: boolean) => {
+    if (mock || !checkVoices) return false;
+    if (await referenceFor(job)) return false;
+    if (tried.some((t) => t.voiceRef !== null)) for (const t of tried) t.rejudge(null);
+    return hadRef;
+  };
+
+  /** Takes of a plain line from `first`: the first that passes, at most 6. */
+  const plainTakes = async (job: SentenceJob, first: number) => {
+    const tried: Attempt[] = [];
+    const last = first + MAX_TAKES - 1;
+    for (let attempt = first; attempt <= last; attempt++) {
+      const a = await runAttempt(job, attempt);
+      tried.push(a);
+      if (a.assessment.ok) break;
+      opts.log(
+        `  ${job.id} attempt ${attempt}: ${a.assessment.reasons.join('; ')}${attempt < last ? ' → retrying' : ''}`,
+      );
+    }
+    await settle(job, tried, false);
+    return tried;
+  };
+  const firstPassing = (tried: Attempt[]) =>
+    tried.find((t) => t.assessment.ok) ?? bestAttempt(tried, meta.lang);
+
+  const neighborOf = (job: SentenceJob): Neighbor | undefined => {
+    const prev = jobs[jobs.indexOf(job) - 1];
+    return neighborFor(job, prev, prev && manifest.entries[prev.key], heardRate);
+  };
+
+  /** Choose among candidates: selection, else the fewest failures. */
+  const choose = (
+    job: SentenceJob,
+    candidates: Attempt[],
+    ctx: TakeContext,
+    prev: Neighbor | undefined,
+  ) => {
+    const sel = selectTake(
+      candidates.map((t) => t.facts),
+      ctx,
+      prev,
+    );
+    if (!sel) return { chosen: bestAttempt(candidates, meta.lang), select: null };
+    if (sel.n === 1) opts.log(`  ${job.id}: one take passed — no choice by power or strength`);
+    const chosen = candidates.find((t) => t.attempt === sel.take.n)!;
+    return {
+      chosen,
+      select: { n: sel.n, rank: sel.rank, neighbor: sel.neighbor },
+    };
+  };
+
+  const commit = (
+    job: SentenceJob,
+    chosen: Attempt,
+    tried: Attempt[],
+    extra: { tried: number; select?: LockEntry['select'] },
+  ) => {
     const src = `${job.key}.wav`;
-    renameSync(chosen.wavPath, join(lockDir, src));
-    for (const t of tried) if (t !== chosen && existsSync(t.wavPath)) unlinkSync(t.wavPath);
+    // mock takes live in the lock folder; real takes stay in the take cache
+    if (dirname(chosen.wavPath) === lockDir) renameSync(chosen.wavPath, join(lockDir, src));
+    else copyFileSync(chosen.wavPath, join(lockDir, src));
+    for (const t of tried)
+      if (t !== chosen && dirname(t.wavPath) === lockDir && existsSync(t.wavPath))
+        unlinkSync(t.wavPath);
     const cer = chosen.assessment.cer ?? 0;
     manifest.entries[job.key] = {
       src,
@@ -795,19 +1237,40 @@ export async function synthesizeScript(
       ...(chosen.sim !== null && chosen.voiceRef
         ? { sim: Number(chosen.sim.toFixed(4)), voiceRef: chosen.voiceRef }
         : {}),
-      ...(chosen.emotion
+      ...(chosen.raw
         ? {
             raw: {
-              duration: Number(chosen.emotion.rawDuration.toFixed(3)),
-              pause: Number(chosen.emotion.rawPause.toFixed(2)),
-              ending:
-                chosen.emotion.ending !== null ? Number(chosen.emotion.ending.toFixed(2)) : null,
+              duration: Number(chosen.raw.duration.toFixed(3)),
+              pause: Number(chosen.raw.pause.toFixed(2)),
+              ending: chosen.raw.ending !== null ? Number(chosen.raw.ending.toFixed(2)) : null,
             },
+          }
+        : {}),
+      ...(chosen.emotion
+        ? {
             lead: Number(chosen.emotion.lead.toFixed(3)),
             tail: Number(chosen.emotion.tail.toFixed(3)),
             noise: Number(chosen.emotion.noise.toFixed(3)),
           }
         : {}),
+      synthKey: job.synthKey,
+      pickKey: job.pickKey,
+      tried: extra.tried,
+      takes: Object.fromEntries(
+        tried.map((t) => {
+          const r = (x: number | null, d: number) => (x === null ? null : Number(x.toFixed(d)));
+          const rec: TakeRecord = {
+            ok: t.assessment.ok,
+            f0: r(t.facts.f0, 1),
+            raw: r(t.facts.rawDuration, 3),
+            ending: r(t.facts.rawEnding, 2),
+            rate: r(t.facts.rate, 2),
+          };
+          return [String(t.attempt), rec];
+        }),
+      ),
+      ...(extra.select ? { select: extra.select } : {}),
+      ...(chosen.crop ? { crop: chosen.crop } : {}),
     };
     save();
   };
@@ -947,45 +1410,126 @@ export async function synthesizeScript(
     }
     const retried = (id: string) =>
       (opts.retry ?? []).some((r) => id === r || id.startsWith(`${r}:`));
+    estimateTime(
+      jobs.filter((j) => {
+        const e = manifest.entries[j.key];
+        return retried(j.id) || !e || !existsSync(join(lockDir, e.src));
+      }),
+      (j) => retried(j.id),
+    );
     for (const job of jobs) {
       const existing = manifest.entries[job.key];
-      // A retry starts after the kept take, so every retry gives new takes (new seeds).
-      const first = retried(job.id) && existing ? existing.attempt + 1 : 0;
-      if (first > 0) opts.log(`  ${job.id} retry requested → new takes from attempt ${first}`);
-      if (first === 0 && existing && existsSync(join(lockDir, existing.src))) {
+      const hasLock = !!existing && existsSync(join(lockDir, existing.src));
+      // the entry this sentence had before its key changed (power added, text edited, …)
+      const oldKey = previous?.sentences[job.id];
+      const old = oldKey && oldKey !== job.key ? previous?.entries[oldKey] : undefined;
+      if (!existing && old?.select?.retry)
+        warnings.push(
+          `${job.id}: the take chosen with --retry before is not used (the sentence's key changed) — "${job.text}"`,
+        );
+      const wantRetry = retried(job.id);
+      const base = existing ?? old;
+      // takes already made from the same raw takes (the old entry when only power changed)
+      const madeBefore = Math.max(
+        // a 2a entry has no synthKey: count it (new seeds either way)
+        ...[existing, !old?.synthKey || old.synthKey === job.synthKey ? old : undefined].map((e) =>
+          e ? Math.max(e.tried ?? e.attempt, e.attempt) : -1,
+        ),
+      );
+      let first = 0;
+      if (wantRetry) {
+        if (base) {
+          // new seeds: after every take made so far for this synthesis key (A4)
+          first = Math.max(madeBefore, lastRawTake(job.synthKey)) + 1;
+          opts.log(`  ${job.id} retry requested → new takes from ${first}`);
+        } else opts.log(`  ${job.id} retry: no lock entry — synthesizing it`);
+      }
+      if (!wantRetry && hasLock) {
         // Sentences already in the lock are not checked again unless asked (Q9).
-        const reasons = opts.recheck ? await recheckReasons(job, existing) : [];
+        const reasons = opts.recheck ? await recheckReasons(job, existing!) : [];
         if (reasons.length === 0) {
           reused++;
           continue;
         }
         opts.log(`  ${job.id} recheck failed: ${reasons.join('; ')} → re-synthesizing`);
+        if (existing!.select?.retry)
+          warnings.push(`${job.id}: the take chosen with --retry is replaced by a budget take`);
       }
-      const tried: Attempt[] = [];
-      const last = first + MAX_ATTEMPTS - 1;
-      for (let attempt = first; attempt <= last; attempt++) {
-        const a = await runAttempt(job, attempt);
-        tried.push(a);
-        if (a.assessment.ok) break;
-        opts.log(
-          `  ${job.id} attempt ${attempt}: ${a.assessment.reasons.join('; ')}${attempt < last ? ' → retrying' : ''}`,
-        );
+      const retrying = wantRetry && first > 0;
+      let tried: Attempt[] = [];
+      let chosen: Attempt;
+      let select: LockEntry['select'] | undefined;
+      if (job.emotional) {
+        const r = await emotionTakes(job, first, retrying);
+        tried = r.tried;
+        const c = choose(job, r.candidates, r.ctx, neighborOf(job));
+        chosen = c.chosen;
+        select = c.select ? { ...c.select, retry: retrying } : undefined;
+        if (retrying && !c.select) {
+          if (hasLock) {
+            warnings.push(
+              `${job.id}: no new take passed (${chosen.assessment.reasons.join('; ')}) — kept the locked take`,
+            );
+            for (const t of tried)
+              if (dirname(t.wavPath) === lockDir && existsSync(t.wavPath)) unlinkSync(t.wavPath);
+            existing!.tried = Math.max(
+              existing!.tried ?? existing!.attempt,
+              first + tried.length - 1,
+            );
+            save();
+            reused++;
+            continue;
+          }
+          // no entry under the current key: the budget takes instead, so the line has audio
+          const b = await emotionTakes(job, 0, false);
+          const c2 = choose(job, b.candidates, b.ctx, neighborOf(job));
+          tried = [
+            ...tried.filter((t) => !b.tried.some((x) => x.attempt === t.attempt)),
+            ...b.tried,
+          ];
+          chosen = c2.chosen;
+          select = c2.select ? { ...c2.select, retry: false } : undefined;
+        }
+      } else {
+        tried = await plainTakes(job, first);
+        const retryTakes = new Set(tried);
+        chosen = firstPassing(tried);
+        if (retrying && !chosen.assessment.ok && !hasLock) {
+          // no entry under the current key: the budget takes instead, so the line has audio
+          const b = await plainTakes(job, 0);
+          tried = [...tried.filter((t) => !b.some((x) => x.attempt === t.attempt)), ...b];
+          chosen = firstPassing(b);
+        } else if (retrying && !chosen.assessment.ok) {
+          warnings.push(
+            `${job.id}: no new take passed (${chosen.assessment.reasons.join('; ')}) — kept the locked take`,
+          );
+          for (const t of tried)
+            if (dirname(t.wavPath) === lockDir && existsSync(t.wavPath)) unlinkSync(t.wavPath);
+          existing!.tried = Math.max(
+            existing!.tried ?? existing!.attempt,
+            first + tried.length - 1,
+          );
+          save();
+          reused++;
+          continue;
+        }
+        if (retrying && retryTakes.has(chosen))
+          select = { n: 1, rank: 0, neighbor: false, retry: true };
       }
-      const chosen = tried[tried.length - 1]!.assessment.ok
-        ? tried[tried.length - 1]!
-        : bestAttempt(tried, meta.lang);
       if (!chosen.assessment.ok) {
         warnings.push(
           `${job.id}: kept attempt ${chosen.attempt} despite ${chosen.assessment.reasons.join('; ')} — "${job.text}" → heard "${chosen.heard}"`,
         );
       }
-      commit(job, chosen, tried);
+      const madeUpTo = Math.max(...tried.map((t) => t.attempt), madeBefore);
+      commit(job, chosen, tried, { tried: madeUpTo, ...(select ? { select } : {}) });
       synthesized++;
       const e = manifest.entries[job.key]!;
       opts.log(
         `  ${job.id} ${job.target.engine}:${job.target.voice} ${e.duration.toFixed(2)}s` +
           (chosen.removed > 0 ? ` (-${chosen.removed.toFixed(2)}s pauses)` : '') +
-          ` cer=${(chosen.assessment.cer ?? 0).toFixed(2)}`,
+          ` cer=${(chosen.assessment.cer ?? 0).toFixed(2)}` +
+          (job.emotional ? ` take ${chosen.attempt} of ${tried.length}` : ''),
       );
     }
   } finally {

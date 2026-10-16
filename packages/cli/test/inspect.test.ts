@@ -302,6 +302,17 @@ describe('inspect: hashes', () => {
     expect([img.content, img.voice]).toEqual([h.content, h.voice]);
   });
 
+  it('hashes power of an emotion line into the voice (it picks a take, stage 3)', () => {
+    const v = (line: string) =>
+      ok(FM() + BODY.replace('a: 첫 문장입니다.', line), { 'a.png': 'A' }).hashes.voice;
+    const sad = v('a{emo=sad}: 첫 문장입니다.');
+    expect(v('a{emo=sad power=strong}: 첫 문장입니다.')).not.toBe(sad);
+    // no effect on a line that is not an emotion line: no change
+    expect(v('a{emo=neutral power=strong}: 첫 문장입니다.')).toBe(
+      v('a{emo=neutral}: 첫 문장입니다.'),
+    );
+  });
+
   it('keeps hashes when defaults are written out', () => {
     const explicit = ok(
       FM(

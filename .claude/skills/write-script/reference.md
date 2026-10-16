@@ -176,6 +176,8 @@ surprised moved serious`.
   - Only on lines whose words carry the emotion: an instruction does not make a plain sentence
     happy (it can sound wrong). Persona and Supertonic voices do not act emotions.
   - Keep the prefix on one line: `key{…}: text`.
+  - No sighs, breaths or gasps: do not write them as text ("하아…", "ah…"); the voice misreads
+    the line. Show the feeling with `emo` and the words instead.
 - `:pause[0.8]` — extra pause after the sentence (seconds).
 - `:only{youtube}` — this paragraph only in the listed outputs.
 - `:audio{src=rec/intro.wav}` — this paragraph is your own recording (≤ 180 s) instead of TTS;

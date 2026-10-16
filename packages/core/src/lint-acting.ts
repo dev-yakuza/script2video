@@ -70,13 +70,12 @@ export function lintActing(script: Script): Diagnostic[] {
             message: `${b.cast} (${member.voice}): say is ignored (Supertonic takes no instruction)`,
             line,
           });
-        if (!b.audio && a.power !== undefined && engine === 'qwen')
+        // on an emotion line power picks the weakest / strongest take (stage 3)
+        if (!b.audio && a.power !== undefined && engine === 'qwen' && !emotionSentence(engine, a))
           push({
             severity: 'info',
             code: 'acting-power',
-            message: emotionSentence(engine, a)
-              ? `power=${a.power} has no audible effect on qwen voices yet (it will choose among takes)`
-              : `power=${a.power} has no effect with emo=${a.emo}`,
+            message: `power=${a.power} has no effect with emo=${a.emo}`,
             line,
           });
         if (!b.audio) speedCheck(b.cast, speedProduct(meta, member, a), engine, line);

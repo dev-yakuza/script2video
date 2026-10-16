@@ -400,7 +400,7 @@ describe('lint', () => {
     expect(d.map((x) => [x.severity, x.code])).toEqual([
       ['info', 'acting-voice'],
       ['warning', 'acting-voice'],
-      ['info', 'acting-power'],
+      // power on an emotion line picks a take (stage 3): only the neutral line is told
       ['info', 'acting-power'],
       ['error', 'speed-range'],
     ]);

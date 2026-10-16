@@ -183,21 +183,26 @@ describe('character import (YMM4)', () => {
 
   const py311 =
     spawnSync('python3', ['-c', 'import sys; sys.exit(sys.version_info < (3, 11))']).status === 0;
-  it.skipIf(!py311)('extracts ZIPs with cp932 (Shift-JIS) file names', () => {
-    const d = mkdtempSync(join(tmpdir(), 's2v-zip-'));
-    const zip = join(d, 'pack.zip');
-    // Store names as cp932 bytes without the UTF-8 flag, as old Japanese zip tools do.
-    const code = `
+  it.skipIf(!py311)(
+    'extracts ZIPs with cp932 (Shift-JIS) file names',
+    () => {
+      const d = mkdtempSync(join(tmpdir(), 's2v-zip-'));
+      const zip = join(d, 'pack.zip');
+      // Store names as cp932 bytes without the UTF-8 flag, as old Japanese zip tools do.
+      const code = `
 import zipfile, sys
 zipfile.ZipInfo._encodeFilenameFlags = lambda self: (self.filename.encode("cp932"), self.flag_bits & ~0x800)
 with zipfile.ZipFile(sys.argv[1], "w") as z:
     for n in ["キャラ/体/体_00.png", "キャラ/目/目_00.png", "キャラ/口/口_00.png"]:
         z.writestr(n, b"\\x89PNG\\r\\n\\x1a\\n" + b"\\0" * 16)
 `;
-    expect(spawnSync('python3', ['-c', code, zip]).status).toBe(0);
-    const out = join(d, 'out');
-    const r = importCharacter(zip, out);
-    expect(r.copied).toBe(3);
-    expect(existsSync(join(out, 'views', 'main', '体', '体_00.png'))).toBe(true);
-  });
+      expect(spawnSync('python3', ['-c', code, zip]).status).toBe(0);
+      const out = join(d, 'out');
+      const r = importCharacter(zip, out);
+      expect(r.copied).toBe(3);
+      expect(existsSync(join(out, 'views', 'main', '体', '体_00.png'))).toBe(true);
+    },
+    // spawns Python; slow when other test files run in parallel
+    30_000,
+  );
 });

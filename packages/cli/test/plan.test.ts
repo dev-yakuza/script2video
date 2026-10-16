@@ -66,10 +66,16 @@ describe('planSentences', () => {
     expect((sad!.synthFields as unknown as { templates?: number }).templates).toBe(1);
   });
 
-  it('leaves power out of the qwen keys (no effect before take selection)', () => {
+  it('puts power of an emotion line into the lock key, not the synthesis key (stage 3 plan 1)', () => {
     const [weak] = plan('a{emo=sad power=weak}: 안녕하세요.').jobs;
     const [normal] = plan('a{emo=sad}: 안녕하세요.').jobs;
-    expect(weak!.key).toBe(normal!.key);
+    expect(weak!.key).not.toBe(normal!.key);
+    expect(weak!.synthKey).toBe(normal!.synthKey);
+    expect(weak!.pickKey).not.toBe(normal!.pickKey);
+    expect(weak!.power).toBe('weak');
+    // no effect (and no key change) on a line that is not an emotion line
+    const [plainWeak] = plan('a{emo=neutral power=weak}: 안녕하세요.').jobs;
+    expect(plainWeak!.key).toBe(plan('a{emo=neutral}: 안녕하세요.').jobs[0]!.key);
   });
 
   it('turns the line speed into tempo, or the synthesis speed for supertonic', () => {

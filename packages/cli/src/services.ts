@@ -143,15 +143,25 @@ export class Service {
   }
 }
 
+/** A port from the environment (S2V_TTS_PORT / S2V_ALIGNER_PORT), else the default. */
+const portFrom = (name: string, fallback: number) => {
+  const p = Number(process.env[name]);
+  return Number.isInteger(p) && p > 0 && p < 65536 ? p : fallback;
+};
+
 export const TTS_SERVER: ServiceSpec = {
   id: 'script2video-tts',
   dir: 'tts-server',
-  port: 47861,
+  get port() {
+    return portFrom('S2V_TTS_PORT', 47861);
+  },
   wrapper: '0.3.0',
 };
 export const ALIGNER: ServiceSpec = {
   id: 'script2video-aligner',
   dir: 'aligner',
-  port: 47862,
+  get port() {
+    return portFrom('S2V_ALIGNER_PORT', 47862);
+  },
   wrapper: '0.4.0',
 };

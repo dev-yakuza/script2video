@@ -159,3 +159,17 @@ export {
   type Engine,
 } from './acting.js';
 export { lintActing } from './lint-acting.js';
+export {
+  FIRST_TAKES,
+  MAX_TAKES,
+  NEIGHBOR_RATE_WEIGHT,
+  endingReached,
+  endsWithQuestion,
+  selectTake,
+  takeBudgetDone,
+  takeStrength,
+  type Neighbor,
+  type Selection,
+  type TakeContext,
+  type TakeFacts,
+} from './takes.js';

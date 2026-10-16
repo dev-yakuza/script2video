@@ -143,18 +143,27 @@ for it), the character's face of that name when the character has one (else the 
 character missing` lists the faces to make) and a motion. Change it from a sentence on with
 `:emo{emo=sad}`, between sentences: `mina{emo=calm}: 괜찮았어요. :emo{emo=sad}그런데요.`
 
-| attribute           |                                                                       |
-| ------------------- | --------------------------------------------------------------------- |
-| `emo=`              | the emotion                                                           |
-| `power=weak/strong` | how strong (persona and Supertonic voices: a little quieter / louder) |
-| `say="…"`           | a free direction for this line (Qwen preset speakers only)            |
-| `volume=soft/loud`  | −6 / +3 dB in the mix                                                 |
-| `speed=0.8–1.25`    | multiplied with the cast `speed`                                      |
+| attribute           |                                                                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `emo=`              | the emotion                                                                                                                               |
+| `power=weak/strong` | how strong (Qwen preset speakers with an emotion: the weakest / strongest take; persona and Supertonic voices: a little quieter / louder) |
+| `say="…"`           | a free direction for this line (Qwen preset speakers only)                                                                                |
+| `volume=soft/loud`  | −6 / +3 dB in the mix                                                                                                                     |
+| `speed=0.8–1.25`    | multiplied with the cast `speed`                                                                                                          |
 
 Write emotions on lines whose words already carry them: an instruction cannot make a neutral
 sentence sound happy. Persona and Supertonic voices cannot act an emotion (the face and motion still
 change). New takes of emotion lines in Korean are checked for breaths, sighs, long pauses and an
 unnatural length, and made again when they fail. Lines without these attributes sound as before.
+
+**Takes of an emotion line.** For an emotion line of a Qwen preset speaker, `tts` makes 3 takes,
+and more (up to 6) until two pass — for happy, excited, playful, angry and moved lines also until
+one ends without its voice falling. It keeps one by how strongly it acts: around the middle, the
+weakest for calm, sad, serious and moved, or as `power` asks. When the sentence right before in the
+paragraph has the same emotion, power, speed and `say`, it leans toward the take closest to it in
+pitch and pace. A sentence already in the audio lock keeps its take; `tts --retry <id>` makes 3 new
+takes after all earlier ones and keeps the locked take when none passes. `tts` prints an estimate of
+the time first.
 
 ### Characters
 

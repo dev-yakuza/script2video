@@ -5,6 +5,7 @@
  * gets its own cache keys, so it never mixes with real takes in an audio lock.
  */
 
+import { createHash } from 'node:crypto';
 import { ESTIMATE_RATE, normalizeForCer, type AlignedWord, type Lang } from '@script2video/core';
 import { writePcm16 } from './pauses.js';
 
@@ -49,4 +50,44 @@ export function mockSynthesize(
   }
   writePcm16(outPath, RATE, samples);
   return words;
+}
+
+/** Reference pitch of the mock voice: take selection ranks mock takes against it. */
+export const MOCK_REF_F0 = 200;
+
+/** A number in [0, 1) from a key, the same everywhere. */
+function unit(key: string): number {
+  return createHash('sha256').update(key).digest().readUInt32BE(0) / 2 ** 32;
+}
+
+/**
+ * What take selection reads from a mock take (stage 3 plan 10): spread so strength, power and
+ * the ending floor tell takes apart. f0 within ±3 semitones of the reference, raw length within
+ * ±15% of the expected, ending −6…0 semitones (across every ENDING_LIFT floor).
+ */
+export function mockMeasure(
+  synthKey: string,
+  n: number,
+  chars: number,
+  rate: number,
+): { f0: number; rawDuration: number; rawEnding: number } {
+  const u = (salt: string) => unit(`${synthKey}:${n}:${salt}`);
+  return {
+    f0: MOCK_REF_F0 * 2 ** ((6 * u('f0') - 3) / 12),
+    rawDuration: (chars / rate) * (1 + 0.3 * u('len') - 0.15),
+    rawEnding: -6 * u('ending'),
+  };
+}
+
+/**
+ * Takes a test makes fail: `S2V_TTS_MOCK_FAIL="<synthKey prefix>:0,1;<prefix>:2"` (stage 3 plan
+ * 10), to walk the budget, fallback and retry paths without models.
+ */
+export function mockFails(synthKey: string, n: number): boolean {
+  for (const part of (process.env.S2V_TTS_MOCK_FAIL ?? '').split(';')) {
+    const [prefix, list] = part.split(':');
+    if (prefix && list && synthKey.startsWith(prefix) && list.split(',').map(Number).includes(n))
+      return true;
+  }
+  return false;
 }

@@ -244,6 +244,8 @@ export function inspectScript(
             // the instruction actually sent: cast style, emotion template, say
             style: j.synthFields.instruct || undefined,
             templates: j.template ? ACTING_VERSION : undefined,
+            // power of an emotion line picks a take (stage 3 plan 1)
+            power: j.power,
             gain,
             text: j.ttsText,
             seed: meta.seed,
