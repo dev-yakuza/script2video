@@ -296,7 +296,8 @@ async function checkCandidates(
     }
     return out;
   } finally {
-    if (!wasRunning) aligner.stop();
+    // gone before returning: a command that starts its own aligner next must not adopt this one
+    if (!wasRunning) await aligner.stopAndWait();
   }
 }
 

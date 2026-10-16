@@ -69,6 +69,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `pick <image>`                                                                         | スクリーンショットをクリック / ドラッグして cue の座標を得る                                                                                    |
 | `voice create / pick`                                                                  | ペルソナ音声を設計し、候補から選ぶ                                                                                                              |
 | `voice check <voices/id.yaml>`                                                         | ペルソナの参照音声を判定（雑音・間・語尾の途切れ・音の高さ）                                                                                    |
+| `voice train <voices/id.yaml> [--lang ko] [--min-emotion N]`                           | ペルソナの話者を学習して感情を演じさせる（約 3 時間、再開できる）                                                                               |
 | `voice refs <script> [--refresh]`                                                      | 文を比べる基準音声                                                                                                                              |
 | `audio prune <script>`                                                                 | 台本で使わなくなった音声を削除                                                                                                                  |
 | `inspect <script> --json`                                                              | 台本の構成と、変更の種類ごとのハッシュ（ツール向け）                                                                                            |
@@ -125,6 +126,14 @@ node packages/cli/dist/main.js voice pick voices/minsu.yaml 2 --lang ko
 `voice check voices/minsu.yaml` で同じ判定ができます（元の出力がない仕上げ済みの音声では、雑音と語尾は
 判定しません）。
 
+**感情を演じるペルソナ。** 複製したペルソナは感情の指示に従えません。`s2v voice train
+voices/minsu.yaml --lang ko` はペルソナの声で Qwen3-TTS CustomVoice モデルの話者の行を 1 つ学習します（約
+3 時間：学習用の音声を自分で作って判定し、学習します。もう一度実行すると続きから再開し、キャラクター画像の生成中は
+実行しないでください）。`voices/minsu/ko.speaker.json` と基準音声を書き出すのでコミットし、cast に
+`personaModel: trained` を書いてください。学習した話者はプリセット話者のように `emo`・`say`・`style` に従い、
+強い文は "Sound very …" で話します。感情の音声が 150 個
+未満しか通らなければ 2 回目の学習の前に止まります（`--min-emotion` で変更）。今は韓国語のみ。
+
 **すべての文を同じ声で。** 声ごと（ペルソナ、`style` を含むプリセット話者、Supertonic の声）に基準音声が
 あります。固定文の 20 テイクを一度測ってコミットします（`voices/<id>/<lang>.f0.json`、
 `voices/_qwen/…`、`voices/_supertonic/…`）。`tts` はなければ作り（数分。判定のため Base モデルも読み込み、メモリを約 4GB 多く使います）、新しいテイクごとに音の高さと
@@ -150,7 +159,8 @@ speed: 0.8, maxPause: 1.5 }`）。感情は声（Qwen のプリセット話者�
 | `speed=0.8–1.25`    | cast の `speed` と掛け合わせる                                                                                 |
 
 感情は、言葉自体に感情がこもったセリフに書いてください。指示だけで平凡な文を楽しそうにはできません。
-persona・Supertonic の声は感情を演じられません（表情とモーションは変わります）。韓国語の感情セリフの新しい
+複製した persona・Supertonic の声は感情を演じられません（表情とモーションは変わります）。学習した
+persona は演じます。韓国語の感情セリフの新しい
 テイクは息・ため息・長い間・不自然な長さを検査し、引っかかれば作り直します。これらの属性がないセリフの
 音は変わりません。
 

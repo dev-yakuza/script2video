@@ -127,6 +127,42 @@ export class Service {
     started.delete(this);
   }
 
+  /** This process started the server (and can stop it). */
+  get owned(): boolean {
+    return this.child !== null;
+  }
+
+  /**
+   * Stop the server this process started and wait until its process group is gone and the port
+   * answers no more (stop() only signals): memory is free, and a later ensure() starts a new one.
+   */
+  async stopAndWait(timeoutMs = 60_000): Promise<void> {
+    const pid = this.child?.pid;
+    this.stop();
+    if (pid === undefined) return;
+    const alive = () => {
+      try {
+        process.kill(-pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!alive() && !(await this.health())) return;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      // gone
+    }
+    const hard = Date.now() + 10_000;
+    while (alive() && Date.now() < hard) await new Promise((r) => setTimeout(r, 100));
+    if (alive()) console.error(`${this.spec.id} (process group ${pid}) did not exit after SIGKILL`);
+  }
+
   async post<T>(path: string, body: unknown): Promise<{ data: T; headers: Headers }> {
     const res = await fetch(`${this.url}${path}`, {
       method: 'POST',

@@ -70,6 +70,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `pick <image>`                                                                         | click / drag on a screenshot to get cue coordinates                                                                                                            |
 | `voice create / pick`                                                                  | design a persona voice and pick a candidate                                                                                                                    |
 | `voice check <voices/id.yaml>`                                                         | judge a persona's reference clip (noise, pauses, cut ending, pitch)                                                                                            |
+| `voice train <voices/id.yaml> [--lang ko] [--min-emotion N]`                           | train a persona's speaker so it acts emotions (about 3 hours, resumable)                                                                                       |
 | `voice refs <script> [--refresh]`                                                      | reference voices the sentences are checked against                                                                                                             |
 | `audio prune <script>`                                                                 | remove audio the script no longer uses                                                                                                                         |
 | `inspect <script> --json`                                                              | what a script is made of, with one hash per kind of change (tooling)                                                                                           |
@@ -127,6 +128,15 @@ quiet noise floor, pauses between the sentences and an ending that is not cut. B
 `voice check voices/minsu.yaml` runs the same checks on a clip you already use (on a finished clip
 whose raw output is gone, noise and ending are not judged).
 
+**A persona that acts.** A cloned persona cannot follow emotion instructions. `s2v voice train
+voices/minsu.yaml --lang ko` trains one speaker row of the Qwen3-TTS CustomVoice model from the
+persona's voice (about 3 hours: it makes and checks its own training clips, then trains; run it
+again to resume, and never while characters are being generated). It writes
+`voices/minsu/ko.speaker.json` and its voice reference: commit them, then set `personaModel: trained`
+on the cast. The trained speaker takes `emo`, `say` and `style` like a preset speaker, and a strong
+line says "Sound very …". If fewer than 150 emotion clips pass
+its checks, it stops before the second training (`--min-emotion` sets the bar). Korean only for now.
+
 **Same voice in every sentence.** Each voice (a persona, a preset speaker with its `style`, a
 Supertonic voice) has a reference: 20 takes of fixed sentences, measured once and committed
 (`voices/<id>/<lang>.f0.json`, `voices/_qwen/…`, `voices/_supertonic/…`). `tts` makes a missing
@@ -155,8 +165,8 @@ character missing` lists the faces to make) and a motion. Change it from a sente
 | `speed=0.8–1.25`    | multiplied with the cast `speed`                                                                                                          |
 
 Write emotions on lines whose words already carry them: an instruction cannot make a neutral
-sentence sound happy. Persona and Supertonic voices cannot act an emotion (the face and motion still
-change). New takes of emotion lines in Korean are checked for breaths, sighs, long pauses and an
+sentence sound happy. Cloned persona and Supertonic voices cannot act an emotion (the face and motion
+still change); a trained persona can. New takes of emotion lines in Korean are checked for breaths, sighs, long pauses and an
 unnatural length, and made again when they fail. Lines without these attributes sound as before.
 
 **Takes of an emotion line.** For an emotion line of a Qwen preset speaker, `tts` makes 3 takes,

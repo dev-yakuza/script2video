@@ -7,6 +7,7 @@
  *   s2v voice create <voices/id.yaml> [--lang ko] [--candidates 3] [--play]
  *   s2v voice pick <voices/id.yaml> <n> [--lang ko]
  *   s2v voice check <voices/id.yaml> [--lang ko]   (judge a persona's reference clip)
+ *   s2v voice train <voices/id.yaml> [--lang ko] [--min-emotion 150]   (its trained speaker, ~3 h)
  *   s2v voice refs <script.md> [--refresh]   (reference voices for the consistency checks)
  *   s2v tts <script.md> [--no-asr] [--recheck] [--retry <scene[:paragraph[:sentence]]> ...]
  *   s2v sentences <script.md>   (sentence ids for --retry)
@@ -93,6 +94,7 @@ import { snapshot } from './snapshot.js';
 import { loadAudioManifest, pruneAudio, synthesizeScript } from './tts.js';
 import { listTakes, pickTakes, unpickTakes } from './takes.js';
 import { buildTakesPage, openPage } from './takes-page.js';
+import { trainVoice } from './voice-train.js';
 import { voiceRefs } from './voice-refs.js';
 import { inspectScript } from './inspect.js';
 
@@ -104,6 +106,7 @@ function usage(): never {
       '       s2v voice create <voices/id.yaml> [--lang ko] [--candidates 3] [--play]\n' +
       '       s2v voice pick <voices/id.yaml> <n> [--lang ko]\n' +
       '       s2v voice check <voices/id.yaml> [--lang ko]\n' +
+      '       s2v voice train <voices/id.yaml> [--lang ko] [--min-emotion 150]\n' +
       '       s2v voice refs <script.md> [--refresh]\n' +
       '       s2v character import <ymm4 folder|zip> --out <characters/id> [--name <character>]\n' +
       '       s2v character setup [--max-memory-gb N]   (image generation models; Apple silicon)\n' +
@@ -213,6 +216,7 @@ function parseCli(rest: string[]) {
       'hash-version': { type: 'string' },
       list: { type: 'boolean', default: false },
       'no-open': { type: 'boolean', default: false },
+      'min-emotion': { type: 'string' },
       id: { type: 'string', multiple: true },
     },
   });
@@ -382,6 +386,15 @@ async function main(): Promise<void> {
     }
     if (sub === 'pick' && n) {
       pickVoice(resolve(yamlPath), Number(n), lang, log);
+      return;
+    }
+    if (sub === 'train') {
+      // acting stage 4: Korean first (ja and en after their sentence sets are tried, E6)
+      if (lang !== 'ko') throw new Error('voice train supports --lang ko for now');
+      const raw = values['min-emotion'] ?? '150';
+      const minEmotion = Number(raw);
+      if (!/^\d+$/.test(raw) || !Number.isInteger(minEmotion)) usage();
+      await trainVoice(resolve(yamlPath), REPO_ROOT, { lang, minEmotion, log });
       return;
     }
     usage();

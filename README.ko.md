@@ -69,6 +69,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `pick <image>`                                                                         | 스크린샷을 클릭 / 드래그해 cue 좌표 얻기                                                                                               |
 | `voice create / pick`                                                                  | 페르소나 목소리를 설계하고 후보 중에서 고르기                                                                                          |
 | `voice check <voices/id.yaml>`                                                         | 페르소나 참조 음성 판정(잡음·쉼·끝 잘림·음높이)                                                                                        |
+| `voice train <voices/id.yaml> [--lang ko] [--min-emotion N]`                           | 페르소나의 화자를 학습해 감정을 연기하게 함(약 3시간, 이어 하기 가능)                                                                  |
 | `voice refs <script> [--refresh]`                                                      | 문장을 비교할 기준 음성                                                                                                                |
 | `audio prune <script>`                                                                 | 대본에서 더 이상 쓰지 않는 음성 삭제                                                                                                   |
 | `inspect <script> --json`                                                              | 대본의 구성과 변경 종류별 해시(도구용)                                                                                                 |
@@ -125,6 +126,14 @@ node packages/cli/dist/main.js voice pick voices/minsu.yaml 2 --lang ko
 `voice check voices/minsu.yaml`로 같은 판정을 해 볼 수 있습니다(원본 출력이 없는 마무리된 음성은 잡음과
 끝맺음을 판정하지 않습니다).
 
+**감정을 연기하는 페르소나.** 복제한 페르소나는 감정 지시를 따르지 못합니다. `s2v voice train
+voices/minsu.yaml --lang ko`는 페르소나 목소리로 Qwen3-TTS CustomVoice 모델의 화자 줄 하나를 학습합니다(약
+3시간: 학습 클립을 직접 만들고 판정한 뒤 학습. 다시 실행하면 이어서 하며, 캐릭터 이미지 생성 중에는 실행하지
+마세요). `voices/minsu/ko.speaker.json`과 기준 음성을 쓰니 커밋하고, cast에 `personaModel: trained`를
+적으세요. 학습한 화자는 기본 화자처럼 `emo`·`say`·`style`을 따르고, 강한 문장은 "Sound very …"로
+말합니다. 감정 클립이 150개
+미만으로 통과하면 두 번째 학습 전에 멈춥니다(`--min-emotion`으로 바꿈). 지금은 한국어만.
+
 **모든 문장이 같은 목소리로.** 목소리마다(페르소나, `style`을 포함한 기본 화자, Supertonic 목소리) 기준
 음성이 있습니다. 고정 문장 20테이크를 한 번 재서 커밋합니다(`voices/<id>/<lang>.f0.json`,
 `voices/_qwen/…`, `voices/_supertonic/…`). `tts`는 없으면 만들고(몇 분, 판정에 Base 모델을 함께 올려 메모리를 약 4GB 더 씀), 새 테이크마다 음높이와
@@ -151,7 +160,8 @@ speed: 0.8, maxPause: 1.5 }`). 감정은 목소리(Qwen 프리셋 화자는 감�
 | `speed=0.8–1.25`    | cast의 `speed`와 곱함                                                                                      |
 
 감정은 말 자체에 감정이 실린 대사에 적으세요. 지시만으로 평범한 문장을 기쁘게 만들 수는 없습니다.
-persona·Supertonic 목소리는 감정을 연기하지 못합니다(표정과 모션은 바뀜). 한국어 감정 대사의 새
+복제한 persona·Supertonic 목소리는 감정을 연기하지 못합니다(표정과 모션은 바뀜). 학습한 persona는
+연기합니다. 한국어 감정 대사의 새
 테이크는 숨소리·한숨·긴 쉼·부자연스러운 길이를 검사하고, 걸리면 다시 만듭니다. 이 속성이 없는 대사의
 소리는 그대로입니다.
 

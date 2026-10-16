@@ -175,3 +175,22 @@ export {
   type TakeContext,
   type TakeFacts,
 } from './takes.js';
+export {
+  emotionFails,
+  firstMax,
+  intensity,
+  longestPauseS2,
+  median as trainMedian,
+  neutralBaseline,
+  neutralFails,
+  neutralRate,
+  pauseLimit,
+  percentile,
+  pickNeutral,
+  round as trainRound,
+  roundBaseline,
+  TRAIN_GATES,
+  type EmotionJudged,
+  type NeutralJudged,
+  type TrainMeasure,
+} from './train-gates.js';
