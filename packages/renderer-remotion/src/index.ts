@@ -59,6 +59,7 @@ export {
   stagePlan,
   type DialogueShape,
 } from './shared.js';
+export { chunkKey };
 
 export type Aspect = '16:9' | '9:16' | '1:1';
 
@@ -87,6 +88,8 @@ export interface RenderOptions {
   subtitleStyle?: SubtitleStyleOption;
   /** Scene boundaries: `fade` dips to the background color. */
   transition?: 'none' | 'fade';
+  /** Idle motion (acting stage 5a): breathing, blinks, listener nods. Default on. */
+  idle?: boolean;
   theme?: { base: 'light' | 'dark'; background?: string; text?: string; accent?: string };
   /** Corner logo; `src` relative to `assetsRoot`. */
   logo?: {
@@ -566,6 +569,8 @@ function chunkKey(
         cast: opts.cast ?? [],
         subtitleStyle: opts.subtitleStyle ?? null,
         transition: opts.transition ?? 'none',
+        idle: opts.idle ?? true,
+        output: opts.timeline.output,
         theme: opts.theme ?? null,
         logo: opts.logo ?? null,
         scale: opts.scale ?? 1,
@@ -639,6 +644,9 @@ export async function renderScenes(opts: RenderOptions): Promise<RenderedChunk[]
       stage: stage[p.scene.id] ?? { left: [], right: [] },
       ...(subtitleStyle ? { subtitleStyle } : {}),
       transition: opts.transition ?? 'none',
+      idle: opts.idle ?? true,
+      output: opts.timeline.output,
+      still: false,
       ...(opts.theme ? { theme: opts.theme } : {}),
       ...(logo ? { logo } : {}),
     };
@@ -722,6 +730,9 @@ export async function renderStills(opts: RenderOptions, requests: StillRequest[]
       stage: stage[scene.id] ?? { left: [], right: [] },
       ...(subtitleStyle ? { subtitleStyle } : {}),
       transition: opts.transition ?? 'none',
+      idle: opts.idle ?? true,
+      output: opts.timeline.output,
+      still: true,
       ...(opts.theme ? { theme: opts.theme } : {}),
       ...(logo ? { logo } : {}),
     };

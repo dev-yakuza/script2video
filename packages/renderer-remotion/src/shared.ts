@@ -310,3 +310,336 @@ export function maxGroup(list: StageSwitch[], from: number, to: number): number 
   }
   return k;
 }
+
+// ---------- idle motion (acting stage 5a) ----------
+
+/** Small deterministic hash (FNV-1a, 32 bits): no Math.random in renders. */
+export function hash(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+
+/**
+ * A value in [lo, hi) from a hash. FNV-1a's high bits barely move when only the last character
+ * of the seed changes (…|0, …|1), so they are mixed first (murmur3 fmix32).
+ */
+function uniform(h: number, lo: number, hi: number): number {
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return lo + ((h >>> 0) / 2 ** 32) * (hi - lo);
+}
+
+/** Frames a holding motion (sink, lean, head-tilt) takes to ease out after its face hold. */
+export const HOLD_END = 12;
+/** Frames one blink shows closed eyes. */
+export const BLINK_FRAMES = 4;
+/** Idle constants (E5 may tune them). */
+export const IDLE = {
+  breath: { amplitude: 0.015, period: [3.5, 4.5] as const, edgeS: 0.5 },
+  blink: {
+    firstS: [0.5, 3] as const,
+    intervalS: [2, 6] as const,
+    doublePct: 10,
+    /** Frames between the end of a blink and its second blink. */
+    doubleGap: 3,
+    /** No face-change blink this close to a clock blink (before or after) or to any blink. */
+    faceWindowS: 1,
+    faceSpacingS: 0.5,
+    /** A face-change blink waits at most this long for a closed mouth. */
+    faceWaitS: 0.5,
+  },
+  nod: { pct: 50, every: 2, scale: 0.4, body: 20, head: 24 },
+};
+
+interface IdleAudio {
+  sentenceId: string;
+  cast: string;
+  face: string;
+  startFrame: number;
+  durationFrames: number;
+  contentKey?: string;
+  ordinal?: number;
+  question?: boolean;
+}
+
+interface IdleReaction {
+  cast: string;
+  face: string;
+  startFrame: number;
+  endFrame: number;
+}
+
+/** A line's seed material: what is said (its occurrence), else its id (old timelines, tests). */
+const material = (a: IdleAudio) =>
+  a.contentKey !== undefined ? `${a.contentKey}#${a.ordinal ?? 0}` : a.sentenceId;
+
+/** Lines by start frame, then by timeline order (paragraph gaps can be negative). */
+const sortedAudio = <T extends IdleAudio>(audio: T[]): T[] =>
+  audio
+    .map((a, i) => ({ a, i }))
+    .sort((x, y) => x.a.startFrame - y.a.startFrame || x.i - y.i)
+    .map((x) => x.a);
+
+/**
+ * The face a character shows at a frame: the most recent of its own line (paragraph face) and
+ * any `:react` aimed at it, each held FACE_HOLD frames after it ends; otherwise the default.
+ */
+export function faceAt(
+  key: string,
+  defaultFace: string,
+  frame: number,
+  audio: IdleAudio[],
+  reactions: IdleReaction[],
+): string {
+  let face = defaultFace;
+  let since = -Infinity;
+  const consider = (start: number, end: number, f: string) => {
+    if (frame >= start && frame < end + FACE_HOLD && start >= since) {
+      face = f;
+      since = start;
+    }
+  };
+  for (const a of audio)
+    if (a.cast === key) consider(a.startFrame, a.startFrame + a.durationFrames, a.face);
+  for (const r of reactions) if (r.cast === key) consider(r.startFrame, r.endFrame, r.face);
+  return face;
+}
+
+/** The face really drawn: the face, else the default face, else the art's first face. */
+export function drawnFace(face: string, defaultFace: string, available: string[]): string {
+  return available.includes(face)
+    ? face
+    : available.includes(defaultFace)
+      ? defaultFace
+      : available[0]!;
+}
+
+/** Scene frames where the drawn face of `key` changes (from the frame before). */
+export function drawnFaceChanges(input: {
+  key: string;
+  defaultFace: string;
+  available: string[];
+  audio: IdleAudio[];
+  reactions: IdleReaction[];
+  durationFrames: number;
+}): number[] {
+  const { key, defaultFace, available, audio, reactions, durationFrames } = input;
+  const drawn = (f: number) =>
+    drawnFace(faceAt(key, defaultFace, f, audio, reactions), defaultFace, available);
+  const points = new Set<number>();
+  for (const a of audio)
+    if (a.cast === key) {
+      points.add(a.startFrame);
+      points.add(a.startFrame + a.durationFrames + FACE_HOLD);
+    }
+  for (const r of reactions)
+    if (r.cast === key) {
+      points.add(r.startFrame);
+      points.add(r.endFrame + FACE_HOLD);
+    }
+  return [...points]
+    .filter((f) => f > 0 && f < durationFrames && drawn(f) !== drawn(f - 1))
+    .sort((a, b) => a - b);
+}
+
+/**
+ * Blink start frames of one character in one scene (acting plan 4.1, 4.6). One clock per scene:
+ * the first blink 0.5–3 s in, each next one 2–6 s after the previous blink's real frame, the
+ * interval seeded by the line that opened the segment the blink fell in. A blink needs
+ * BLINK_FRAMES closed-mouth frames and waits for the next such run. 10% get a second blink;
+ * a change of the drawn face adds one (not within 1 s of a clock blink, waiting at most 0.5 s).
+ */
+export function blinkFrames(input: {
+  cast: string;
+  sceneId: string;
+  output: string;
+  fps: number;
+  durationFrames: number;
+  /** Every line of the scene (all speakers): segments run from one line start to the next. */
+  audio: IdleAudio[];
+  /** This character's mouth per scene frame (0 closed, 1 half, 2 open). */
+  mouth: ArrayLike<number>;
+  faceChanges: number[];
+}): number[] {
+  const { cast, sceneId, output, fps, durationFrames: dur, mouth, faceChanges } = input;
+  const c = IDLE.blink;
+  const segs = sortedAudio(input.audio);
+  const materialAt = (f: number) => {
+    let m = `scene:${sceneId}`;
+    for (const a of segs) if (a.startFrame <= f) m = material(a);
+    return m;
+  };
+  const busy = new Uint8Array(Math.max(0, dur));
+  const canPlace = (f: number) => {
+    if (f < 0 || f + BLINK_FRAMES > dur) return false;
+    for (let i = f; i < f + BLINK_FRAMES; i++) if (busy[i] || (mouth[i] ?? 0) !== 0) return false;
+    return true;
+  };
+  const next = (from: number, limit = dur) => {
+    for (let f = Math.max(0, from); f <= Math.min(limit, dur - BLINK_FRAMES); f++)
+      if (canPlace(f)) return f;
+    return -1;
+  };
+  const out: number[] = [];
+  const place = (f: number) => {
+    busy.fill(1, f, f + BLINK_FRAMES);
+    out.push(f);
+  };
+  const base = `${cast}|${output}|${sceneId}`;
+  const clock: number[] = [];
+  const doubles: number[] = [];
+  let planned = Math.round(fps * uniform(hash(`${base}|first`), c.firstS[0], c.firstS[1]));
+  for (let k = 0; planned < dur; k++) {
+    const f = next(planned);
+    if (f < 0) break;
+    place(f);
+    clock.push(f);
+    const seed = `${base}|${materialAt(f)}|${k}`;
+    if (hash(`${seed}|double`) % 100 < c.doublePct) doubles.push(f + BLINK_FRAMES + c.doubleGap);
+    planned = f + Math.round(fps * uniform(hash(seed), c.intervalS[0], c.intervalS[1]));
+  }
+  for (const d of doubles) if (canPlace(d)) place(d);
+  const near = Math.round(fps * c.faceWindowS);
+  const spacing = Math.round(fps * c.faceSpacingS);
+  for (const ch of faceChanges) {
+    if (clock.some((b) => Math.abs(b - ch) <= near)) continue;
+    const f = next(ch, ch + Math.round(fps * c.faceWaitS));
+    if (f >= 0 && !out.some((b) => Math.abs(b - f) < BLINK_FRAMES + spacing)) place(f);
+  }
+  return out.sort((a, b) => a - b);
+}
+
+export interface Nod {
+  cast: string;
+  frame: number;
+  /** On the head layer (head-nod) or the whole body (nod). */
+  head: boolean;
+  length: number;
+}
+
+/**
+ * Listener nods (acting plan 4.2, 4.6): at the end of a line, the character standing on the
+ * other side may nod a little — 50% (E5) by a hash of (listener, line, output), at most every second
+ * line of others in the scene; never after a question, while reacting, holding a motion,
+ * speaking or about to speak, stepping in or out, or when the nod would run past the scene end.
+ */
+export function listenerNods(input: {
+  sceneId: string;
+  output: string;
+  durationFrames: number;
+  audio: IdleAudio[];
+  reactions: IdleReaction[];
+  motions: { cast: string; motion: string; startFrame: number; endFrame: number }[];
+  stage: Record<Side, StageSwitch[]>;
+  hasHead: (cast: string, frame: number) => boolean;
+}): Nod[] {
+  const { output, durationFrames: dur, audio, reactions, motions, stage, hasHead } = input;
+  const c = IDLE.nod;
+  const sideOf = (key: string): Side | undefined => {
+    for (const side of ['left', 'right'] as const)
+      if (stage[side].some((sw) => sw.keys.includes(key))) return side;
+    return undefined;
+  };
+  const held = new Set(['sink', 'lean', 'head-tilt']);
+  // Lines of others ended since each character's last nod (absent: no nod yet in this scene).
+  const since = new Map<string, number>();
+  const everyone = new Set([
+    ...audio.map((a) => a.cast),
+    ...stage.left.flatMap((s) => s.keys),
+    ...stage.right.flatMap((s) => s.keys),
+  ]);
+  const nods: Nod[] = [];
+  const lastEnd = new Map<string, number>();
+  const ends = sortedAudio(audio)
+    .map((a, i) => ({ a, i, end: a.startFrame + a.durationFrames }))
+    .sort((x, y) => x.end - y.end || x.i - y.i);
+  for (const { a, end: E } of ends) {
+    for (const key of everyone)
+      if (key !== a.cast && since.has(key)) since.set(key, since.get(key)! + 1);
+    const speakerSide = sideOf(a.cast);
+    if (!speakerSide) continue;
+    const list = stage[speakerSide === 'left' ? 'right' : 'left'];
+    let i = -1;
+    for (let k = 0; k < list.length; k++) if (list[k]!.frame <= E) i = k;
+    if (i < 0) continue;
+    const sw = list[i]!;
+    for (const key of sw.keys) {
+      if (key === a.cast) continue;
+      if (a.question) continue;
+      const entering = !(list[i - 1]?.keys.includes(key) ?? true) && E < sw.frame + STAGE_LEAD;
+      if (entering) continue;
+      const head = hasHead(key, E);
+      const length = head ? c.head : c.body;
+      if (E + length > dur) continue;
+      if (list.some((s) => s.frame >= E && s.frame < E + length && !s.keys.includes(key))) continue;
+      // Reacting now, or starting to within the nod (its face may move the head's pivot).
+      if (
+        reactions.some(
+          (r) => r.cast === key && r.startFrame < E + length && E < r.endFrame + FACE_HOLD,
+        )
+      )
+        continue;
+      if (E < (lastEnd.get(key) ?? -Infinity)) continue;
+      if (
+        motions.some(
+          (m) =>
+            m.cast === key &&
+            held.has(m.motion) &&
+            m.startFrame <= E &&
+            E < m.endFrame + FACE_HOLD + HOLD_END,
+        )
+      )
+        continue;
+      if (
+        audio.some(
+          (o) =>
+            o.cast === key &&
+            ((o.startFrame <= E && E < o.startFrame + o.durationFrames) ||
+              (o.startFrame >= E && o.startFrame < E + length) ||
+              // its own face hold ending inside the nod changes the face (and maybe the pivot)
+              (o.startFrame + o.durationFrames + FACE_HOLD > E &&
+                o.startFrame + o.durationFrames + FACE_HOLD < E + length)),
+        )
+      )
+        continue;
+      if ((since.get(key) ?? c.every) < c.every) continue;
+      if (hash(`${key}|${material(a)}|${output}`) % 100 >= c.pct) continue;
+      nods.push({ cast: key, frame: E, head, length });
+      since.set(key, 0);
+      lastEnd.set(key, E + length);
+    }
+  }
+  return nods;
+}
+
+/**
+ * Breathing (acting plan 4.1): vertical scale − 1 of a character at a scene frame. 1.5% at most (E5),
+ * half while speaking, a 3.5–4.5 s period per character, faded in and out over 0.5 s at the
+ * scene edges (scenes render apart, so a cut cannot jump).
+ */
+export function breath(input: {
+  cast: string;
+  output: string;
+  sceneId: string;
+  frame: number;
+  fps: number;
+  durationFrames: number;
+  /** 0–1: how much the character is speaking. */
+  speaking: number;
+}): number {
+  const { cast, output, sceneId, frame, fps, durationFrames, speaking } = input;
+  const b = IDLE.breath;
+  const T = uniform(hash(`${cast}|${output}|breath`), b.period[0], b.period[1]);
+  const phase = uniform(hash(`${cast}|${output}|${sceneId}|phase`), 0, T);
+  const edge = Math.min(frame, durationFrames - 1 - frame) / (b.edgeS * fps);
+  const x = Math.max(0, Math.min(1, edge));
+  const envelope = x * x * (3 - 2 * x);
+  const t = frame / fps + phase;
+  return (
+    b.amplitude * envelope * (1 - 0.5 * speaking) * (1 - Math.cos((2 * Math.PI * t) / T)) * 0.5
+  );
+}

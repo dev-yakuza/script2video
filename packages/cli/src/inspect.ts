@@ -339,6 +339,7 @@ export function inspectScript(
   const common = {
     theme: canonical(theme) === canonical({ base: 'light' }) ? undefined : theme,
     sfx: meta.sfx === 'off' ? undefined : meta.sfx,
+    idle: meta.acting?.idle === false ? false : undefined,
     pacing: withoutDefaults({ ...meta.pacing, maxPause: undefined }, d.pacing!),
     logo: logo && {
       ...withoutDefaults({ ...logo, src: undefined }, d.logo!),

@@ -169,6 +169,7 @@ export const FRONTMATTER: Record<string, Kind> = {
   'acting.emotions.*.maxPause': 'voice',
   'acting.emotions.*.face': 'presentation',
   'acting.emotions.*.motion': 'presentation',
+  'acting.idle': 'presentation',
 };
 const RECORDS = new Set(['cast', 'outputs', 'pronounce', 'acting.emotions']);
 
@@ -723,6 +724,7 @@ export function schemaDefaults(): {
       theme: top.theme,
       sfx: top.sfx,
       transition: top.transition,
+      idle: true,
     },
   };
 }

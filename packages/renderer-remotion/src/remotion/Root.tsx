@@ -99,6 +99,9 @@ const SceneComp: React.FC<SceneProps> = ({
   cast,
   mouths,
   stage,
+  idle,
+  output,
+  still,
   subtitleStyle,
   transition,
   theme: themeProp,
@@ -278,6 +281,11 @@ const SceneComp: React.FC<SceneProps> = ({
                 stage={stage}
                 fps={fps}
                 framing={scene.framing ?? {}}
+                sceneId={scene.id}
+                durationFrames={scene.durationFrames}
+                idle={idle && !still}
+                still={still}
+                output={output}
               />
             ) : g.mode === 'avatar' ? (
               <CastStrip
@@ -337,6 +345,9 @@ const placeholder: SceneProps = {
   cast: [],
   mouths: {},
   stage: { left: [], right: [] },
+  idle: true,
+  output: 'youtube',
+  still: false,
 };
 
 type ProbeProps = {

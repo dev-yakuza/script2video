@@ -21,6 +21,7 @@
  *   s2v render <script.md> [--output youtube|shorts] [--no-asr] [--recheck] [--draft] [--no-cache]
  *              [--frozen-audio]   (never synthesize; fail if audio is missing)
  *              [--workers N]      (browser tabs rendering in parallel)
+ *              [--idle on|off]    (idle motion; overrides acting.idle)
  *   s2v audio prune <script.md>   (drop locked audio the script no longer uses)
  *   s2v dev <script.md> [--video]  (edit loop: lint → tts → snapshot on every save)
  *   s2v doctor                    (is this machine ready?)
@@ -218,6 +219,7 @@ function parseCli(rest: string[]) {
       'no-open': { type: 'boolean', default: false },
       'min-emotion': { type: 'string' },
       id: { type: 'string', multiple: true },
+      idle: { type: 'string' },
     },
   });
 }
@@ -665,6 +667,10 @@ async function main(): Promise<void> {
       const profile = script.meta.outputs[outputName];
       if (!profile) throw new Error(`unknown output "${outputName}"`);
       const draft = values.draft === true;
+      if (values.idle !== undefined && values.idle !== 'on' && values.idle !== 'off')
+        throw new Error(`--idle must be on or off, not "${values.idle}"`);
+      const idle =
+        values.idle !== undefined ? values.idle === 'on' : script.meta.acting?.idle !== false;
       const videoId = basename(dirname(path));
       const lockDir = draft
         ? join(REPO_ROOT, '.s2v-cache', 'draft-audio', videoId, script.meta.lang)
@@ -713,6 +719,7 @@ async function main(): Promise<void> {
         fontsDir: fonts,
         workDir,
         ...(draft ? { scale: 0.5 } : {}),
+        idle,
         noCache: values['no-cache'],
         ...(values.workers ? { concurrency: Math.max(1, Number(values.workers)) } : {}),
         log,

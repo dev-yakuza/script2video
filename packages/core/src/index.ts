@@ -56,6 +56,8 @@ export {
   type TimelineVisual,
   type TimelineIssue,
   sceneFramings,
+  textKey,
+  isQuestion,
 } from './timeline.js';
 export { roundTripCer, normalizeForCer, readKoreanNumbers, koreanInteger } from './cer.js';
 export {

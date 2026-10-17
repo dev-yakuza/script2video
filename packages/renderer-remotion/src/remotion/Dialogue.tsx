@@ -12,20 +12,36 @@
 
 import type { TimelineAudio, TimelineMotion, TimelineReaction } from '@script2video/core';
 import type React from 'react';
+import { useMemo } from 'react';
 import { AbsoluteFill, Easing, Img, interpolate, staticFile, useCurrentFrame } from 'remotion';
 import {
   assignSides,
+  BLINK_FRAMES,
+  blinkFrames,
+  breath,
   crowdScale,
   crowdStep,
+  drawnFace,
+  drawnFaceChanges,
   FACE_HOLD,
+  faceAt,
+  hash,
+  HOLD_END,
+  IDLE,
+  listenerNods,
   STAGE_LEAD,
   type DialogueGeometry,
+  type Nod,
   type StageSwitch,
 } from '../shared';
 import type { CastInfo, CharacterFace, PartsFace, PartsSet } from './types';
 
 const FADE = 6; // frames for the speaking highlight to come and go
-const BLINK_FRAMES = 4;
+/**
+ * Where the highlight starts coming in: FADE frames before the line, but never before the scene
+ * (scenes render apart; a line at the scene start would otherwise pop in on its first frame).
+ */
+const fadeFrom = (start: number) => Math.max(0, start - FADE);
 const clamp = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
 
 /** 0–1: how much `key` is speaking at `frame` (eased in and out). */
@@ -34,10 +50,11 @@ export function speaking(key: string, frame: number, audio: TimelineAudio[]): nu
   for (const a of audio) {
     if (a.cast !== key) continue;
     const end = a.startFrame + a.durationFrames;
+    const from = fadeFrom(a.startFrame);
     v = Math.max(
       v,
       Math.min(
-        interpolate(frame, [a.startFrame - FADE, a.startFrame], [0, 1], clamp),
+        interpolate(frame, [from, from + FADE], [0, 1], clamp),
         interpolate(frame, [end, end + FADE], [1, 0], clamp),
       ),
     );
@@ -156,14 +173,7 @@ export const CastStrip: React.FC<{
   );
 };
 
-/** Small deterministic hash (FNV-1a) for blink timing: no Math.random in renders. */
-function hash(s: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
-  return h >>> 0;
-}
-
-/** One blink per 4 s window, at a position that depends only on (cast, window). */
+/** Idle motion off (`acting.idle: false`): one blink per 4 s window, at a position that depends only on (cast, window). */
 function blinking(key: string, frame: number, fps: number): boolean {
   const period = Math.round(fps * 4);
   const w = Math.floor(frame / period);
@@ -189,18 +199,10 @@ function characterState(
   reactions: TimelineReaction[],
   mouths: Record<string, string>,
 ): CharacterState {
-  let face = c.face;
-  let since = -Infinity;
+  const face = faceAt(c.key, c.face, frame, audio, reactions);
   let mouth = 0;
-  const consider = (start: number, end: number, f: string) => {
-    if (frame >= start && frame < end + FACE_HOLD && start >= since) {
-      face = f;
-      since = start;
-    }
-  };
   for (const a of audio) {
     if (a.cast !== c.key) continue;
-    consider(a.startFrame, a.startFrame + a.durationFrames, a.face);
     const local = frame - a.startFrame;
     if (local >= 0 && local < a.durationFrames) mouth = Number(mouths[a.sentenceId]?.[local] ?? 0);
   }
@@ -208,12 +210,11 @@ function characterState(
   let reacting = 0;
   for (const r of reactions) {
     if (r.cast !== c.key) continue;
-    consider(r.startFrame, r.endFrame, r.face);
     const end = r.endFrame + FACE_HOLD;
     reacting = Math.max(
       reacting,
       Math.min(
-        interpolate(frame, [r.startFrame - FADE, r.startFrame], [0, 1], clamp),
+        interpolate(frame, [fadeFrom(r.startFrame), fadeFrom(r.startFrame) + FADE], [0, 1], clamp),
         interpolate(frame, [end, end + FADE], [1, 0], clamp),
       ),
     );
@@ -241,6 +242,17 @@ function offsetOf(
   motion: string,
   frame: number,
   toCenter: number,
+  scale = 1,
+): MotionOffset {
+  const o = offsetAt(m, motion, frame, toCenter);
+  return scale === 1 ? o : { x: o.x * scale, y: o.y * scale, rot: o.rot * scale };
+}
+
+function offsetAt(
+  m: TimelineMotion,
+  motion: string,
+  frame: number,
+  toCenter: number,
 ): MotionOffset {
   const none = { x: 0, y: 0, rot: 0 };
   const t = frame - m.startFrame;
@@ -249,7 +261,12 @@ function offsetOf(
   const held = () =>
     Math.min(
       interpolate(t, [0, 12], [0, 1], { ...clamp, easing: Easing.out(Easing.cubic) }),
-      interpolate(frame, [m.endFrame + FACE_HOLD, m.endFrame + FACE_HOLD + 12], [1, 0], clamp),
+      interpolate(
+        frame,
+        [m.endFrame + FACE_HOLD, m.endFrame + FACE_HOLD + HOLD_END],
+        [1, 0],
+        clamp,
+      ),
     );
   switch (motion) {
     case 'jump':
@@ -346,7 +363,23 @@ const Character: React.FC<{
   motion: MotionOffset;
   headMotion: MotionOffset;
   parts: PartsSet | null;
-}> = ({ c, side, geometry, state, blink, presence, x, scale, z, motion, headMotion, parts }) => {
+  /** Breathing: vertical scale − 1. */
+  breathe: number;
+}> = ({
+  c,
+  side,
+  geometry,
+  state,
+  blink,
+  presence,
+  x,
+  scale,
+  z,
+  motion,
+  headMotion,
+  parts,
+  breathe,
+}) => {
   const ch = c.character!;
   // Mirror art that looks toward the frame edge so every character faces the center.
   const mirror =
@@ -369,7 +402,7 @@ const Character: React.FC<{
         alignItems: 'flex-end',
         justifyContent: 'center',
         opacity: presence,
-        transform: `translate(${mx}px, ${drop + motion.y * k}px) rotate(${motion.rot}deg) scale(${0.94 + 0.06 * a})`,
+        transform: `translate(${mx}px, ${drop + motion.y * k}px) rotate(${motion.rot}deg) scale(${0.94 + 0.06 * a})${breathe ? ` scaleY(${1 + breathe})` : ''}`,
         transformOrigin: 'bottom center',
         filter: `brightness(${0.62 + 0.38 * a}) saturate(${0.7 + 0.3 * a})`,
       }}
@@ -413,13 +446,46 @@ const Character: React.FC<{
 };
 
 function classicFace(c: CastInfo, face: string): CharacterFace {
-  const ch = c.character!;
-  return ch.faces[face] ?? ch.faces[c.face] ?? Object.values(ch.faces)[0]!;
+  const faces = c.character!.faces;
+  return faces[drawnFace(face, c.face, Object.keys(faces))]!;
 }
 
 function partsFace(set: PartsSet, face: string, fallback: string): PartsFace {
-  return set.faces[face] ?? set.faces[fallback] ?? Object.values(set.faces)[0]!;
+  return set.faces[drawnFace(face, fallback, Object.keys(set.faces))]!;
 }
+
+/** Parts set a character uses in this scene's framing (null: classic art). */
+function partsOf(c: CastInfo, framing: Record<string, string>): PartsSet | null {
+  return c.character?.parts
+    ? (c.character.parts[framing[c.key] ?? 'full'] ?? c.character.parts.full ?? null)
+    : null;
+}
+
+/** Faces the art can draw in this scene (the order is the art's own: its first face is the last resort). */
+function availableFaces(c: CastInfo, parts: PartsSet | null): string[] {
+  return Object.keys(parts ? parts.faces : (c.character?.faces ?? {}));
+}
+
+/** Additive listener nod of a character at a frame (40% of nod / head-nod). */
+function nodOffset(nods: Nod[], key: string, frame: number, toCenter: number, head: boolean) {
+  const none = { x: 0, y: 0, rot: 0 };
+  for (const n of nods)
+    if (n.cast === key && n.head === head && frame >= n.frame && frame < n.frame + n.length)
+      return offsetOf(
+        { cast: key, motion: head ? 'head-nod' : 'nod', startFrame: n.frame, endFrame: n.frame },
+        head ? 'head-nod' : 'nod',
+        frame,
+        toCenter,
+        IDLE.nod.scale,
+      );
+  return none;
+}
+
+const add = (a: MotionOffset, b: MotionOffset): MotionOffset => ({
+  x: a.x + b.x,
+  y: a.y + b.y,
+  rot: a.rot + b.rot,
+});
 
 /**
  * A parts character: body → head (mouth / blink state) → front, stacked on one canvas. Size rule
@@ -485,8 +551,101 @@ export const CharacterStage: React.FC<{
   fps: number;
   /** This scene's framing per cast member (`::shot`). */
   framing: Record<string, string>;
-}> = ({ cast, audio, reactions, motions, mouths, geometry, stage, fps, framing }) => {
+  sceneId: string;
+  durationFrames: number;
+  /** Idle motion (acting stage 5a); off: the old blink rule. */
+  idle: boolean;
+  /** A still: no blinks. */
+  still: boolean;
+  output: string;
+}> = ({
+  cast,
+  audio,
+  reactions,
+  motions,
+  mouths,
+  geometry,
+  stage,
+  fps,
+  framing,
+  sceneId,
+  durationFrames,
+  idle,
+  still,
+  output,
+}) => {
   const frame = useCurrentFrame();
+  // Blinks and nods of the whole scene, once (before any early return: hooks keep their order).
+  const plan = useMemo(() => {
+    const blinks = new Map<string, Set<number>>();
+    if (!idle) return { blinks, nods: [] as Nod[] };
+    for (const c of cast) {
+      if (!c.character) continue;
+      const mouth = new Uint8Array(Math.max(0, durationFrames));
+      for (const a of audio) {
+        if (a.cast !== c.key) continue;
+        const m = mouths[a.sentenceId] ?? '';
+        for (let i = 0; i < a.durationFrames; i++) {
+          const f = a.startFrame + i;
+          if (f >= 0 && f < durationFrames) mouth[f] = Number(m[i] ?? 0);
+        }
+      }
+      const parts = partsOf(c, framing);
+      const starts = blinkFrames({
+        cast: c.key,
+        sceneId,
+        output,
+        fps,
+        durationFrames,
+        audio,
+        mouth,
+        faceChanges: drawnFaceChanges({
+          key: c.key,
+          defaultFace: c.face,
+          available: availableFaces(c, parts),
+          audio,
+          reactions,
+          durationFrames,
+        }),
+      });
+      const on = new Set<number>();
+      for (const f of starts) for (let i = 0; i < BLINK_FRAMES; i++) on.add(f + i);
+      blinks.set(c.key, on);
+    }
+    const byKey = new Map(cast.map((c) => [c.key, c]));
+    const nods = listenerNods({
+      sceneId,
+      output,
+      durationFrames,
+      audio,
+      reactions,
+      motions,
+      stage,
+      hasHead: (key, f) => {
+        const c = byKey.get(key);
+        const parts = c ? partsOf(c, framing) : null;
+        return (
+          !!c &&
+          !!parts &&
+          partsFace(parts, faceAt(key, c.face, f, audio, reactions), c.face).pivot !== null
+        );
+      },
+    });
+    return { blinks, nods };
+  }, [
+    cast,
+    audio,
+    reactions,
+    motions,
+    mouths,
+    stage,
+    fps,
+    framing,
+    sceneId,
+    durationFrames,
+    idle,
+    output,
+  ]);
   const g = geometry.character;
   if (!g) return null;
   const byKey = new Map(cast.map((c) => [c.key, c]));
@@ -515,9 +674,7 @@ export const CharacterStage: React.FC<{
       const t = pi >= 0 && ci >= 0 ? p : ci >= 0 ? 1 : 0;
       const state = characterState(c, frame, audio, reactions, mouths);
       const order = ci >= 0 ? ci : pi;
-      const parts = c.character?.parts
-        ? (c.character.parts[framing[key] ?? 'full'] ?? c.character.parts.full ?? null)
-        : null;
+      const parts = partsOf(c, framing);
       const pivotAt: PivotAt | null = parts
         ? (f) => partsFace(parts, characterState(c, f, audio, reactions, mouths).face, c.face).pivot
         : null;
@@ -529,14 +686,13 @@ export const CharacterStage: React.FC<{
           .filter((r) => r.cast === key)
           .flatMap((r) => [r.startFrame, r.endFrame + FACE_HOLD]),
       ];
-      const channels = motionChannels(
-        key,
-        frame,
-        motions,
-        side === 'left' ? 1 : -1,
-        pivotAt,
-        changes,
-      );
+      const toCenter = side === 'left' ? 1 : -1;
+      const channels = motionChannels(key, frame, motions, toCenter, pivotAt, changes);
+      const blink = still
+        ? false
+        : idle
+          ? (plan.blinks.get(key)?.has(frame) ?? false)
+          : blinking(c.key, frame, fps);
       return (
         <Character
           key={key}
@@ -544,14 +700,27 @@ export const CharacterStage: React.FC<{
           side={side}
           geometry={g}
           state={state}
-          blink={state.mouth === 0 && blinking(c.key, frame, fps)}
+          blink={state.mouth === 0 && blink}
           presence={presence}
           x={from.x + (to.x - from.x) * t}
           scale={from.s + (to.s - from.s) * t}
           z={20 - order + Math.round(state.amount * 10)}
-          motion={channels.body}
-          headMotion={channels.head}
+          motion={add(channels.body, nodOffset(plan.nods, key, frame, toCenter, false))}
+          headMotion={add(channels.head, nodOffset(plan.nods, key, frame, toCenter, true))}
           parts={parts}
+          breathe={
+            idle
+              ? breath({
+                  cast: key,
+                  output,
+                  sceneId,
+                  frame,
+                  fps,
+                  durationFrames,
+                  speaking: speaking(key, frame, audio),
+                })
+              : 0
+          }
         />
       );
     });

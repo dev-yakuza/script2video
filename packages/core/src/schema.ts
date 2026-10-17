@@ -178,6 +178,8 @@ export type UserEmotion = z.infer<typeof userEmotionSchema>;
 
 export const actingSchema = z.object({
   emotions: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/), userEmotionSchema).optional(),
+  /** Idle motion (acting stage 5a): breathing, blinks, listener nods. Absent = on. */
+  idle: z.boolean().optional(),
 });
 
 export const pacingSchema = z.object({

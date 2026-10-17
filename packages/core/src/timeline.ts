@@ -58,6 +58,47 @@ export interface TimelineAudio {
   durationFrames: number;
   /** Mix gain on top of the loudness normalization (dB; absent = 0): `volume`, `power`. */
   gain?: number;
+  /**
+   * Seeds of idle motion (acting stage 5a): `textKey(cast, text)` of the displayed sentence, its
+   * occurrence among the same key in this output (0 = first), and whether it asks a question.
+   */
+  contentKey?: string;
+  ordinal?: number;
+  question?: boolean;
+}
+
+/**
+ * 64-bit FNV-1a of `cast NUL text` (UTF-8 bytes), 16 hex characters. The idle motion of a line
+ * depends on what is said, not on its lock key, so drafts and re-synthesis keep the same motion.
+ */
+export function textKey(cast: string, text: string): string {
+  let h = 0xcbf29ce484222325n;
+  const mix = (byte: number) => {
+    h = BigInt.asUintN(64, (h ^ BigInt(byte)) * 0x100000001b3n);
+  };
+  // UTF-8 by hand: core has no TextEncoder (no DOM or node types).
+  for (const ch of `${cast}\u0000${text}`) {
+    let cp = ch.codePointAt(0)!;
+    if (cp >= 0xd800 && cp <= 0xdfff) cp = 0xfffd; // a lone surrogate, as TextEncoder
+    if (cp < 0x80) mix(cp);
+    else if (cp < 0x800) [0xc0 | (cp >> 6), 0x80 | (cp & 63)].forEach(mix);
+    else if (cp < 0x10000)
+      [0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63)].forEach(mix);
+    else
+      [
+        0xf0 | (cp >> 18),
+        0x80 | ((cp >> 12) & 63),
+        0x80 | ((cp >> 6) & 63),
+        0x80 | (cp & 63),
+      ].forEach(mix);
+  }
+  return h.toString(16).padStart(16, '0');
+}
+
+/** A sentence that ends in a question mark, closing quotes, brackets, `!`, `.`, `…` and `~` aside (`?"`, `?!`, `?…`). */
+export function isQuestion(text: string): boolean {
+  const t = text.replace(/[\s"'”’」』）)\]］】〉》〕｝}!！.。…~～]+$/u, '');
+  return /[?？]$/.test(t);
 }
 
 export interface TimelineCue {
@@ -294,6 +335,7 @@ export function buildTimeline(
   const toFrame = (seconds: number) => Math.round(seconds * fps);
 
   const scenes: TimelineScene[] = [];
+  const seen = new Map<string, number>();
   const selected = selectScenes(script, outputName, profile);
   const framings = sceneFramings(meta, selected, profile);
   let sceneStart = 0;
@@ -345,6 +387,9 @@ export function buildTimeline(
         for (const v of pendingVisuals.splice(0)) out.visuals.push({ startFrame, visual: v });
         sentenceStart[si] = startFrame;
         const gain = gainFor(meta, block, sentence);
+        const contentKey = textKey(block.cast, sentence.text);
+        const ordinal = seen.get(contentKey) ?? 0;
+        seen.set(contentKey, ordinal + 1);
         out.audio.push({
           sentenceId: id,
           cast: block.cast,
@@ -353,6 +398,9 @@ export function buildTimeline(
           startFrame,
           durationFrames: Math.ceil(audio.duration * fps),
           ...(gain !== 0 ? { gain } : {}),
+          contentKey,
+          ordinal,
+          question: isQuestion(sentence.text),
         });
         const spans = displayWordSpans(sentence, audio.words, meta.pronounce, meta.lang);
         for (const cue of sentence.cues) {

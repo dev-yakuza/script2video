@@ -60,7 +60,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `sentences <script>`                                                                   | 文の id 一覧（`tts --retry` 用）                                                                                                                |
 | `say "<text>" --script <script>`                                                       | 1 文を合成して再生（読みの確認）                                                                                                                |
 | `tts <script> [--retry id]`                                                            | オーディオロックに合成（変わった部分だけ）                                                                                                      |
-| `render <script> --output <name> [--draft] [--frozen-audio]`                           | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル                                                                                     |
+| `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off]`          | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル                                                                                     |
 | `snapshot <script> --output <name>`                                                    | シーンごとの静止画を並べて数秒で確認                                                                                                            |
 | `dev <script> [--video]`                                                               | 編集ループ: 保存のたびに lint → tts → snapshot                                                                                                  |
 | `takes <script> [--all] [--id id] [--no-open]`                                         | 試聴ページ（`out/<動画>/takes/<lang>/`）: 文ごとのすべてのテイクを単独・前後の文とつなげて聞き、ラジオで `takes pick` / `unpick` コマンドを作る |
@@ -203,6 +203,11 @@ cast:
 `mina: :react{joon=surprised}와, 정말요?`（段落の終わりまで続く）。リアクションするキャラクターは
 同じ側でも舞台に上がります。同じ側に複数いる場合は、リアクションの間だけ小さくなって並びます
 （`:react{joon=surprised yuna=surprised}`）。
+
+キャラクターは自分でも少し動きます: 呼吸し、2〜6 秒ごと（と表情が変わるとき）にまばたきし、聞き手は
+相手の文の終わりにときどきうなずきます（質問の後やすぐ答えるときは除く）。止めるには frontmatter に
+`acting: { idle: false }` と書き（まばたきは 4 秒に 1 回になります）、`s2v render … --idle on|off` で
+どちらも試せます。スナップショットとサムネイルでは目を閉じません。
 
 キャラクターのフォルダは次の 2 つの形式のどちらかです。
 

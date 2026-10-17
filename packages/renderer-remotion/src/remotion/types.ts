@@ -79,6 +79,12 @@ export type SceneProps = {
   transition?: 'none' | 'fade';
   /** Character mode: who stands on each side, as switches in scene-local frames. */
   stage: Record<'left' | 'right', { frame: number; keys: string[] }[]>;
+  /** Idle motion (acting stage 5a); off: the old blink only. */
+  idle: boolean;
+  /** Output name: part of the idle motion seeds. */
+  output: string;
+  /** A single still (snapshot, thumbnail): no blinks, nods or breathing. */
+  still: boolean;
 };
 
 export const dims = (aspect: Aspect): { width: number; height: number } =>

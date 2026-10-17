@@ -61,7 +61,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `sentences <script>`                                                                   | sentence ids (for `tts --retry`)                                                                                                                               |
 | `say "<text>" --script <script>`                                                       | synthesize and play one sentence (pronunciation check)                                                                                                         |
 | `tts <script> [--retry id]`                                                            | synthesize into the audio lock (only what changed)                                                                                                             |
-| `render <script> --output <name> [--draft] [--frozen-audio]`                           | video + `.srt` `.vtt` chapters, description draft, thumbnail                                                                                                   |
+| `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off]`          | video + `.srt` `.vtt` chapters, description draft, thumbnail                                                                                                   |
 | `snapshot <script> --output <name>`                                                    | one still per scene, tiled, in seconds                                                                                                                         |
 | `dev <script> [--video]`                                                               | edit loop: lint → tts → snapshot on every save                                                                                                                 |
 | `takes <script> [--all] [--id id] [--no-open]`                                         | a listening page (`out/<video>/takes/<lang>/`): every take of each line, alone or between its neighbours; the radios write the `takes pick` / `unpick` command |
@@ -210,6 +210,11 @@ motion (surprised → jump, happy → bounce, angry → shake, sad → sink); ch
 `mina: :react{joon=surprised}와, 정말요?` (held to the end of the paragraph). Reacting
 characters come on stage even when they share a side: several of a side stand together, smaller,
 for as long as the reaction lasts (`:react{joon=surprised yuna=surprised}`).
+
+Characters also move a little on their own: they breathe, blink every 2–6 seconds (and when their
+face changes), and a listener sometimes nods at the end of the other side's sentence (not after a
+question, nor right before answering). Set `acting: { idle: false }` in the frontmatter to turn this
+off (blinks then come once every 4 seconds), or try either way with `s2v render … --idle on|off`. Snapshots and thumbnails never blink.
 
 A character folder comes in one of two forms.
 

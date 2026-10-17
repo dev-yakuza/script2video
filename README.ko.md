@@ -60,7 +60,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `sentences <script>`                                                                   | 문장 id 목록(`tts --retry`용)                                                                                                          |
 | `say "<text>" --script <script>`                                                       | 한 문장을 합성해 재생(발음 확인)                                                                                                       |
 | `tts <script> [--retry id]`                                                            | 오디오 잠금에 합성(바뀐 부분만)                                                                                                        |
-| `render <script> --output <name> [--draft] [--frozen-audio]`                           | 영상 + `.srt` `.vtt` 챕터, 설명문 초안, 썸네일                                                                                         |
+| `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off]`          | 영상 + `.srt` `.vtt` 챕터, 설명문 초안, 썸네일                                                                                         |
 | `snapshot <script> --output <name>`                                                    | 장면마다 정지 화면 한 장을 모아 몇 초 만에 확인                                                                                        |
 | `dev <script> [--video]`                                                               | 편집 루프: 저장할 때마다 lint → tts → snapshot                                                                                         |
 | `takes <script> [--all] [--id id] [--no-open]`                                         | 청취 페이지(`out/<영상>/takes/<lang>/`): 문장별 모든 테이크를 단독·앞뒤 문장과 이어 듣고, 라디오로 `takes pick` / `unpick` 명령을 만듦 |
@@ -203,6 +203,11 @@ cast:
 `mina: :react{joon=surprised}와, 정말요?`(문단 끝까지 유지). 반응하는 캐릭터는 같은 쪽이어도
 무대에 오릅니다. 같은 쪽에 여러 명이면 반응하는 동안 작아져서 나란히 섭니다
 (`:react{joon=surprised yuna=surprised}`).
+
+캐릭터는 스스로도 조금씩 움직입니다: 숨을 쉬고, 2–6초마다(그리고 표정이 바뀔 때) 눈을 깜빡이며,
+듣는 캐릭터는 상대 문장이 끝날 때 가끔 끄덕입니다(질문 뒤나 바로 대답할 때는 아님). 끄려면
+frontmatter에 `acting: { idle: false }`를 적고(그러면 깜빡임은 4초에 한 번), `s2v render … --idle on|off`로
+어느 쪽이든 시험해 볼 수 있습니다. 스냅숏과 썸네일에서는 눈을 감지 않습니다.
 
 캐릭터 폴더는 두 가지 형식 중 하나입니다.
 
