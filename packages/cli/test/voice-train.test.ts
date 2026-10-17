@@ -152,6 +152,9 @@ describe('s2v voice train', { timeout: 300_000 }, () => {
       }),
     );
     cpSync(GUEST, join(root, 'voices'), { recursive: true });
+    // untrained: the run writes these
+    for (const f of ['ko.speaker.json', 'ko.trained.json', 'ko.trained.wav'])
+      rmSync(join(root, 'voices', 'guest', f), { force: true });
     trainerLog = join(root, 'trainer.log');
     writeFileSync(join(root, 'fake-trainer.mjs'), FAKE_TRAINER);
     stub = stubs(root);

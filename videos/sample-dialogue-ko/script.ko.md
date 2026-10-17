@@ -3,7 +3,7 @@ title: script2video 대화 샘플
 lang: ko
 cast:
   host: { voice: "qwen:Sohee", name: 소희, color: "#2563EB", style: "차분하고 친근한 설명 톤", character: characters/host }
-  guest: { voice: "persona:guest", name: 민수, color: "#EA580C", character: { dir: characters/guest, facing: right } }
+  guest: { voice: "persona:guest", personaModel: trained, name: 민수, color: "#EA580C", character: { dir: characters/guest, facing: right } }
 outputs:
   youtube: { aspect: "16:9", layout: dialogue }
   shorts: { aspect: "9:16", layout: dialogue, scenes: [how] }

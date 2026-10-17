@@ -2,7 +2,7 @@
  * A persona's trained speaker on the CLI side (acting stage 4 plan 1–3): the speaker file, lint,
  * the synthesis request and keys, the reference voice. Uses the sample dialogue's guest persona.
  */
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +47,9 @@ function setup(cast: string, body: string) {
   cpSync(join(REPO, 'videos/sample-dialogue-ko/voices'), join(root, 'voices'), {
     recursive: true,
   });
+  // the persona as before training: each test writes its own speaker file
+  for (const f of ['ko.speaker.json', 'ko.trained.json', 'ko.trained.wav'])
+    rmSync(join(root, 'voices', 'guest', f), { force: true });
   const path = join(root, 'script.ko.md');
   const head = `---\nlang: ko\ncast:\n${cast}\noutputs:\n  youtube: { aspect: "16:9", layout: presenter }\n---\n\n# s {#s}\n\n`;
   writeFileSync(path, head + body + '\n');

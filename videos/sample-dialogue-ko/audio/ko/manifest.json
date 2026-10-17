@@ -226,19 +226,19 @@
       "sim": 0.9869,
       "voiceRef": "d65211e326bf3076"
     },
-    "c0825a49bb4c1475c8c0d0c1": {
-      "src": "c0825a49bb4c1475c8c0d0c1.wav",
-      "duration": 1.9947,
+    "17a83d60d84fcc6a2a0bae76": {
+      "src": "17a83d60d84fcc6a2a0bae76.wav",
+      "duration": 2.0888,
       "words": [
         {
           "text": "대본만",
           "start": 0,
-          "end": 0.4
+          "end": 0.48
         },
         {
           "text": "쓰면",
-          "start": 0.4,
-          "end": 0.88
+          "start": 0.48,
+          "end": 0.96
         },
         {
           "text": "영상",
@@ -248,35 +248,47 @@
         {
           "text": "이",
           "start": 1.28,
-          "end": 1.28
+          "end": 1.36
         },
         {
           "text": "나온다고",
-          "start": 1.28,
-          "end": 1.84
+          "start": 1.36,
+          "end": 1.92
         },
         {
           "text": "요",
-          "start": 1.84,
-          "end": 1.92
+          "start": 1.92,
+          "end": 2.08
         }
       ],
       "heard": "대본만 쓰면 영상이 나온다고요?",
       "cer": 0,
-      "engine": "persona",
-      "model": "qwen3-tts-1.7b-base",
-      "seed": "7793725864313519000",
+      "engine": "trained",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "6740269445319474000",
       "attempt": 0,
       "pauseRemoved": 0,
       "checks": [],
-      "f0": 94.3,
-      "ending": -3.25,
-      "sim": 0.9834,
-      "voiceRef": "3da3cfa7115ce085"
+      "f0": 93.8,
+      "ending": -1.25,
+      "sim": 0.9848,
+      "voiceRef": "53ae7f58efa4a8ea",
+      "synthKey": "33a9d4f55dd952114be3897c",
+      "pickKey": "cdee3d2fb42c11bab0b664ef",
+      "tried": 0,
+      "takes": {
+        "0": {
+          "ok": true,
+          "f0": 93.8,
+          "raw": null,
+          "ending": null,
+          "rate": 6.25
+        }
+      }
     },
-    "a50855c636201d4250067cbc": {
-      "src": "a50855c636201d4250067cbc.wav",
-      "duration": 2.3023,
+    "20b5fd533b7b65ffdd5d069f": {
+      "src": "20b5fd533b7b65ffdd5d069f.wav",
+      "duration": 2.4777,
       "words": [
         {
           "text": "목소리",
@@ -291,59 +303,71 @@
         {
           "text": "표정",
           "start": 0.56,
-          "end": 0.88
+          "end": 0.96
         },
         {
           "text": "도",
-          "start": 0.88,
-          "end": 1.04
+          "start": 0.96,
+          "end": 1.12
         },
         {
           "text": "대본에서",
-          "start": 1.04,
-          "end": 1.6
+          "start": 1.2,
+          "end": 1.68
         },
         {
           "text": "정하",
-          "start": 1.6,
-          "end": 1.84
-        },
-        {
-          "text": "는",
-          "start": 1.84,
+          "start": 1.68,
           "end": 1.92
         },
         {
-          "text": "거죠",
+          "text": "는",
           "start": 1.92,
-          "end": 2.24
+          "end": 2.08
+        },
+        {
+          "text": "거죠",
+          "start": 2.08,
+          "end": 2.4
         }
       ],
       "heard": "목소리와 표정도 대본에서 정하는 거죠.",
       "cer": 0,
-      "engine": "persona",
-      "model": "qwen3-tts-1.7b-base",
-      "seed": "7769962337488461000",
+      "engine": "trained",
+      "model": "qwen3-tts-1.7b-customvoice",
+      "seed": "7002122961263522000",
       "attempt": 0,
       "pauseRemoved": 0,
       "checks": [],
-      "f0": 117.8,
-      "ending": -5.55,
-      "sim": 0.9814,
-      "voiceRef": "3da3cfa7115ce085"
+      "f0": 95.7,
+      "ending": -2.6,
+      "sim": 0.9889,
+      "voiceRef": "53ae7f58efa4a8ea",
+      "synthKey": "91354b7d3646e1b3ba9ebd63",
+      "pickKey": "4dad769076126439e861d3a9",
+      "tried": 0,
+      "takes": {
+        "0": {
+          "ok": true,
+          "f0": 95.7,
+          "raw": null,
+          "ending": null,
+          "rate": 6.67
+        }
+      }
     }
   },
   "sentences": {
     "intro:1:0": "dc6ecdbe3e9c445b3a8cc59f",
-    "intro:2:0": "c0825a49bb4c1475c8c0d0c1",
+    "intro:2:0": "17a83d60d84fcc6a2a0bae76",
     "how:1:0": "4994602d1acff9b4f7f0e6be",
-    "how:2:0": "a50855c636201d4250067cbc",
+    "how:2:0": "20b5fd533b7b65ffdd5d069f",
     "how:3:0": "c971e247ac19e5d28975201d"
   },
   "env": {
     "tts": {
       "id": "script2video-tts",
-      "wrapper_version": "0.3.0",
+      "wrapper_version": "0.4.0",
       "lock_hash": "1833f658cbb515eb",
       "models": {
         "qwen3-tts-1.7b-customvoice": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
@@ -358,11 +382,11 @@
       "device": "mps",
       "torch": "2.14.1",
       "transformers": "4.57.3",
-      "uptime_s": 1.6
+      "uptime_s": 1.8
     },
     "aligner": {
       "id": "script2video-aligner",
-      "wrapper_version": "0.3.0",
+      "wrapper_version": "0.4.0",
       "lock_hash": "fa35472df4f8f6d3",
       "models": {
         "qwen3-forcedaligner-0.6b": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
@@ -372,7 +396,7 @@
       "device": "mps",
       "torch": "2.14.1",
       "transformers": "4.57.6",
-      "uptime_s": 1.6
+      "uptime_s": 1.8
     }
   }
 }

@@ -541,8 +541,8 @@ describe('inspect: committed samples', () => {
     },
     'videos/sample-dialogue-ko/script.ko.md': {
       content: '02eb56d5d3c472e9f4a8c4c9c5acfea52112872f8ce903e01d7982e303044c75',
-      voice: 'be52691c3802ef4097ad21d503a8192badc1b0024feb6a87527a83570090bbd7',
-      audio: '8b4115b544a51a7bff8bb26158a1a17087abf81f2cd7007ee2a5af98d9b5587d',
+      voice: '5c6cd01ec8e066eddffc2e64ee832e2998a9fd429c61edb9709c09778f02d335',
+      audio: 'd26e098ccacc1323c65a6b565049f4a0d8341f326a53f361180e02264f7b8e55',
       presentation_by_output: { youtube: null, shorts: null },
     },
   };
