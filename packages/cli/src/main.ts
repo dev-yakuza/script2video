@@ -14,7 +14,7 @@
  *   s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open] [--out-dir <dir>]   (direction plan and notes)
  *   s2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]
  *   s2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>] [--frozen-audio] [--frames]
- *   s2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>]
+ *   s2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>] [--watermark proxy]
  *   s2v audio prune <script.md>   (drop locked audio the script no longer uses)
  *   s2v export-script <script.md>   (reading script for a recording session)
  *   s2v import-recording <script.md> <take.wav> [--write]
@@ -108,9 +108,17 @@ import { inspectScript } from './inspect.js';
 import { directDiagnostics, directHtml, directManifest } from './direct.js';
 import { commandOf, onOff, parseFor, USAGE, UsageError } from './args.js';
 import { printVersion, versionInfo } from './version.js';
+import { proxyPlacement, writeProxyPng } from './watermark.js';
 import { cacheDirOf, checkOutDir, outDirOf } from './paths.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+/** Frame size of each aspect at scale 1 (the renderer's). */
+const FRAME_SIZE: Record<Aspect, [number, number]> = {
+  '16:9': [1920, 1080],
+  '9:16': [1080, 1920],
+  '1:1': [1080, 1080],
+};
 
 function usage(): never {
   console.error(USAGE.map((l, i) => `${i === 0 ? 'usage: ' : '       '}${l}`).join('\n'));
@@ -719,6 +727,9 @@ async function main(): Promise<void> {
       const { values } = parseFor('render', rest);
       const rhythmOpts = rhythmOf(values.rhythm);
       const idleFlag = onOff('idle', values.idle);
+      if (values.watermark !== undefined && values.watermark !== 'proxy')
+        throw new UsageError(`--watermark takes only proxy, not "${values.watermark}"`);
+      const proxy = values.watermark === 'proxy';
       const outDir = checkOutDir(outDirOf(path, REPO_ROOT, values['out-dir']), path, REPO_ROOT);
       const script = load(path);
       const log = (m: string) => console.error(m);
@@ -826,12 +837,31 @@ async function main(): Promise<void> {
       log(
         `audio: ${m.lufs.toFixed(1)} LUFS, true peak ${m.truePeak.toFixed(1)} dBFS (${m.passes} pass)`,
       );
-      const out = join(outDir, `${outputName}.${script.meta.lang}${suffix}.mp4`);
+      // a marked render is named apart, so it never replaces an unmarked one (S13)
+      const out = join(
+        outDir,
+        `${outputName}.${script.meta.lang}${suffix}${proxy ? '.proxy' : ''}.mp4`,
+      );
+      const logo = logoOf(script.meta);
+      const corner = logo?.position ?? null;
+      const mark = (width: number, height: number, subtitlesTop: boolean) => ({
+        png: writeProxyPng(workDir, width),
+        ...proxyPlacement(width, height, corner, subtitlesTop),
+      });
+      const [fw, fh] = FRAME_SIZE[profile.aspect as Aspect];
+      const scale = draft ? 0.5 : 1;
       await concatAndMux(
         chunks.map((c) => c.path),
         mastered,
         out,
         workDir,
+        proxy
+          ? mark(
+              Math.round(fw * scale),
+              Math.round(fh * scale),
+              subtitleStyleFor(script.meta, outputName)?.position === 'top',
+            )
+          : undefined,
       );
       const p = await probe(out);
       const ok = p.frames === timeline.totalFrames && Math.abs(p.videoSec - p.audioSec) < 0.05;
@@ -861,12 +891,13 @@ async function main(): Promise<void> {
               mouths: timelineMouths(timeline),
               subtitleStyle: subtitleStyleFor(script.meta, outputName),
               theme: themeOf(script.meta),
-              logo: logoOf(script.meta),
+              logo,
               assetsRoot: dirname(path),
               fontsDir: fonts,
               workDir,
             },
             out.replace(/\.mp4$/, '.thumbnail.png'),
+            proxy ? mark(1280, 720, false) : undefined,
           )}`,
         );
       else if (!draft) dropThumbnail(out.replace(/\.mp4$/, '.thumbnail.png')); // not last run's (S2)

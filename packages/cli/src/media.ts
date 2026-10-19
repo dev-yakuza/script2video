@@ -249,6 +249,8 @@ export async function concatAndMux(
   audio: string,
   output: string,
   workDir: string,
+  /** The PROXY band (S13): overlaid on every frame, which re-encodes the video. */
+  watermark?: { png: string; x: number; y: number },
 ): Promise<void> {
   const list = join(workDir, 'concat.txt');
   writeFileSync(list, chunks.map((c) => `file '${c.replace(/'/g, "'\\''")}'`).join('\n') + '\n');
@@ -256,7 +258,7 @@ export async function concatAndMux(
   // (the name still ends in .mp4 for ffmpeg to pick the muxer)
   const tmp = output.replace(/\.mp4$/, '') + '.tmp.mp4';
   try {
-    await muxTo(list, audio, tmp);
+    await muxTo(list, audio, tmp, watermark);
     renameSync(tmp, output);
   } catch (e) {
     rmSync(tmp, { force: true });
@@ -264,7 +266,39 @@ export async function concatAndMux(
   }
 }
 
-async function muxTo(list: string, audio: string, output: string): Promise<void> {
+async function muxTo(
+  list: string,
+  audio: string,
+  output: string,
+  watermark?: { png: string; x: number; y: number },
+): Promise<void> {
+  // Inputs: 0 = the chunk list, 1 = the soundtrack, 2 = the band. One picture repeats to the end
+  // (eof_action=repeat) and the output ends with the chunks: no -loop, no longer video. The
+  // re-encode keeps every frame (passthrough) and the chunks' crf / pixel format / timescale.
+  const video = watermark
+    ? [
+        '-i',
+        watermark.png,
+        '-filter_complex',
+        `[0:v][2:v]overlay=x=${watermark.x}:y=${watermark.y}:eof_action=repeat:format=auto[v]`,
+        '-map',
+        '[v]',
+        '-map',
+        '1:a:0',
+        '-c:v',
+        'libx264',
+        '-crf',
+        '18',
+        '-preset',
+        'medium',
+        '-pix_fmt',
+        'yuv420p',
+        '-fps_mode',
+        'passthrough',
+        '-video_track_timescale',
+        '15360',
+      ]
+    : ['-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy'];
   await run('ffmpeg', [
     '-v',
     'error',
@@ -277,12 +311,7 @@ async function muxTo(list: string, audio: string, output: string): Promise<void>
     list,
     '-i',
     audio,
-    '-map',
-    '0:v:0',
-    '-map',
-    '1:a:0',
-    '-c:v',
-    'copy',
+    ...video,
     '-c:a',
     'aac',
     '-b:a',

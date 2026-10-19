@@ -62,6 +62,8 @@ export async function writeThumbnail(
   scriptDir: string,
   opts: RenderOptions,
   out: string,
+  /** The PROXY band (S13): a png and where it goes on the 1280×720 thumbnail. */
+  mark?: { png: string; x: number; y: number },
 ): Promise<string> {
   rmSync(out, { force: true }); // a failed thumbnail does not leave last run's (S2)
   const thumb = script.scenes
@@ -70,16 +72,7 @@ export async function writeThumbnail(
   const fit =
     'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=0x111827';
   if (thumb && thumb.kind === 'visual' && thumb.attrs.src) {
-    await run('ffmpeg', [
-      '-v',
-      'error',
-      '-y',
-      '-i',
-      resolve(scriptDir, thumb.attrs.src),
-      '-vf',
-      fit,
-      out,
-    ]);
+    await fitThumbnail(resolve(scriptDir, thumb.attrs.src), out, fit, mark);
     return out;
   }
   const first = opts.timeline.scenes[0]!;
@@ -94,7 +87,35 @@ export async function writeThumbnail(
   await renderStills({ ...opts, timeline, scale: 1 }, [
     { sceneId: first.id, frame: Math.floor(first.durationFrames / 2), output: still },
   ]);
-  await run('ffmpeg', ['-v', 'error', '-y', '-i', still, '-vf', fit, `${out}.tmp.png`]);
-  renameSync(`${out}.tmp.png`, out);
+  await fitThumbnail(still, out, fit, mark);
   return out;
+}
+
+/** One image fitted to 1280×720 (and marked, S13), written beside and moved in place. */
+async function fitThumbnail(
+  input: string,
+  out: string,
+  fit: string,
+  mark?: { png: string; x: number; y: number },
+): Promise<void> {
+  const tmp = `${out}.tmp.png`;
+  const args = mark
+    ? [
+        '-i',
+        input,
+        '-i',
+        mark.png,
+        '-filter_complex',
+        `[0:v]${fit}[b];[b][1:v]overlay=x=${mark.x}:y=${mark.y}:format=auto,format=rgb24`,
+        '-frames:v',
+        '1',
+      ]
+    : ['-i', input, '-vf', fit];
+  try {
+    await run('ffmpeg', ['-v', 'error', '-y', ...args, tmp]);
+    renameSync(tmp, out);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
 }

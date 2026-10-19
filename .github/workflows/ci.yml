@@ -76,6 +76,14 @@ jobs:
       - run: node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output youtube --frozen-audio
       - run: node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output shorts --frozen-audio
       - run: test -s out/sample-ko/youtube.ko.mp4 && test -s out/sample-ko/youtube.ko.srt && test -s out/sample-ko/youtube.ko.thumbnail.png
+      - name: proxy watermark (S13)
+        run: |
+          plain="youtube.ko.mp4 youtube.ko.srt youtube.ko.vtt youtube.ko.description.md youtube.ko.thumbnail.png"
+          (cd out/sample-ko && sha256sum $plain > "$RUNNER_TEMP/plain.sha")
+          node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output youtube --frozen-audio --watermark proxy
+          (cd out/sample-ko && sha256sum -c "$RUNNER_TEMP/plain.sha")
+          node scripts/check-band.mjs out/sample-ko/youtube.ko.proxy.mp4 out/sample-ko/youtube.ko.mp4 461:115:38:38 461:115:1459:927
+          node scripts/check-band.mjs out/sample-ko/youtube.ko.proxy.thumbnail.png out/sample-ko/youtube.ko.thumbnail.png 307:77:26:26 307:77:973:643
       - name: snapshot stills (S6)
         run: |
           node packages/cli/dist/main.js snapshot videos/sample-ko/script.ko.md --output youtube --frozen-audio --frames --out-dir "$RUNNER_TEMP/stills"
