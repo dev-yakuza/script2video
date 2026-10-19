@@ -373,6 +373,15 @@ interface IdleReaction {
   endFrame: number;
 }
 
+/** A listener's look (acting stage 5b): `hold` = ended with its paragraph (held FACE_HOLD more). */
+export interface IdleLook {
+  cast: string;
+  face: string;
+  startFrame: number;
+  endFrame: number;
+  hold?: true;
+}
+
 /** A line's seed material: what is said (its occurrence), else its id (old timelines, tests). */
 const material = (a: IdleAudio) =>
   a.contentKey !== undefined ? `${a.contentKey}#${a.ordinal ?? 0}` : a.sentenceId;
@@ -385,8 +394,9 @@ const sortedAudio = <T extends IdleAudio>(audio: T[]): T[] =>
     .map((x) => x.a);
 
 /**
- * The face a character shows at a frame: the most recent of its own line (paragraph face) and
- * any `:react` aimed at it, each held FACE_HOLD frames after it ends; otherwise the default.
+ * The face a character shows at a frame: the most recent of its own line (paragraph face), any
+ * `:react` aimed at it, each held FACE_HOLD frames after it ends, and its looks (held only when
+ * they end with their paragraph); otherwise the default.
  */
 export function faceAt(
   key: string,
@@ -394,6 +404,7 @@ export function faceAt(
   frame: number,
   audio: IdleAudio[],
   reactions: IdleReaction[],
+  looks: IdleLook[] = [],
 ): string {
   let face = defaultFace;
   let since = -Infinity;
@@ -406,6 +417,9 @@ export function faceAt(
   for (const a of audio)
     if (a.cast === key) consider(a.startFrame, a.startFrame + a.durationFrames, a.face);
   for (const r of reactions) if (r.cast === key) consider(r.startFrame, r.endFrame, r.face);
+  for (const l of looks)
+    if (l.cast === key)
+      consider(l.startFrame, l.hold ? l.endFrame : l.endFrame - FACE_HOLD, l.face);
   return face;
 }
 
@@ -425,11 +439,13 @@ export function drawnFaceChanges(input: {
   available: string[];
   audio: IdleAudio[];
   reactions: IdleReaction[];
+  looks?: IdleLook[];
   durationFrames: number;
 }): number[] {
   const { key, defaultFace, available, audio, reactions, durationFrames } = input;
+  const looks = input.looks ?? [];
   const drawn = (f: number) =>
-    drawnFace(faceAt(key, defaultFace, f, audio, reactions), defaultFace, available);
+    drawnFace(faceAt(key, defaultFace, f, audio, reactions, looks), defaultFace, available);
   const points = new Set<number>();
   for (const a of audio)
     if (a.cast === key) {
@@ -440,6 +456,11 @@ export function drawnFaceChanges(input: {
     if (r.cast === key) {
       points.add(r.startFrame);
       points.add(r.endFrame + FACE_HOLD);
+    }
+  for (const l of looks)
+    if (l.cast === key) {
+      points.add(l.startFrame);
+      points.add(l.hold ? l.endFrame + FACE_HOLD : l.endFrame);
     }
   return [...points]
     .filter((f) => f > 0 && f < durationFrames && drawn(f) !== drawn(f - 1))

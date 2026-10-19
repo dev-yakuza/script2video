@@ -219,12 +219,14 @@ function standardPreset(): PresetDef {
     expressions: STANDARD_EXPRESSIONS,
     faces,
     sets: {
+      // The head close-up draws every face (closeup-look plan): its turned faces and glances
+      // turn the head (the same picture: no body shows), poses keep only their expression.
       head: {
         views: { front: { facing: 'front' } },
-        heads: {},
+        heads: { 'front/glance': { preset: 'glance', facing: 'right' } },
         bodies: {},
         groups: {},
-        faces: ['neutral', 'happy', 'sad', 'surprised', 'moved', 'serious'],
+        faces: Object.keys(faces),
       },
     },
   };

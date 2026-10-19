@@ -399,3 +399,47 @@ describe('chunkKey', () => {
     expect(key(true, 'shorts')).not.toBe(key(true));
   });
 });
+
+describe('looks (acting stage 5b)', () => {
+  const audio: A[] = [
+    { sentenceId: 's', cast: 'b', face: 'happy', startFrame: 100, durationFrames: 30 },
+  ];
+  const look = (startFrame: number, endFrame: number, face: string, hold?: true) => ({
+    cast: 'b',
+    face,
+    startFrame,
+    endFrame,
+    ...(hold ? { hold } : {}),
+  });
+
+  it('shows the most recent of lines, reactions and looks; a look ended by another is not held', () => {
+    const looks = [look(10, 40, 'front-neutral'), look(40, 60, 'glance-neutral', true)];
+    expect(faceAt('b', 'neutral', 9, audio, [], looks)).toBe('neutral');
+    expect(faceAt('b', 'neutral', 39, audio, [], looks)).toBe('front-neutral');
+    expect(faceAt('b', 'neutral', 40, audio, [], looks)).toBe('glance-neutral');
+    expect(faceAt('b', 'neutral', 60 + FACE_HOLD - 1, audio, [], looks)).toBe('glance-neutral');
+    expect(faceAt('b', 'neutral', 60 + FACE_HOLD, audio, [], looks)).toBe('neutral');
+    // its own line is more recent than the look
+    expect(faceAt('b', 'neutral', 100, audio, [], [look(90, 120, 'front-neutral', true)])).toBe(
+      'happy',
+    );
+    // a not-held look stops at its end
+    expect(faceAt('b', 'neutral', 39, audio, [], [look(10, 40, 'front-neutral')])).toBe(
+      'front-neutral',
+    );
+    expect(faceAt('b', 'neutral', 40, audio, [], [look(10, 40, 'front-neutral')])).toBe('neutral');
+  });
+
+  it('blinks when a look changes the drawn face', () => {
+    const changes = drawnFaceChanges({
+      key: 'b',
+      defaultFace: 'neutral',
+      available: ['neutral', 'front-neutral'],
+      audio: [],
+      reactions: [],
+      looks: [look(10, 40, 'front-neutral')],
+      durationFrames: 100,
+    });
+    expect(changes).toEqual([10, 40]);
+  });
+});

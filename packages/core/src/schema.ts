@@ -229,7 +229,13 @@ export type Inline =
   /** Listener reactions: cast key → face, from the word after this point. */
   | { type: 'react'; faces: Record<string, string>; motions?: Record<string, string> }
   /** `:emo{…}`: the voice attributes from the next sentence on. */
-  | { type: 'emo'; acting: Acting; line?: number };
+  | { type: 'emo'; acting: Acting; line?: number }
+  /** `:look{cast=partner|viewer|glance}`: where characters look from here (acting stage 5b). */
+  | { type: 'look'; looks: Record<string, LookValue>; line?: number };
+
+/** Where a character looks (acting plan 2.5): its default stance, the viewer, or a glance. */
+export const LOOK_VALUES = ['partner', 'viewer', 'glance'] as const;
+export type LookValue = (typeof LOOK_VALUES)[number];
 
 /** How a line is spoken (acting plan 2.1): set by the speaker prefix or an inline `:emo`. */
 export interface Acting {
@@ -256,6 +262,8 @@ export interface Sentence {
   pauseAfter?: number;
   /** `:react{cast=face}` points: character offset in `text` and the faces to show from there. */
   reacts?: { at: number; faces: Record<string, string>; motions?: Record<string, string> }[];
+  /** `:look{cast=value}` points: character offset in `text`, where each cast looks from there. */
+  looks?: { at: number; looks: Record<string, LookValue>; line?: number }[];
   /** The voice attributes this sentence is spoken with (prefix or the last `:emo`). */
   acting?: Acting;
   /** An inline `:emo` starts at this sentence. */

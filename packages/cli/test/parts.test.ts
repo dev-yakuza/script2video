@@ -81,6 +81,20 @@ describe('lintPartsCharacter', () => {
     expect(w.some((x) => x.includes('used for speaking but has no mouth frames'))).toBe(true);
   });
 
+  it('notes once that the head close-up mirrors its turned head', () => {
+    const y = YAML.replace(
+      '    faces: [neutral]',
+      '    heads: { front/glance: { facing: right } }\n    faces: [neutral, gasp]',
+    );
+    const close = '# 하나\n\n::shot{a=head}\n\na: 안녕.\n\na{face=gasp}: 네.\n';
+    const note = (yaml: string, body: string) =>
+      messages(character(yaml), body, 'info').filter((x) => x.includes('mirrors its turned head'));
+    expect(note(y, close)).toHaveLength(1);
+    expect(note(y, '# 하나\n\na: 안녕.\n')).toEqual([]); // no head close-up
+    expect(note(YAML, close)).toEqual([]); // no turned head in the set
+    expect(note(`${y}mirror: false\n`, close)).toEqual([]);
+  });
+
   it('keeps phase-1 scope: no bodies on turned views, gaze only on front heads', () => {
     const y = YAML.replace('heads:', 'bodies:\n  turn/wave: {}\nheads:').replace(
       '  look: { view: front, expression: side }',

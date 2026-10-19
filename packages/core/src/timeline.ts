@@ -16,14 +16,16 @@ import {
   FACE_MOTION,
   type Cue,
   type Framing,
+  type Frontmatter,
   type Lang,
+  type LookValue,
   type OutputProfile,
   type Paragraph,
   type Script,
   type Sentence,
   type Visual,
 } from './schema.js';
-import { gainFor, paragraphActing } from './acting.js';
+import { gainFor, lookFace, paragraphActing } from './acting.js';
 import { toAlignText, ttsRangeToDisplay } from './tts-text.js';
 
 export interface AlignedWord {
@@ -137,6 +139,19 @@ export interface TimelineVisual {
   visual: Visual;
 }
 
+/**
+ * A listener's look (acting stage 5b): the face it shows from `startFrame` to `endFrame`. `hold`:
+ * it ends with its paragraph (held FACE_HOLD more, like a reaction); otherwise a later look ended it.
+ * It neither lights the listener nor brings it on stage.
+ */
+export interface TimelineLook {
+  cast: string;
+  face: string;
+  startFrame: number;
+  endFrame: number;
+  hold?: true;
+}
+
 export interface TimelineScene {
   id: string;
   title: string;
@@ -149,6 +164,8 @@ export interface TimelineScene {
   subtitles: TimelineSubtitle[];
   reactions: TimelineReaction[];
   motions: TimelineMotion[];
+  /** Listener looks (acting stage 5b); absent in timelines built before it. */
+  looks?: TimelineLook[];
   /**
    * Framing of every cast member in this scene: the scene's `::shot`, else inherited from the
    * previous scene of this output (the first starts full). All full when the output sets `shot: full`.
@@ -321,6 +338,71 @@ export function sceneFramings(
   });
 }
 
+/**
+ * Listener looks of one paragraph (stage 5b plan 3). Per listener, reactions and looks in time
+ * order: a look shows the variant of the reaction face then active (else the cast face) and ends
+ * at the listener's next look; a reaction starting during a look takes the look's variant;
+ * `partner` during a reaction shows the reaction's own face again. Mutates `reactions`' faces.
+ */
+function listenerLooks(
+  meta: Frontmatter,
+  reactions: TimelineReaction[],
+  looks: { cast: string; look: LookValue; startFrame: number; order: number }[],
+  blockEnd: number,
+  framing: Record<string, Framing>,
+): TimelineLook[] {
+  const out: TimelineLook[] = [];
+  for (const cast of new Set(looks.map((l) => l.cast))) {
+    const fr = framing[cast] ?? 'full';
+    const base = meta.cast[cast]?.face ?? 'neutral';
+    type Ev =
+      | { kind: 'look'; frame: number; order: number; look: LookValue }
+      | { kind: 'react'; frame: number; order: number; r: TimelineReaction };
+    const events: Ev[] = [
+      ...looks
+        .filter((l) => l.cast === cast)
+        .map((l) => ({ kind: 'look' as const, frame: l.startFrame, order: l.order, look: l.look })),
+      ...reactions
+        .filter((r) => r.cast === cast)
+        .map((r, i, all) => ({
+          kind: 'react' as const,
+          frame: r.startFrame,
+          order: i - all.length,
+          r,
+        })),
+    ].sort((a, b) => a.frame - b.frame || a.order - b.order);
+    let look: LookValue = 'partner';
+    let react: string | undefined; // the active reaction's own face
+    let open: TimelineLook | undefined;
+    const close = (frame: number) => {
+      if (open) {
+        open.endFrame = Math.max(open.startFrame, frame);
+        delete open.hold;
+      }
+      open = undefined;
+    };
+    for (const e of events) {
+      if (e.kind === 'react') {
+        react = e.r.face;
+        e.r.face = lookFace(meta, cast, e.r.face, look, fr).face;
+        continue;
+      }
+      close(e.frame);
+      look = e.look;
+      if (look === 'partner' && react === undefined) continue;
+      open = {
+        cast,
+        face: lookFace(meta, cast, react ?? base, look, fr).face,
+        startFrame: e.frame,
+        endFrame: blockEnd,
+        hold: true,
+      };
+      out.push(open);
+    }
+  }
+  return out;
+}
+
 export function buildTimeline(
   script: Script,
   outputName: string,
@@ -357,6 +439,7 @@ export function buildTimeline(
       subtitles: [],
       reactions: [],
       motions: [],
+      looks: [],
       framing: framings[sceneIndex]!,
     };
     const pendingVisuals: Visual[] = [];
@@ -371,6 +454,7 @@ export function buildTimeline(
       if (started) t += block.gap ?? pendingGap;
       started = true;
       const blockReactions: (TimelineReaction & { motion?: string })[] = [];
+      const blockLooks: { cast: string; look: LookValue; startFrame: number; order: number }[] = [];
       let blockStart: number | null = null;
       const acting = paragraphActing(meta, block, out.framing[block.cast] ?? 'full');
       const sentenceStart: (number | undefined)[] = [];
@@ -393,7 +477,7 @@ export function buildTimeline(
         out.audio.push({
           sentenceId: id,
           cast: block.cast,
-          face: acting.faces[si]!.drawn,
+          face: acting.faces[si]!.shown,
           src: audio.src,
           startFrame,
           durationFrames: Math.ceil(audio.duration * fps),
@@ -449,10 +533,23 @@ export function buildTimeline(
             });
           }
         }
+        for (const l of sentence.looks ?? []) {
+          const word = spans.find((w) => w.end > l.at);
+          const at = l.at === 0 || !word ? (l.at === 0 ? 0 : audio.duration) : word.t0;
+          for (const [cast, look] of Object.entries(l.looks))
+            if (cast !== block.cast)
+              blockLooks.push({
+                cast,
+                look,
+                startFrame: toFrame(t + at),
+                order: blockLooks.length,
+              });
+        }
         t += audio.duration;
         if (sentence.pauseAfter) t += sentence.pauseAfter;
       });
       const blockEnd = toFrame(t);
+      out.looks!.push(...listenerLooks(meta, blockReactions, blockLooks, blockEnd, out.framing));
       for (const { motion, ...r } of blockReactions) {
         out.reactions.push({ ...r, endFrame: blockEnd });
         if (motion)

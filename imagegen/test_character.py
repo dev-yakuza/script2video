@@ -71,6 +71,23 @@ def big_eyes(img: np.ndarray, closed: bool = False) -> np.ndarray:
     return img
 
 
+def anime_eyes(img: np.ndarray, state: str = "open", dx: int = 4) -> np.ndarray:
+    """Eyes with whites: a white disc with a dark pupil `dx` px off centre ("open"), or a closed
+    eyelid line on skin ("closed")."""
+    img = img.copy()
+    yy, xx = np.mgrid[0:H, 0:W]
+    for ex in (66, 94):
+        disc = (xx - ex) ** 2 + (yy - 50) ** 2 <= 10**2
+        img[disc] = (30, 25, 20)
+        if state == "closed":
+            img[disc] = (250, 215, 195)
+            img[(abs(yy - 52) <= 1) & (abs(xx - ex) <= 9)] = (30, 25, 20)
+        else:
+            img[(xx - ex) ** 2 + (yy - 50) ** 2 <= 8**2] = (252, 252, 252)
+            img[(xx - ex - dx) ** 2 + (yy - 50) ** 2 <= 4**2] = (30, 25, 20)
+    return img
+
+
 def grow_box(m, n):
     return C.grow(m, n)
 
@@ -177,6 +194,138 @@ class LayerTest(unittest.TestCase):
         self.assertTrue(m[55 + 15, 80])
         self.assertFalse(m[32, 80])
 
+    def test_the_mouth_part_leaves_out_a_redrawn_nose_and_jaw_line(self) -> None:
+        still = big_eyes(drawing())
+        frame = big_eyes(drawing(mouth=3))
+        frame[58:65, 77:84] = (40, 35, 30)  # the edit redrew the nose above the mouth
+        frame[80:84, 62:99] = (40, 35, 30)  # and a jaw line right below it
+        frame[68:71, 93:114] = (40, 35, 30)  # and a cheek line beside it
+        inside = C.cutout(still)[0][..., 3] > 128
+        mb = C.PART_MIN_BLOB["full"]
+        eyes = C.eye_blobs(still, big_eyes(drawing(), closed=True), inside, mb)
+        m, _, keep_out = C.group_parts(still, {"open": frame}, inside, eyes, mb)
+        self.assertTrue(m[55 + 15, 80])
+        self.assertFalse(m[61, 80])
+        self.assertFalse(m[82, 64])
+        self.assertFalse(m[80, 80])  # not even right under the mouth: the jaw is a line apart
+        self.assertFalse(m[69, 104])
+        # Not pasted either: the part's grown edge must not bring the nose or the jaw back.
+        a = C.part_region(m, inside.astype(np.float32), keep_out)
+        self.assertLess(a[61, 80], 0.05)
+        self.assertLess(a[82, 66], 0.05)
+        self.assertGreaterEqual(float(a[m].min()), 0.95)  # the soft edge stays off the mouth
+
+    def test_the_mouth_keeps_its_thin_corners_level_with_it(self) -> None:
+        still = drawing()
+        still[72:76, 60:101] = (150, 40, 50)  # a smile line wider than the open mouth
+        frame = drawing()
+        frame[64:87, 70:91] = (150, 40, 50)  # open: the line's ends are erased
+        frame[60:66, 63:71] = (150, 40, 50)  # with an upturned corner
+        inside = C.cutout(still)[0][..., 3] > 128
+        m, _, keep_out = C.group_parts(still, {"open": frame}, inside, [], C.PART_MIN_BLOB["full"])
+        # Left out, the still's line would show as dashes beside the open mouth.
+        self.assertTrue(m[74, 62])
+        self.assertTrue(m[74, 98])
+        self.assertTrue(m[62, 66])
+        a = C.part_region(m, inside.astype(np.float32), keep_out)
+        self.assertGreaterEqual(float(a[m].min()), 0.95)
+
+    def test_a_jaw_the_open_mouth_reaches_moves_whole(self) -> None:
+        still = drawing()
+        still[80:83, 56:105] = (40, 35, 30)  # a jaw line
+        frame = drawing()
+        frame[82:85, 56:105] = (40, 35, 30)  # pushed 2 px down by a mouth open to it
+        frame[64:83, 70:91] = (150, 40, 50)
+        inside = C.cutout(still)[0][..., 3] > 128
+        m = C.mouth_mask(still, [frame], inside, min_blob=C.PART_MIN_BLOB["full"])
+        # Cut at the part's edge, the jaw would step there.
+        self.assertTrue(m[83, 64])
+        self.assertTrue(m[83, 96])
+
+    def test_the_erased_ends_of_a_smile_far_wider_than_the_mouth_stay(self) -> None:
+        still = drawing()
+        still[72:76, 55:106] = (150, 40, 50)  # a closed smile, much wider than the open mouth
+        frame = drawing()
+        frame[64:87, 70:91] = (150, 40, 50)  # a small open mouth; the smile's ends are erased
+        inside = C.cutout(still)[0][..., 3] > 128
+        m = C.mouth_mask(still, [frame], inside, min_blob=C.PART_MIN_BLOB["full"])
+        self.assertTrue(m[74, 57])
+        self.assertTrue(m[74, 103])
+
+    def test_mouth_body_keeps_lines_going_on_from_the_mouth_but_not_the_nose(self) -> None:
+        out = np.zeros((200, 200), bool)
+        out[100:130, 80:120] = True  # the open mouth
+        out[130:132, 62:138] = True  # a jaw line it reaches, running past its sides
+        out[80:100, 109:111] = True  # a nose joined to it, off its centre (a glance)
+        out[92:100, 80:82] = True  # an upturned corner
+        body = C.mouth_body(out, out.copy(), 3)
+        self.assertTrue(body[131, 63])
+        self.assertTrue(body[131, 136])
+        self.assertFalse(body[85, 110])
+        self.assertTrue(body[93, 80])
+        # A face outline the mouth touches, far wider than the mouth: not carried along.
+        out[130:132, 20:180] = True
+        self.assertFalse(C.mouth_body(out, out.copy(), 3)[131, 25])
+
+    def test_a_line_moved_beside_the_mouth_is_not_taken_for_an_erased_one(self) -> None:
+        still = drawing()
+        still[72:76, 55:106] = (150, 40, 50)
+        frame = drawing()
+        frame[64:87, 70:91] = (150, 40, 50)
+        frame[65:69, 55:65] = (150, 40, 50)  # the smile's ends moved up, not erased
+        frame[65:69, 96:106] = (150, 40, 50)
+        inside = C.cutout(still)[0][..., 3] > 128
+        m = C.mouth_mask(still, [frame], inside, min_blob=C.PART_MIN_BLOB["full"])
+        # Half pasted (the erased old place only), the line would vanish there: both or neither.
+        self.assertEqual(m[74, 57], m[67, 57])
+
+    def test_the_small_top_of_a_mouth_dropped_open_below_the_still_line_stays(self) -> None:
+        out = np.zeros((200, 200), bool)
+        out[89:100, 80:120] = True  # 11 rows above the still's mouth line (unchanged there)
+        out[103:137, 80:120] = True  # 34 below it
+        first = out.copy()
+        first[:101] = False  # the mouth blob chosen: the big lower part
+        body = C.mouth_body(out, first, 3)
+        self.assertTrue(body[94, 100])
+        self.assertTrue(body[120, 100])
+
+    def test_a_nose_or_chin_shadow_close_to_the_mouth_is_not_its_top(self) -> None:
+        out = np.zeros((200, 200), bool)
+        out[100:134, 80:120] = True  # an open mouth
+        out[83:97, 93:107] = True  # a redrawn nose 3 px above it
+        out[137:147, 90:110] = True  # a chin shadow 3 px below
+        body = C.mouth_body(out, out.copy(), 3)
+        self.assertFalse(body[90, 100])
+        self.assertFalse(body[142, 100])
+        out[97:100, 99:101] = True  # joined to the mouth by a philtrum line
+        self.assertFalse(C.mouth_body(out, out.copy(), 3)[90, 100])
+
+    def test_a_bigger_change_joined_to_the_mouth_is_not_taken_for_it(self) -> None:
+        still = drawing()
+        frame = drawing(mouth=3)
+        frame[58:73, 52:67] = (230, 150, 150)  # a redrawn blush, bigger than the mouth, within 12 px
+        inside = C.cutout(still)[0][..., 3] > 128
+        m = C.mouth_mask(still, [frame], inside)  # no eyes: no mouth box
+        self.assertTrue(m[55 + 15, 80])
+        self.assertFalse(m[64, 58])
+
+    def test_a_small_mouth_of_a_full_length_figure_stays(self) -> None:
+        still = drawing()
+        frame = drawing(mouth=1)
+        inside = C.cutout(still)[0][..., 3] > 128
+        m = C.mouth_mask(still, [frame], inside, min_blob=C.PART_MIN_BLOB["full"])
+        self.assertTrue(m[55 + 14, 80])
+
+    def test_an_open_mouth_split_by_the_still_mouth_line_keeps_both_halves(self) -> None:
+        still = drawing()
+        still[74:77, 66:95] = (150, 40, 50)  # the still's closed mouth: a line
+        frame = drawing()
+        frame[66:85, 66:95] = (150, 40, 50)  # open, the same colour on the line: two blobs
+        inside = C.cutout(still)[0][..., 3] > 128
+        m = C.mouth_mask(still, [frame], inside)
+        self.assertTrue(m[69, 80])
+        self.assertTrue(m[81, 80])
+
     def post_frame(self, d: str, still: np.ndarray, frame: np.ndarray, name: str = "open") -> dict:
         save(still, Path(d, "still.png"))
         save(frame, Path(d, "frame.png"))
@@ -223,7 +372,7 @@ class LayerTest(unittest.TestCase):
         eyes = C.eye_blobs(still, blink, inside, mb)
         self.assertEqual(len(eyes), 2)
         self.assertEqual(C.eye_blobs(still, blink, inside), [])  # at 150 px they are lost
-        m, _ = C.group_parts(still, {"open": frame}, inside, eyes, mb)
+        m, _, _ = C.group_parts(still, {"open": frame}, inside, eyes, mb)
         self.assertTrue(m[55 + 15, 80])
         self.assertFalse(m[100, 80])
 
@@ -251,7 +400,7 @@ class LayerTest(unittest.TestCase):
         eyes = C.eye_blobs(still, blink, C.cutout(still)[0][..., 3] > 128, 40)
         blink[28:36, 60:100] = (60, 40, 30)  # the edit also lowered the eyebrows
         inside = C.cutout(still)[0][..., 3] > 128
-        _, e = C.group_parts(still, {"blink": blink}, inside, eyes, 40, own_eyes=True)
+        _, e, _ = C.group_parts(still, {"blink": blink}, inside, eyes, 40, own_eyes=True)
         self.assertTrue(e[50, 66])
         self.assertFalse(e[32, 80])
 
@@ -371,6 +520,136 @@ class LayerTest(unittest.TestCase):
             comp = np.asarray(Image.open(Path(d, "comp.png"))).astype(np.float32)
             self.assertLess(np.abs(comp[106, 59] - still[106, 59]).max(), 2)
             self.assertGreater(np.abs(comp[55 + 16, 80] - still[55 + 16, 80]).max(), 50)
+
+    def test_a_tall_eye_never_becomes_part_of_the_mouth(self) -> None:
+        # A turned head's far eye is tall and reaches below 0.25 x the eye distance under the eye
+        # centres; the mouth frames also redrew it a little (test r6 glance: that eye joined the
+        # mouth and was dropped from the blink, so only one eye blinked).
+        still = big_eyes(drawing())
+        still[40:66, 90:98] = (30, 25, 20)  # the right eye, tall
+        blink = still.copy()
+        blink[40:66, 90:98] = (250, 215, 195)
+        blink[52:53, 88:100] = (30, 25, 20)
+        blink[43:58, 59:73] = (250, 215, 195)
+        blink[50:51, 59:73] = (30, 25, 20)
+        frame = big_eyes(drawing(mouth=3))
+        frame[40:66, 90:98] = (30, 25, 20)
+        frame[60:66, 90:98] = (60, 40, 30)  # the open-mouth edit touched the bottom of that eye
+        inside = C.cutout(still)[0][..., 3] > 128
+        eyes = C.eye_blobs(still, blink, inside, 40)
+        self.assertEqual(len(eyes), 2)
+        m, e, _ = C.group_parts(still, {"open": frame, "blink": blink}, inside, eyes, 40, own_eyes=True)
+        self.assertFalse(m[62, 94])  # the eye is not in the mouth part
+        self.assertTrue(m[55 + 15, 80])  # the mouth is
+        self.assertTrue(e[50, 66] and e[52, 94])  # both eyes blink
+
+    def test_eye_white_tells_whether_a_blink_closes_the_eyes(self) -> None:
+        still = anime_eyes(drawing())
+        inside = C.cutout(still)[0][..., 3] > 128
+        closed = anime_eyes(drawing(), "closed")
+        eyes = C.eye_blobs(still, closed, inside, 40)
+        self.assertEqual(len(eyes), 2)
+        self.assertEqual(C.eyes_closed(still, closed, eyes, inside), ("closed", 0.0))
+        # Redrawn eyes, pupils moved: the change finds the eyes, but their white stays (sora r6).
+        redrawn = anime_eyes(drawing(), dx=-4)
+        eyes = C.eye_blobs(still, redrawn, inside, 40)
+        self.assertEqual(len(eyes), 2)
+        self.assertEqual(C.eyes_closed(still, redrawn, eyes, inside)[0], "open")
+        # Dark eyes without white cannot be judged (as before: approved on the change alone).
+        dots, shut = big_eyes(drawing()), big_eyes(drawing(), closed=True)
+        eyes = C.eye_blobs(dots, shut, inside, 40)
+        self.assertEqual(C.eyes_closed(dots, shut, eyes, inside), ("unknown", 0.0))
+        # The zone stays in the drawing: a bright background next to closed eyes is not eye white.
+        eyes = C.eye_blobs(still, closed, inside, 40)
+        # (a face outline just left of the eye: beyond it, bright background inside the zone)
+        face = inside.copy()
+        face[30:70, 40:54] = False
+        lit_still, lit_closed = still.copy(), closed.copy()
+        for img in (lit_still, lit_closed):
+            img[30:70, 40:54] = 250
+        self.assertEqual(C.eyes_closed(lit_still, lit_closed, eyes, face)[0], "closed")
+
+    def test_choose_eyes_prefers_a_closing_blink_of_the_same_head(self) -> None:
+        a, b, c = ([np.eye(2, dtype=bool)] * 2 for _ in range(3))
+        calls = []
+
+        def cand(key, same, eyes, state):
+            return key, same, lambda: calls.append(key) or (eyes, state)
+
+        # The own blink left the eyes open (its "eyes" may be bangs): the same head's closing one.
+        r = C.choose_eyes([cand("own", True, a, "open"), cand("b", True, b, "closed")])
+        self.assertEqual((r[0] is b, r[1], r[2], r[3]), (True, 1, "b", True))
+        # Own eyes that cannot be judged give way to a closing blink of the same head only.
+        r = C.choose_eyes([cand("own", True, a, "unknown"), cand("b", True, b, "closed")])
+        self.assertEqual(r[1:], (1, "b", False))
+        calls.clear()
+        r = C.choose_eyes([cand("own", True, a, "unknown"), cand("c", False, c, "closed")])
+        self.assertEqual(r[1:], (0, "own", False))
+        self.assertEqual(calls, ["own"])  # other heads are not even loaded
+        # Nothing but open blinks: no eyes.
+        r = C.choose_eyes([cand("own", True, a, "open"), cand("c", False, c, "open")])
+        self.assertEqual(r, ([], -1, None, True))
+
+    def test_post_fails_a_blink_that_leaves_the_eyes_open(self) -> None:
+        still = anime_eyes(drawing())
+        with tempfile.TemporaryDirectory() as d:
+            r = self.post_frame(d, still, anime_eyes(drawing(), dx=-4), "blink")
+            self.assertFalse(r["checks"]["eyes_closed"]["ok"], r["checks"])
+            r = self.post_frame(d, still, anime_eyes(drawing(), "closed"), "blink")
+            self.assertTrue(r["checks"]["eyes_closed"]["ok"], r["checks"])
+            # Left open, and only another head's blink to borrow: judged at its own eyes.
+            other = {"still": str(Path(d, "o.png")), "blink": str(Path(d, "ob.png")), "key": "glance/x"}
+            # (another head: its eyes sit lower, where this frame has no eye white)
+            save(np.roll(big_eyes(drawing()), 30, axis=0), Path(d, "o.png"))
+            save(np.roll(big_eyes(drawing(), closed=True), 30, axis=0), Path(d, "ob.png"))
+            save(still, Path(d, "still.png"))
+            save(anime_eyes(drawing(), dx=-4), Path(d, "frame.png"))
+            item = {"id": "x", "kind": "frame", "frame": "blink", "image": str(Path(d, "frame.png"))}
+            item |= {"still": str(Path(d, "still.png")), "cutout": str(Path(d, "cut.png")), "eyes": [other]}
+            r = C.post_item(item)
+            self.assertFalse(r["checks"]["eyes_closed"]["ok"], r["checks"])
+            self.assertNotIn("eyes of", r["checks"]["eyes_closed"]["limit"])
+            # Dark dot eyes: not judged.
+            r = self.post_frame(d, big_eyes(drawing()), big_eyes(drawing(), closed=True), "blink")
+            self.assertTrue(r["checks"]["eyes_closed"]["ok"], r["checks"])
+            self.assertIn("can't judge", r["checks"]["eyes_closed"]["limit"])
+
+    def test_post_and_derive_take_the_eyes_of_the_same_closing_blink(self) -> None:
+        # The surprised group's own blink only redrew the eyes; the neutral blink closes them.
+        neutral, surprised = anime_eyes(drawing()), anime_eyes(drawing(mouth=1))
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d, "src")
+            src.mkdir()
+            save(neutral, src / "ref.png")
+            save(anime_eyes(drawing(), "closed"), src / "frame-base-neutral-blink.png")
+            save(surprised, src / "still-base-surprised.png")
+            save(anime_eyes(drawing(mouth=1), dx=-4), src / "frame-base-surprised-blink.png")
+            pairs = (("base", "neutral"), ("base", "surprised"))
+            groups = [{"head": h, "expr": e, "frames": ["blink"]} for h, e in pairs]
+            eyes, own, own_open, key = C.view_eyes(src, groups, False, "full", None)("base", "surprised")
+            self.assertEqual((len(eyes), own, own_open, key), (2, False, True, "base/neutral"))
+            save(surprised, Path(d, "still.png"))
+            r = C.post_item(
+                {
+                    "id": "x",
+                    "kind": "frame",
+                    "frame": "blink",
+                    "image": str(src / "frame-base-surprised-blink.png"),
+                    "still": str(Path(d, "still.png")),
+                    "cutout": str(Path(d, "cut.png")),
+                    "eyes": [
+                        {
+                            "still": str(src / "ref.png"),
+                            "blink": str(src / "frame-base-neutral-blink.png"),
+                            "key": "base/neutral",
+                            "same_head": True,
+                        }
+                    ],
+                }
+            )
+            check = r["checks"]["eyes_closed"]
+            self.assertFalse(check["ok"], r["checks"])
+            self.assertIn("eyes of base/neutral", check["limit"])
 
 
 if __name__ == "__main__":

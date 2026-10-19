@@ -134,7 +134,9 @@ persona's voice (about 3 hours: it makes and checks its own training clips, then
 again to resume, and never while characters are being generated). It writes
 `voices/minsu/ko.speaker.json` and its voice reference: commit them, then set `personaModel: trained`
 on the cast. The trained speaker takes `emo`, `say` and `style` like a preset speaker, and a strong
-line says "Sound very …". If fewer than 150 emotion clips pass
+line says "Sound very …". On the sample guest, `power=strong` sounded happy more often than the plain
+emotion for `happy` and `excited`, and an `excited` line sometimes sounded angry — listen on the takes
+page and try `power=strong` or no `emo` there. If fewer than 150 emotion clips pass
 its checks, it stops before the second training (`--min-emotion` sets the bar). Korean only for now.
 
 **Same voice in every sentence.** Each voice (a persona, a preset speaker with its `style`, a
@@ -156,13 +158,13 @@ for it), the character's face of that name when the character has one (else the 
 character missing` lists the faces to make) and a motion. Change it from a sentence on with
 `:emo{emo=sad}`, between sentences: `mina{emo=calm}: 괜찮았어요. :emo{emo=sad}그런데요.`
 
-| attribute           |                                                                                                                                           |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `emo=`              | the emotion                                                                                                                               |
-| `power=weak/strong` | how strong (Qwen preset speakers with an emotion: the weakest / strongest take; persona and Supertonic voices: a little quieter / louder) |
-| `say="…"`           | a free direction for this line (Qwen preset speakers only)                                                                                |
-| `volume=soft/loud`  | −6 / +3 dB in the mix                                                                                                                     |
-| `speed=0.8–1.25`    | multiplied with the cast `speed`                                                                                                          |
+| attribute           |                                                                                                                                                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `emo=`              | the emotion                                                                                                                                                                                                                    |
+| `power=weak/strong` | how strong (Qwen preset speakers and trained personas with an emotion: the weakest / strongest take, and a trained persona's strong line says "Sound very …"; cloned persona and Supertonic voices: a little quieter / louder) |
+| `say="…"`           | a free direction for this line (Qwen preset speakers only)                                                                                                                                                                     |
+| `volume=soft/loud`  | −6 / +3 dB in the mix                                                                                                                                                                                                          |
+| `speed=0.8–1.25`    | multiplied with the cast `speed`                                                                                                                                                                                               |
 
 Write emotions on lines whose words already carry them: an instruction cannot make a neutral
 sentence sound happy. Cloned persona and Supertonic voices cannot act an emotion (the face and motion
@@ -210,6 +212,17 @@ motion (surprised → jump, happy → bounce, angry → shake, sad → sink); ch
 `mina: :react{joon=surprised}와, 정말요?` (held to the end of the paragraph). Reacting
 characters come on stage even when they share a side: several of a side stand together, smaller,
 for as long as the reaction lasts (`:react{joon=surprised yuna=surprised}`).
+
+Choose where a character looks with `:look{mina=viewer}`: `partner` (the default stance, turned a
+little toward the other speaker), `viewer` (facing the audience, the `front-<face>` image) or
+`glance` (body to the audience, head toward the partner, `glance-<face>` — pairs with `viewer`). The
+speaker's own `:look` at a sentence's start changes that sentence (inside a sentence, the next one);
+a listener's lasts from that word to the end of the paragraph, or until its next `:look`
+(`partner` turns back). Generated characters (`preset: standard@1`) have these images; a classic
+folder needs `front-happy.png` and so on, otherwise the face stays as it is (lint says so). Looks
+work in the head close-up too: a generated character's `partner` and `glance` are the same picture
+there (the head turned toward the partner, no body shows) and `viewer` faces the audience; a classic
+folder uses its `front-<face>.png` and `glance-<face>.png` as in the full framing.
 
 Characters also move a little on their own: they breathe, blink every 2–6 seconds (and when their
 face changes), and a listener sometimes nods at the end of the other side's sentence (not after a
@@ -293,10 +306,11 @@ node packages/cli/dist/main.js character redo characters/mina front/base/happy  
 - `front-<expression>`: facing the viewer (talking to the audience)
 - `glance-neutral`, `glance-surprised`, `glance-happy`, `glance-puzzled`: only the head turns
 - `wave`, `point`, `akimbo`, `cheer`, `arms-crossed`, `hands-together`: poses
-- a head close-up set with `neutral`, `happy`, `sad`, `surprised`, `moved`, `serious`
+- a head close-up set with every face above: turned faces and glances turn the head, poses show
+  their expression
 
 `exclude: [angry, point]` leaves parts out; your own `faces:`, `expressions:` and `sets:` add to
-or replace the preset's. Generating the whole set takes about 150 images (10–11 hours, once); the
+or replace the preset's. Generating the whole set takes about 220 images (15–16 hours, once); the
 character is then a library. When a script needs a face the library lacks:
 
 ```sh

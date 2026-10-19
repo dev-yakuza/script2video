@@ -78,6 +78,7 @@ export const DIRECTIVES: Record<
   },
   pause: { placement: 'inline', attrs: {} },
   react: { placement: 'inline', attrs: 'cast' },
+  look: { placement: 'inline', attrs: 'cast' },
   only: { placement: 'inline', attrs: 'output' },
   audio: { placement: 'inline', attrs: { src: 'voice' } },
   shot: { placement: 'leaf', attrs: 'cast' },

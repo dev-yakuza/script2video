@@ -10,6 +10,7 @@ import {
   type CastMember,
   type Framing,
   type Frontmatter,
+  type LookValue,
   type Paragraph,
   type Sentence,
   type UserEmotion,
@@ -350,6 +351,100 @@ export function sentenceFace(
 }
 
 /**
+ * The face a look shows (acting stage 5b plan 3): `viewer` → `front-<face>`, `glance` →
+ * `glance-<face>` when the character draws it in this framing; otherwise the face itself
+ * (`missing` names the variant it lacks). `partner` and casts without character information keep
+ * the face. The head close-up takes looks too (closeup-look plan).
+ */
+export function lookFace(
+  meta: Frontmatter,
+  cast: string,
+  face: string,
+  look: LookValue,
+  framing: Framing,
+): { face: string; missing?: string } {
+  if (look === 'partner') return { face };
+  const name = `${look === 'viewer' ? 'front' : 'glance'}-${face}`;
+  const can = drawable(meta.cast[cast], framing);
+  if (!can) return { face };
+  return can.includes(name) ? { face: name } : { face, missing: name };
+}
+
+/** The variant name a look asks for (`character missing`): what `lookFace` would like to draw. */
+export function lookWanted(face: string, look: LookValue): string {
+  if (look === 'partner') return face;
+  return `${look === 'viewer' ? 'front' : 'glance'}-${face}`;
+}
+
+/**
+ * Faces listeners may show through `:look` in a paragraph (stage 5b plan 5): each look applied to
+ * the listener's default face and to its reaction faces in the paragraph — what to compose, lint
+ * and list (`face`: drawn, `wanted`: the variant asked for).
+ */
+export function listenerLookFaces(
+  meta: Frontmatter,
+  paragraph: Paragraph,
+  framingOf: (cast: string) => Framing,
+): { cast: string; face: string; wanted: string }[] {
+  const looked = new Map<string, Set<LookValue>>();
+  for (const s of paragraph.sentences)
+    for (const l of s.looks ?? [])
+      for (const [c, v] of Object.entries(l.looks))
+        if (c !== paragraph.cast) (looked.get(c) ?? looked.set(c, new Set()).get(c)!).add(v);
+  const out: { cast: string; face: string; wanted: string }[] = [];
+  for (const [c, values] of looked) {
+    const framing = framingOf(c);
+    const faces = new Set([
+      meta.cast[c]?.face ?? 'neutral',
+      ...paragraph.sentences.flatMap((s) =>
+        (s.reacts ?? []).flatMap((r) => (r.faces[c] ? [r.faces[c]] : [])),
+      ),
+    ]);
+    for (const v of values)
+      for (const f of faces)
+        out.push({
+          cast: c,
+          face: lookFace(meta, c, f, v, framing).face,
+          wanted: lookWanted(f, v),
+        });
+  }
+  return out;
+}
+
+/**
+ * Where the speaker of a paragraph looks in each sentence (stage 5b plan 2): a `:look` on the
+ * speaker at a sentence's start applies to that sentence, one inside a sentence from the next
+ * sentence on; every paragraph starts at `partner`. `mid` are the lines of looks inside a
+ * sentence, `dropped` those inside the last sentence (nothing to apply to).
+ */
+export function speakerLooks(paragraph: Paragraph): {
+  looks: LookValue[];
+  mid: (number | undefined)[];
+  dropped: (number | undefined)[];
+} {
+  const looks: LookValue[] = [];
+  const mid: (number | undefined)[] = [];
+  const dropped: (number | undefined)[] = [];
+  let state: LookValue = 'partner';
+  let pending: LookValue | undefined;
+  paragraph.sentences.forEach((s, si) => {
+    if (pending) state = pending;
+    pending = undefined;
+    for (const l of s.looks ?? []) {
+      const v = l.looks[paragraph.cast];
+      if (!v) continue;
+      if (l.at === 0) state = v;
+      else {
+        pending = v;
+        (si === paragraph.sentences.length - 1 ? dropped : mid).push(l.line);
+      }
+    }
+    looks.push(state);
+  });
+  return { looks, mid, dropped };
+}
+
+/**
  * Automatic motion of a face (stage 2 plan 6.2), after the explicit `motion=` and `motion: off`
  * have been handled by the caller: the user emotion's motion → the character's face motions (parts)
  * or the standard emotion's motion → FACE_MOTION. `undefined` = no motion.
@@ -381,11 +476,31 @@ export function paragraphActing(
   paragraph: Paragraph,
   framing: Framing,
 ): {
-  faces: { wanted: string; drawn: string }[];
+  /** `shown`: `drawn` with the speaker's look applied (stage 5b); `wantedShown`: the look's wanted name. */
+  faces: {
+    wanted: string;
+    drawn: string;
+    shown: string;
+    wantedShown: string;
+    look: LookValue;
+    missing?: string;
+  }[];
   runs: { sentence: number; motion?: string }[];
 } {
   const member = meta.cast[paragraph.cast];
-  const faces = paragraph.sentences.map((s) => sentenceFace(meta, paragraph, s, framing));
+  const { looks } = speakerLooks(paragraph);
+  const faces = paragraph.sentences.map((s, i) => {
+    const f = sentenceFace(meta, paragraph, s, framing);
+    const look = looks[i]!;
+    const l = lookFace(meta, paragraph.cast, f.drawn, look, framing);
+    return {
+      ...f,
+      shown: l.face,
+      wantedShown: lookWanted(f.wanted, look),
+      look,
+      ...(l.missing ? { missing: l.missing } : {}),
+    };
+  });
   const starts: { sentence: number; face: string; emo?: string }[] = [];
   paragraph.sentences.forEach((s, i) => {
     const emo = s.acting?.emo;

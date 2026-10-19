@@ -314,12 +314,13 @@ function usedFaces(
   return out;
 }
 
-/** Faces a cast member can show in one scene. */
+/** Faces a cast member can show in one scene (its lines, reactions and looks). */
 function sceneFaces(scene: TimelineScene, key: string, defaultFace: string): string[] {
   return [
     defaultFace,
     ...scene.audio.filter((a) => a.cast === key).map((a) => a.face),
     ...scene.reactions.filter((r) => r.cast === key).map((r) => r.face),
+    ...(scene.looks ?? []).filter((l) => l.cast === key).map((l) => l.face),
   ];
 }
 

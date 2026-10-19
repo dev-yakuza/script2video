@@ -53,6 +53,7 @@ export {
   type TimelineSubtitle,
   type TimelineReaction,
   type TimelineMotion,
+  type TimelineLook,
   type TimelineVisual,
   type TimelineIssue,
   sceneFramings,
@@ -139,6 +140,10 @@ export {
   emotionGateFailures,
   type EmotionTakeMeasure,
   paragraphActing,
+  lookFace,
+  lookWanted,
+  speakerLooks,
+  listenerLookFaces,
   ENDING_FLOOR,
   ENDING_LIFT,
   actsEmotion,
@@ -162,7 +167,7 @@ export {
   type Emotion,
   type Engine,
 } from './acting.js';
-export { lintActing } from './lint-acting.js';
+export { lintActing, sidesOf } from './lint-acting.js';
 export {
   FIRST_TAKES,
   MAX_TAKES,

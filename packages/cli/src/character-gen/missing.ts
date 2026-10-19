@@ -5,7 +5,9 @@
  *   (a) not defined          → a yaml draft to add by hand
  *   (b) not in the framing set → --apply adds it to sets.<framing>.faces
  *   (c) defined, not generated or approved → s2v character build
- *   (d) not expressible in that framing (a pose in the head close-up) → use another face
+ *   (d) not expressible in that framing (a removed set) → use another face
+ *
+ * A pose in the head close-up is drawn with its expression (no body shows; closeup-look plan).
  */
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -90,14 +92,6 @@ export function findMissing(script: Script, scriptDir: string): MissingReport[] 
           if (!r.undefined.includes(face)) r.undefined.push(face);
           continue;
         }
-        if (framing === 'head' && fd.body) {
-          r.impossible.push({
-            framing,
-            face,
-            why: `a pose (body ${fd.body}) has no body in the head close-up`,
-          });
-          continue;
-        }
         if (framing !== 'full' && !spec.sets[framing]) {
           r.impossible.push({
             framing,
@@ -144,29 +138,30 @@ export function applyMissing(r: MissingReport): string[] {
     // The set must name its view in the user's yaml even when a preset supplies the set.
     if (!doc.hasIn(['sets', f, 'views']))
       doc.setIn(['sets', f, 'views'], doc.createNode({ front: {} }));
-    // C23 (b): the upper set keeps poses and head variants only when it has them locally.
-    if (f === 'upper')
-      for (const face of add) {
-        const fd = spec.faces[face]!;
-        if (
-          fd.head &&
-          !spec.sets.upper?.heads[`front/${fd.head}`] &&
-          spec.heads[`front/${fd.head}`]
-        )
-          doc.setIn(
-            ['sets', f, 'heads', `front/${fd.head}`],
-            doc.createNode(spec.heads[`front/${fd.head}`]),
-          );
-        if (
-          fd.body &&
-          !spec.sets.upper?.bodies[`front/${fd.body}`] &&
-          spec.bodies[`front/${fd.body}`]
-        )
-          doc.setIn(
-            ['sets', f, 'bodies', `front/${fd.body}`],
-            doc.createNode(spec.bodies[`front/${fd.body}`]),
-          );
+    // C23 (b): a close-up set keeps head variants (and the upper set poses) only when it has
+    // them locally. In the head set a turned head also turns every turned face (resolve.ts).
+    for (const face of add) {
+      const fd = spec.faces[face]!;
+      const hk = `front/${fd.head}`;
+      const h = spec.heads[hk];
+      if (fd.head && h && !spec.sets[f]?.heads[hk] && !doc.hasIn(['sets', f, 'heads', hk])) {
+        doc.setIn(['sets', f, 'heads', hk], doc.createNode(h));
+        // As resolve.ts turnedHead picks it: no glance head there yet, its twin when not mirrored.
+        const turns =
+          f === 'head' &&
+          (h.facing ?? 'front') !== 'front' &&
+          (spec.mirror || doc.hasIn(['sets', f, 'heads', `${hk}@flip`])) &&
+          !Object.values(spec.sets.head?.heads ?? {}).some((x) => x.preset === 'glance');
+        added.push(
+          `${f}:heads.${hk}${turns ? ' (turned faces in the head close-up now use this head)' : ''}`,
+        );
       }
+      const bk = `front/${fd.body}`;
+      if (f === 'upper' && fd.body && !spec.sets.upper?.bodies[bk] && spec.bodies[bk]) {
+        doc.setIn(['sets', f, 'bodies', bk], doc.createNode(spec.bodies[bk]));
+        added.push(`${f}:bodies.${bk}`);
+      }
+    }
     const node = doc.createNode(faces);
     node.flow = true;
     doc.setIn(['sets', f, 'faces'], node);

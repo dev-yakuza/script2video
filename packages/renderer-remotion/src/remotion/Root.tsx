@@ -275,6 +275,7 @@ const SceneComp: React.FC<SceneProps> = ({
                 cast={cast}
                 audio={scene.audio}
                 reactions={scene.reactions}
+                looks={scene.looks ?? []}
                 motions={scene.motions ?? []}
                 mouths={mouths}
                 geometry={g}
@@ -333,6 +334,7 @@ const placeholder: SceneProps = {
     subtitles: [],
     reactions: [],
     motions: [],
+    looks: [],
     framing: {},
   },
   lang: 'ko',

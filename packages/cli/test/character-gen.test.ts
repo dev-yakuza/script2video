@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseCharacterSpec, type LayeredSpec } from '@script2video/renderer-remotion';
 import { describe, expect, it } from 'vitest';
 import { FRONT_REF, planItems, twinsOf, twinWrites } from '../src/character-gen/items.js';
+import { frameContext } from '../src/character-gen/commands.js';
 import { flipPrompt } from '../src/character-gen/prompts.js';
 import {
   currentDef,
@@ -13,6 +14,7 @@ import {
   status,
   type Graph,
   type ItemRecord,
+  workPath,
 } from '../src/character-gen/state.js';
 import { writeDerived } from '../src/character-gen/yaml-write.js';
 
@@ -41,22 +43,45 @@ describe('generation items', () => {
     expect(ids.has('front/glance/neutral')).toBe(true);
     expect(ids.has('front/body/point')).toBe(true);
     expect(ids.has('head:front/base/moved/blink')).toBe(true);
-    // 12 front + 12 turn + 4 glance + 6 head groups, 3 frames each.
-    expect(items.filter((i) => i.kind === 'frame')).toHaveLength((12 + 12 + 4 + 6) * 3);
-    expect(count(items)).toMatchObject({ 2: 2, 3: 1, 4: 7 });
+    // The head close-up draws every face: front ones frontal, turned ones and glances with the
+    // turned head (one picture), poses with their expression (closeup-look plan).
+    const glance = items.find((i) => i.id === 'head:front/glance/neutral')!;
+    expect(glance).toMatchObject({ round: 4, input: 'head:front/ref' });
+    expect(glance.prompt).toMatch(/turns the head about 30 degrees toward the viewer's right/);
+    expect(ids.has('head:front/glance/playful/open')).toBe(true);
+    expect([...ids].filter((i) => i.startsWith('head:') && i.includes('/body/'))).toEqual([]);
+    // 12 front + 12 turn + 4 glance + 24 head groups, 3 frames each.
+    expect(items.filter((i) => i.kind === 'frame')).toHaveLength((12 + 12 + 4 + 24) * 3);
+    expect(count(items)).toMatchObject({ 2: 2, 3: 1, 4: 8 });
   });
 
-  it('frames edit the approved still with its template minus the pose prefix (P5)', () => {
+  it('frames edit the approved still and name only their change (P5)', () => {
     const { items } = planItems('/c', spec('source: generated\npreset: standard@1\n'));
     const still = items.find((i) => i.id === 'turn/base/happy')!;
     const open = items.find((i) => i.id === 'turn/base/happy/open')!;
     expect(open.group).toBe(still.id);
     expect(open.input).toBe(still.id);
     expect(open.needs).toEqual([still.id]);
-    const [a, b] = [still.prompt.split(', mouth')[0], open.prompt.split(', mouth')[0]];
-    expect(a).toMatch(/viewer's right/);
-    expect(b).not.toMatch(/viewer's/);
-    expect(a.endsWith(b)).toBe(true);
+    expect(still.prompt).toMatch(/viewer's right/);
+    expect(still.prompt).toMatch(/look happy/);
+    // Neither the pose nor the expression: "eyes wide open …, eyes gently closed" left surprised
+    // eyes open (test sora r6).
+    expect(open.prompt).not.toMatch(/viewer's|smiling eyes/);
+    expect(open.prompt).toMatch(
+      /^Open the character's mouth wide, as if speaking, keeping the same happy expression/,
+    );
+    const blink = items.find((i) => i.id === 'front/base/surprised/blink')!;
+    expect(blink.prompt).not.toMatch(/surprised|wide open/i);
+    expect(blink.prompt).toMatch(/^Close both of the character's eyes/);
+    // A mouth frame names its expression only; a blink has the same words in every group.
+    expect(items.find((i) => i.id === 'turn/base/surprised/open')!.prompt).toBe(
+      open.prompt.replace('same happy', 'same surprised'),
+    );
+    expect(items.find((i) => i.id === 'turn/base/happy/blink')!.prompt).toBe(blink.prompt);
+    // Stills keep their words (and so their approvals).
+    expect(still.prompt).toBe(
+      "The character turns the head and body about 45 degrees toward the viewer's right side of the image, a three-quarter view, as if talking to someone standing there. Both eyes stay visible; the far side of the face looks a little narrower. Make the character look happy: Happy expression with smiling eyes, mouth closed. Keep exactly the same character design, colors, outfit, line art and plain light gray background. No shadow.",
+    );
     // The neutral group's still is the view reference.
     expect(items.find((i) => i.id === 'turn/base/neutral/half')!.input).toBe('turn/ref');
   });
@@ -73,6 +98,11 @@ describe('generation items', () => {
     expect(flip.prompt).toMatch(/viewer's left/);
     expect(items.some((i) => i.id === 'front/glance@flip/neutral/open')).toBe(true);
     expect(items.some((i) => i.id === 'front/body/point@flip')).toBe(true);
+    // The head close-up's turned faces need the twin of its glance head (closeup-look plan).
+    expect(items.some((i) => i.id === 'head:front/glance@flip/happy/open')).toBe(true);
+    expect(twinWrites(s).map((w) => w.path.join('.'))).toContain(
+      'sets.head.heads.front/glance@flip',
+    );
   });
 
   it('mirror: false close-up sets get their own @flip twins', () => {
@@ -86,6 +116,17 @@ describe('generation items', () => {
     expect(twinWrites(s).map((w) => w.path.join('.'))).toContain(
       'sets.upper.heads.front/glance@flip',
     );
+  });
+
+  it('gaze frames keep screen directions on @flip twins (the still carries the turn)', () => {
+    const s = spec(
+      'source: generated\npreset: standard@1\nmirror: false\nexpressions:\n  happy: { gaze: toward }\n',
+    );
+    const { items } = planItems('/c', s);
+    const id = 'front/glance/happy/gaze-screen-left';
+    const twin = items.find((i) => i.id === 'front/glance@flip/happy/gaze-screen-left');
+    expect(twin?.prompt).toMatch(/viewer's left/);
+    expect(twin?.prompt).toBe(items.find((i) => i.id === id)!.prompt);
   });
 
   it('flipPrompt swaps screen sides only', () => {
@@ -201,5 +242,40 @@ describe('derived yaml fields', () => {
     });
     text = readFileSync(join(dir, 'character.yaml'), 'utf8');
     expect(text).toMatch(/\[ ?12, 21 ?\]/);
+  });
+});
+
+describe("post: the blinks that place a frame's eyes", () => {
+  it("borrows this round's blinks of the view, with their keys (a round remaking every frame)", () => {
+    const g = graph('source: generated\nkind: a girl\npreset: standard@1\n');
+    const half = g.items.get('front/base/happy/half')!;
+    const blink = g.items.get('front/base/neutral/blink')!;
+    const glance = g.items.get('front/glance/happy/blink')!;
+    const dir = mkdtempSync(join(tmpdir(), 's2v-ctx-'));
+    try {
+      const round = [half, glance, blink];
+      // Not made yet: nothing to borrow.
+      expect(frameContext(dir, g, half, round).eyes).toEqual([]);
+      mkdirSync(join(dir, '.work'), { recursive: true });
+      writeFileSync(workPath(dir, blink.id), '');
+      writeFileSync(workPath(dir, glance.id), '');
+      // The same head first (as derive's eye_order), another head after it.
+      expect(frameContext(dir, g, half, round).eyes).toEqual([
+        expect.objectContaining({
+          blink: workPath(dir, blink.id),
+          key: 'base/neutral',
+          same_head: true,
+        }),
+        expect.objectContaining({
+          blink: workPath(dir, glance.id),
+          key: 'glance/happy',
+          same_head: false,
+        }),
+      ]);
+      // Neither in this round nor approved: not borrowed.
+      expect(frameContext(dir, g, half, [half]).eyes).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

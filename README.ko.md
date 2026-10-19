@@ -131,7 +131,8 @@ voices/minsu.yaml --lang ko`는 페르소나 목소리로 Qwen3-TTS CustomVoice 
 3시간: 학습 클립을 직접 만들고 판정한 뒤 학습. 다시 실행하면 이어서 하며, 캐릭터 이미지 생성 중에는 실행하지
 마세요). `voices/minsu/ko.speaker.json`과 기준 음성을 쓰니 커밋하고, cast에 `personaModel: trained`를
 적으세요. 학습한 화자는 기본 화자처럼 `emo`·`say`·`style`을 따르고, 강한 문장은 "Sound very …"로
-말합니다. 감정 클립이 150개
+말합니다. 예시 guest에서는 `happy`·`excited`가 기본보다 `power=strong`일 때 더 기쁘게 들리는 경우가 많았고,
+`excited` 문장이 화나게 들리기도 했습니다 — 테이크 페이지에서 듣고 `power=strong`이나 `emo` 없이도 시도해 보세요. 감정 클립이 150개
 미만으로 통과하면 두 번째 학습 전에 멈춥니다(`--min-emotion`으로 바꿈). 지금은 한국어만.
 
 **모든 문장이 같은 목소리로.** 목소리마다(페르소나, `style`을 포함한 기본 화자, Supertonic 목소리) 기준
@@ -151,13 +152,13 @@ speed: 0.8, maxPause: 1.5 }`). 감정은 목소리(Qwen 프리셋 화자는 감�
 표정(없으면 기본 표정, 만들 표정은 `s2v character missing`이 알려 줌), 모션을 정합니다. 문장 사이에
 `:emo{emo=sad}`를 두면 다음 문장부터 바뀝니다: `mina{emo=calm}: 괜찮았어요. :emo{emo=sad}그런데요.`
 
-| 속성                |                                                                                                            |
-| ------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `emo=`              | 감정                                                                                                       |
-| `power=weak/strong` | 세기(감정이 있는 Qwen 프리셋 화자는 가장 약한 / 강한 테이크, persona·Supertonic 목소리는 조금 작게 / 크게) |
-| `say="…"`           | 이 대사만의 자유 지시(Qwen 프리셋 화자만)                                                                  |
-| `volume=soft/loud`  | 믹스에서 −6 / +3 dB                                                                                        |
-| `speed=0.8–1.25`    | cast의 `speed`와 곱함                                                                                      |
+| 속성                |                                                                                                                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `emo=`              | 감정                                                                                                                                                                                      |
+| `power=weak/strong` | 세기(감정이 있는 Qwen 프리셋 화자와 학습한 페르소나는 가장 약한 / 강한 테이크, 학습한 페르소나의 강한 문장은 "Sound very …"로 말함; 복제한 페르소나·Supertonic 목소리는 조금 작게 / 크게) |
+| `say="…"`           | 이 대사만의 자유 지시(Qwen 프리셋 화자만)                                                                                                                                                 |
+| `volume=soft/loud`  | 믹스에서 −6 / +3 dB                                                                                                                                                                       |
+| `speed=0.8–1.25`    | cast의 `speed`와 곱함                                                                                                                                                                     |
 
 감정은 말 자체에 감정이 실린 대사에 적으세요. 지시만으로 평범한 문장을 기쁘게 만들 수는 없습니다.
 복제한 persona·Supertonic 목소리는 감정을 연기하지 못합니다(표정과 모션은 바뀜). 학습한 persona는
@@ -203,6 +204,15 @@ cast:
 `mina: :react{joon=surprised}와, 정말요?`(문단 끝까지 유지). 반응하는 캐릭터는 같은 쪽이어도
 무대에 오릅니다. 같은 쪽에 여러 명이면 반응하는 동안 작아져서 나란히 섭니다
 (`:react{joon=surprised yuna=surprised}`).
+
+`:look{mina=viewer}`로 캐릭터가 어디를 볼지 고릅니다: `partner`(기본 자세, 상대 쪽으로 조금 돌아섬),
+`viewer`(시청자를 봄, `front-<face>` 그림), `glance`(몸은 시청자 쪽, 머리만 상대 쪽, `glance-<face>` —
+`viewer`와 짝으로 씀). 말하는 사람 자신의 `:look`은 문장 맨 앞이면 그 문장부터(문장 가운데면 다음
+문장부터), 듣는 사람의 `:look`은 그 단어부터 문단 끝까지 또는 다음 `:look`까지입니다(`partner`로 되돌림).
+생성 캐릭터(`preset: standard@1`)에는 이 그림들이 있고, classic 폴더는 `front-happy.png` 같은 파일이
+있어야 하며 없으면 표정이 그대로입니다(lint가 알려 줌). 얼굴 클로즈업에서도 시선이 바뀝니다: 생성
+캐릭터는 몸이 보이지 않으므로 `partner`와 `glance`가 같은 그림(머리를 상대 쪽으로 돌림)이고 `viewer`는
+시청자를 봅니다. classic 폴더는 전신과 같이 `front-<face>.png`, `glance-<face>.png`를 씁니다.
 
 캐릭터는 스스로도 조금씩 움직입니다: 숨을 쉬고, 2–6초마다(그리고 표정이 바뀔 때) 눈을 깜빡이며,
 듣는 캐릭터는 상대 문장이 끝날 때 가끔 끄덕입니다(질문 뒤나 바로 대답할 때는 아님). 끄려면
@@ -283,10 +293,10 @@ node packages/cli/dist/main.js character redo characters/mina front/base/happy  
 - `front-<표정>`: 시청자를 바라봄(시청자에게 말할 때)
 - `glance-neutral`, `glance-surprised`, `glance-happy`, `glance-puzzled`: 머리만 돌림
 - `wave`, `point`, `akimbo`, `cheer`, `arms-crossed`, `hands-together`: 포즈
-- 얼굴 클로즈업 세트: `neutral`, `happy`, `sad`, `surprised`, `moved`, `serious`
+- 얼굴 클로즈업 세트: 위의 모든 face — 돌아선 face와 glance는 머리를 돌리고, 포즈는 그 표정으로
 
 `exclude: [angry, point]`로 일부를 빼고, 직접 쓴 `faces:`, `expressions:`, `sets:`로 preset에
-더하거나 바꿉니다. 세트 전체는 약 150장(10–11시간, 한 번만)이고, 그 뒤로 캐릭터는 라이브러리가
+더하거나 바꿉니다. 세트 전체는 약 220장(15–16시간, 한 번만)이고, 그 뒤로 캐릭터는 라이브러리가
 됩니다. 대본에 라이브러리에 없는 face가 필요하면:
 
 ```sh

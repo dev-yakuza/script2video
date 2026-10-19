@@ -25,8 +25,10 @@ import {
   type Scene,
   type Script,
   type Visual,
+  LOOK_VALUES,
+  type LookValue,
 } from './schema.js';
-import { splitSentences } from './sentences.js';
+import { splitSentences, type SentenceIssue } from './sentences.js';
 
 /** Every directive name the script format reserves (PLAN 4.1). */
 export const KNOWN_DIRECTIVES = [
@@ -51,6 +53,7 @@ export const KNOWN_DIRECTIVES = [
   'audio',
   'shot',
   'emo',
+  'look',
 ] as const;
 
 /** Directives implemented in this build. Known-but-unimplemented names are errors, not no-ops. */
@@ -76,6 +79,7 @@ export const IMPLEMENTED_DIRECTIVES = new Set<string>([
   'audio',
   'shot',
   'emo',
+  'look',
 ]);
 
 const VISUAL_LEAF = new Set(['title', 'image', 'video', 'thumbnail']);
@@ -451,6 +455,33 @@ function paragraphFrom(
             faces,
             ...(Object.keys(motions).length > 0 ? { motions } : {}),
           });
+      } else if (d.name === 'look') {
+        const s0 = d.position?.start.offset;
+        const e0 = d.position?.end.offset;
+        const keys =
+          s0 !== undefined && e0 !== undefined ? directiveKeys(source.slice(s0, e0)) : [];
+        for (const k of new Set(keys.filter((k, i) => keys.indexOf(k) !== i)))
+          diags.error('look-duplicate', `:look: "${k}" is given twice`, dLine);
+        const looks: Record<string, LookValue> = {};
+        for (const [who, value] of Object.entries(attrs)) {
+          if (!(who in meta.cast))
+            diags.error('look-cast', `:look names "${who}", which is not in cast`, dLine);
+          else if (!(LOOK_VALUES as readonly string[]).includes(value))
+            diags.error(
+              'look-value',
+              `:look{${who}=…} takes ${LOOK_VALUES.join(', ')}, not "${value}"`,
+              dLine,
+            );
+          else looks[who] = value as LookValue;
+        }
+        if (Object.keys(attrs).length === 0 || d.children.length > 0)
+          diags.error(
+            'look-empty',
+            ':look needs cast=partner|viewer|glance and no [text], e.g. :look{mina=viewer}',
+            dLine,
+          );
+        if (Object.keys(looks).length > 0)
+          inlines.push({ type: 'look', looks, ...(dLine !== undefined ? { line: dLine } : {}) });
       } else if (d.name === 'only') {
         only = Object.keys(attrs);
         if (only.length === 0)
@@ -513,11 +544,13 @@ function paragraphFrom(
       inlines.push({ type: 'text', value: plainText(child.children as PhrasingContent[]) });
   }
 
-  const issues: { line?: number; message: string; level: 'error' | 'info' }[] = [];
+  const issues: SentenceIssue[] = [];
   let sentences = splitSentences(inlines, meta.lang, acting, issues);
   for (const i of issues)
-    if (i.level === 'error') diags.error('emo-placement', i.message, i.line ?? line);
-    else diags.info('emo-placement', i.message, i.line ?? line);
+    if (i.level === 'error') diags.error(i.code ?? 'emo-placement', i.message, i.line ?? line);
+    else if (i.level === 'warning')
+      diags.warn(i.code ?? 'emo-placement', i.message, i.line ?? line);
+    else diags.info(i.code ?? 'emo-placement', i.message, i.line ?? line);
   if (sentences.length === 0) return null;
   if (audio) {
     // a recording: only the face (emo) and volume apply (acting plan 3.1)

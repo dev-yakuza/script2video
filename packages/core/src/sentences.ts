@@ -29,20 +29,31 @@ function boundaries(text: string, lang: Lang): number[] {
  *   It must stand between sentences; elsewhere an issue is reported.
  * Whitespace (including soft line breaks) is collapsed to a single space.
  */
+export interface SentenceIssue {
+  line?: number;
+  message: string;
+  level: 'error' | 'warning' | 'info';
+  code?: string;
+}
+
 export function splitSentences(
   inlines: Inline[],
   lang: Lang,
   acting?: Acting,
-  issues?: { line?: number; message: string; level: 'error' | 'info' }[],
+  issues?: SentenceIssue[],
 ): Sentence[] {
   const out: Sentence[] = [];
   let current = acting;
   let changed = false;
   let pendingLine: number | undefined;
-  let cur: Sentence & { reacts: NonNullable<Sentence['reacts']> } = {
+  let cur: Sentence & {
+    reacts: NonNullable<Sentence['reacts']>;
+    looks: NonNullable<Sentence['looks']>;
+  } = {
     text: '',
     cues: [],
     reacts: [],
+    looks: [],
   };
 
   const flush = (pauseAfter?: number) => {
@@ -64,14 +75,25 @@ export function splitSentences(
               })),
             }
           : {}),
+        ...(cur.looks.length > 0
+          ? {
+              looks: cur.looks.map((l) => ({
+                ...l,
+                at: Math.min(text.length, Math.max(0, l.at - lead)),
+              })),
+            }
+          : {}),
       });
       changed = false;
       pendingLine = undefined;
+      cur = { text: '', cues: [], reacts: [], looks: [] };
+      return;
     } else if (pauseAfter !== undefined && out.length > 0) {
       const last = out[out.length - 1]!;
       last.pauseAfter = (last.pauseAfter ?? 0) + pauseAfter;
     }
-    cur = { text: '', cues: [], reacts: [] };
+    // no text yet: looks wait for the next sentence (they lead it)
+    cur = { text: '', cues: [], reacts: [], looks: cur.looks.map((l) => ({ ...l, at: 0 })) };
   };
 
   const append = (s: string) => {
@@ -114,6 +136,14 @@ export function splitSentences(
       });
       continue;
     }
+    if (node.type === 'look') {
+      cur.looks.push({
+        at: cur.text.length,
+        looks: node.looks,
+        ...(node.line !== undefined ? { line: node.line } : {}),
+      });
+      continue;
+    }
     if (node.type === 'cue') {
       append(''); // keep position semantics consistent
       const start = cur.text.length;
@@ -135,6 +165,25 @@ export function splitSentences(
     }
   }
   flush();
+  // a look after the last word (before the final punctuation) has nothing to start from either
+  const last = out[out.length - 1];
+  if (last?.looks) {
+    const after = last.looks.filter(
+      (l) => l.at >= last.text.replace(/[\s.!?。！？…"'」』）)]+$/u, '').length && l.at > 0,
+    );
+    if (after.length > 0) {
+      cur.looks.push(...after);
+      last.looks = last.looks.filter((l) => !after.includes(l));
+      if (last.looks.length === 0) delete last.looks;
+    }
+  }
+  for (const l of cur.looks)
+    issues?.push({
+      level: 'warning',
+      code: 'look-dropped',
+      line: l.line,
+      message: ':look at the end of a paragraph has no word to start from (dropped)',
+    });
   if (changed)
     issues?.push({
       level: 'error',

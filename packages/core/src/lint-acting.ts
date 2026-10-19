@@ -9,7 +9,10 @@ import {
   emotionSentence,
   actsEmotion,
   engineOf,
+  listenerLookFaces,
+  paragraphActing,
   sentenceFace,
+  speakerLooks,
   speedProduct,
   SUPERTONIC_SPEED as SUPERTONIC,
 } from './acting.js';
@@ -109,6 +112,117 @@ export function lintActing(script: Script): Diagnostic[] {
         }
       }
     });
+  }
+  lintLooks(script, push);
+  return out;
+}
+
+/**
+ * `:look` (acting stage 5b plan 5), per output in character mode: a look on a cast with no line
+ * or reaction in the output (never on stage), on the speaker's own side (not shown unless it
+ * reacts there too), a listener's glance (looks like its default stance), a variant the character
+ * cannot draw, and the speaker's looks inside a sentence (from the next one; dropped in the last).
+ */
+function lintLooks(script: Script, push: (d: Diagnostic) => void): void {
+  const { meta } = script;
+  for (const [name, profile] of Object.entries(meta.outputs)) {
+    const scenes = script.scenes.filter((s) => !profile.scenes || profile.scenes.includes(s.id));
+    const paragraphs = scenes.flatMap((s, i) =>
+      s.blocks.flatMap((b) =>
+        b.kind === 'paragraph' && (!b.only || b.only.includes(name)) ? [{ b, i }] : [],
+      ),
+    );
+    // the cast of the output as the renderer sees it: speakers and reaction targets, cast order
+    const on = new Set(
+      paragraphs.flatMap(({ b }) => [
+        b.cast,
+        ...b.sentences.flatMap((s) => (s.reacts ?? []).flatMap((r) => Object.keys(r.faces))),
+      ]),
+    );
+    const cast = Object.keys(meta.cast).filter((k) => on.has(k));
+    if (cast.length === 0 || !cast.every((k) => meta.cast[k]!.character)) continue;
+    const side = sidesOf(cast.map((key) => ({ key, side: meta.cast[key]!.side })));
+    const framings = sceneFramings(meta, scenes, profile);
+    for (const { b, i } of paragraphs) {
+      const framing = (k: string) => framings[i]![k] ?? 'full';
+      const { mid, dropped } = speakerLooks(b);
+      for (const line of mid)
+        push({
+          severity: 'info',
+          code: 'look-midsentence',
+          message: `${b.cast}'s own :look inside a sentence applies from the next sentence (faces change at sentence starts)`,
+          line: line ?? b.line,
+        });
+      for (const line of dropped)
+        push({
+          severity: 'warning',
+          code: 'look-dropped',
+          message: `${b.cast}'s own :look inside the paragraph's last sentence has no sentence to apply to (dropped)`,
+          line: line ?? b.line,
+        });
+      for (const f of paragraphActing(meta, b, framing(b.cast)).faces)
+        if (f.missing) variant(b.cast, f.missing, framing(b.cast), b.line);
+      const reacting = new Set(
+        b.sentences.flatMap((s) => (s.reacts ?? []).flatMap((r) => Object.keys(r.faces))),
+      );
+      for (const s of b.sentences)
+        for (const l of s.looks ?? [])
+          for (const [who, look] of Object.entries(l.looks)) {
+            if (who === b.cast) continue;
+            const line = l.line ?? b.line;
+            if (!on.has(who)) {
+              push({
+                severity: 'info',
+                code: 'look-absent',
+                message: `${who} has no line or reaction in output "${name}", so it is never on stage: :look{${who}=…} shows nothing`,
+                line,
+              });
+              continue;
+            }
+            if (side[who] === side[b.cast] && !reacting.has(who))
+              push({
+                severity: 'warning',
+                code: 'look-side',
+                message: `${who} stands on ${b.cast}'s side, which shows the speaker: :look{${who}=…} is not seen (unless ${who} reacts there)`,
+                line,
+              });
+            if (look === 'glance')
+              push({
+                severity: 'info',
+                code: 'look-glance-listener',
+                message: `glance turns only the head toward the partner, which a listener already faces: :look{${who}=glance} looks ${framing(who) === 'head' && !('any' in (meta.cast[who]?.faceSets ?? {})) ? 'the same as' : 'almost like'} its default stance (glance pairs with viewer)`,
+                line,
+              });
+          }
+      for (const l of listenerLookFaces(meta, b, framing))
+        if (l.face !== l.wanted && on.has(l.cast) && meta.cast[l.cast]?.faceSets)
+          variant(l.cast, l.wanted, framing(l.cast), b.line);
+    }
+  }
+
+  function variant(who: string, face: string, framing: string, line: number) {
+    const sets = meta.cast[who]?.faceSets;
+    push({
+      severity: 'info',
+      code: 'look-variant',
+      message: `${who} has no drawable "${face}" face in the ${framing} framing: the look keeps the face as it is${sets && 'any' in sets ? ` (add ${face}.png to the character folder)` : ' (s2v character missing lists faces to make)'}`,
+      line,
+    });
+  }
+}
+
+/** Sides as the renderer assigns them (`assignSides`): `side` wins, the rest alternate in cast order. */
+export function sidesOf(
+  cast: { key: string; side?: 'left' | 'right' | undefined }[],
+): Record<string, 'left' | 'right'> {
+  let left = 0;
+  let right = 0;
+  const out: Record<string, 'left' | 'right'> = {};
+  for (const c of cast) {
+    const s = c.side ?? (left <= right ? 'left' : 'right');
+    if (s === 'left') left++;
+    else right++;
+    out[c.key] = s;
   }
   return out;
 }

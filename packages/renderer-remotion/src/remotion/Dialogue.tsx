@@ -10,7 +10,12 @@
  * (16:9) or above (portrait) the subtitle. 5+ speakers: name tags on the subtitles only.
  */
 
-import type { TimelineAudio, TimelineMotion, TimelineReaction } from '@script2video/core';
+import type {
+  TimelineAudio,
+  TimelineLook,
+  TimelineMotion,
+  TimelineReaction,
+} from '@script2video/core';
 import type React from 'react';
 import { useMemo } from 'react';
 import { AbsoluteFill, Easing, Img, interpolate, staticFile, useCurrentFrame } from 'remotion';
@@ -198,8 +203,9 @@ function characterState(
   audio: TimelineAudio[],
   reactions: TimelineReaction[],
   mouths: Record<string, string>,
+  looks: TimelineLook[] = [],
 ): CharacterState {
-  const face = faceAt(c.key, c.face, frame, audio, reactions);
+  const face = faceAt(c.key, c.face, frame, audio, reactions, looks);
   let mouth = 0;
   for (const a of audio) {
     if (a.cast !== c.key) continue;
@@ -544,6 +550,8 @@ export const CharacterStage: React.FC<{
   cast: CastInfo[];
   audio: TimelineAudio[];
   reactions: TimelineReaction[];
+  /** Listener looks (acting stage 5b): faces only — no light, no stage. */
+  looks: TimelineLook[];
   motions: TimelineMotion[];
   mouths: Record<string, string>;
   geometry: DialogueGeometry;
@@ -562,6 +570,7 @@ export const CharacterStage: React.FC<{
   cast,
   audio,
   reactions,
+  looks,
   motions,
   mouths,
   geometry,
@@ -605,6 +614,7 @@ export const CharacterStage: React.FC<{
           available: availableFaces(c, parts),
           audio,
           reactions,
+          looks,
           durationFrames,
         }),
       });
@@ -627,7 +637,7 @@ export const CharacterStage: React.FC<{
         return (
           !!c &&
           !!parts &&
-          partsFace(parts, faceAt(key, c.face, f, audio, reactions), c.face).pivot !== null
+          partsFace(parts, faceAt(key, c.face, f, audio, reactions, looks), c.face).pivot !== null
         );
       },
     });
@@ -636,6 +646,7 @@ export const CharacterStage: React.FC<{
     cast,
     audio,
     reactions,
+    looks,
     motions,
     mouths,
     stage,
@@ -672,11 +683,13 @@ export const CharacterStage: React.FC<{
       const from = { x: slot(Math.max(pi, 0), prev.length), s: crowdScale(prev.length) };
       const to = { x: slot(Math.max(ci, 0), cur.keys.length), s: crowdScale(cur.keys.length) };
       const t = pi >= 0 && ci >= 0 ? p : ci >= 0 ? 1 : 0;
-      const state = characterState(c, frame, audio, reactions, mouths);
+      const state = characterState(c, frame, audio, reactions, mouths, looks);
       const order = ci >= 0 ? ci : pi;
       const parts = partsOf(c, framing);
       const pivotAt: PivotAt | null = parts
-        ? (f) => partsFace(parts, characterState(c, f, audio, reactions, mouths).face, c.face).pivot
+        ? (f) =>
+            partsFace(parts, characterState(c, f, audio, reactions, mouths, looks).face, c.face)
+              .pivot
         : null;
       const changes = [
         ...audio
@@ -685,6 +698,9 @@ export const CharacterStage: React.FC<{
         ...reactions
           .filter((r) => r.cast === key)
           .flatMap((r) => [r.startFrame, r.endFrame + FACE_HOLD]),
+        ...looks
+          .filter((l) => l.cast === key)
+          .flatMap((l) => [l.startFrame, l.hold ? l.endFrame + FACE_HOLD : l.endFrame]),
       ];
       const toCenter = side === 'left' ? 1 : -1;
       const channels = motionChannels(key, frame, motions, toCenter, pivotAt, changes);

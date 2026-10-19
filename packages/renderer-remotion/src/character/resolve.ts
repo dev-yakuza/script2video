@@ -108,6 +108,28 @@ function gazeFile(gaze: string | undefined, side: Side): string | null {
   return `eyes@screen-${dir}.png`;
 }
 
+/**
+ * The head the head close-up turns a turned face with (closeup-look plan): the set's turned
+ * front head (a `glance` preset first, then the first by name), or null for a front face or a set
+ * without one. With `mirror: false` a head without its `@flip` twin is not used on either side
+ * (one side would need the twin), so the face stays frontal on both.
+ */
+function turnedHead(spec: LayeredSpec, set: SetView, view: string): string | null {
+  if ((spec.views[view.replace(/@flip$/, '')]?.facing ?? 'front') === 'front') return null;
+  const heads = Object.entries(set.heads)
+    .filter(
+      ([k, h]) =>
+        k.startsWith('front/') && !k.endsWith('@flip') && (h.facing ?? 'front') !== 'front',
+    )
+    .sort(
+      ([a, x], [b, y]) =>
+        Number(y.preset === 'glance') - Number(x.preset === 'glance') || a.localeCompare(b),
+    );
+  const k = heads[0]?.[0];
+  if (!k || (!spec.mirror && !set.heads[`${k}@flip`])) return null;
+  return k.slice('front/'.length);
+}
+
 export function resolveFace(
   dir: string,
   spec: LayeredSpec,
@@ -126,11 +148,14 @@ export function resolveFace(
   let head = fd.head ?? 'base';
   const expr = fd.expression;
   // Close-up sets have one (front) view: every face is drawn from it, keeping its expression
-  // and head; the head set has no bodies (upper keeps a body the set defines).
+  // and head; the head set has no bodies (upper keeps a body the set defines). In the head
+  // close-up a turned face turns the head instead: without a body, turn and glance look alike.
   if (framing !== 'full') {
+    const turned = framing === 'head' && !fd.head ? turnedHead(spec, set, fd.view) : null;
     view = 'front';
     if (framing === 'head' || (body !== 'stand' && !set.bodies[`front/${body}`])) body = 'stand';
-    if (head !== 'base' && !set.heads[`front/${head}`]) head = 'base';
+    if (turned) head = turned;
+    else if (head !== 'base' && !set.heads[`front/${head}`]) head = 'base';
   }
 
   const viewDef = (v: string) => {

@@ -1,12 +1,17 @@
-import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseScript, type Script } from '@script2video/core';
-import { loadCharacterSpec, resolveFace, type LayeredSpec } from '@script2video/renderer-remotion';
+import { parseScript, sidesOf, type Script } from '@script2video/core';
+import {
+  assignSides,
+  loadCharacterSpec,
+  resolveFace,
+  type LayeredSpec,
+} from '@script2video/renderer-remotion';
 import { describe, expect, it } from 'vitest';
 import { enrichCast } from '../src/cast-faces.js';
-import { findMissing } from '../src/character-gen/missing.js';
+import { applyMissing, findMissing } from '../src/character-gen/missing.js';
 import { lintCast, usedFaces } from '../src/lint-assets.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -49,6 +54,61 @@ describe('enrichCast: emotion faces', () => {
     expect([...usedFaces(script, 'guest').get('full')!]).toEqual(['neutral', 'happy']);
   });
 
+  it('draws a look variant when its PNG exists, and lists looks in the used faces', () => {
+    const { script, dir } = classic(
+      'host: :look{host=viewer}안녕하세요. :look{guest=viewer}반가워요.\n\nguest: 네.',
+    );
+    png(join(dir, 'characters/host/front-neutral.png'));
+    enrichCast(script, dir);
+    expect(script.meta.cast.host!.faceSets).toEqual({
+      any: ['neutral', 'happy', 'surprised', 'front-neutral'],
+    });
+    expect([...usedFaces(script, 'host').get('full')!]).toEqual(['neutral', 'front-neutral']);
+    // the guest has no front-neutral: drawn as neutral, asked for as front-neutral
+    expect([...usedFaces(script, 'guest').get('full')!]).toEqual(['neutral']);
+    expect([...usedFaces(script, 'guest', 'wanted').get('full')!]).toEqual([
+      'neutral',
+      'front-neutral',
+    ]);
+  });
+
+  it('warns when a speaker talks with a classic look variant that has no talk art', () => {
+    const { script, dir } = classic('host: :look{host=viewer}안녕하세요.\n\nguest: 네.');
+    png(join(dir, 'characters/host/front-neutral.png'));
+    enrichCast(script, dir);
+    const warns = lintCast(script, dir).filter((d) => d.severity === 'warning');
+    expect(warns.map((d) => d.message).join()).toContain('front-neutral-talk.png');
+  });
+
+  it('assigns sides in lint as the renderer does for the same cast', () => {
+    const { script } = classic('host: 안녕.\n\nguest: 네.');
+    const cast = Object.keys(script.meta.cast).map((key, i) => ({
+      key,
+      side: i === 1 ? ('left' as const) : undefined,
+    }));
+    const { left, right } = assignSides(cast);
+    expect(sidesOf(cast)).toEqual(
+      Object.fromEntries([
+        ...left.map((c) => [c.key, 'left']),
+        ...right.map((c) => [c.key, 'right']),
+      ]),
+    );
+    const plain = [
+      { key: 'a' },
+      { key: 'b' },
+      { key: 'c' },
+      { key: 'd', side: 'left' as const },
+      { key: 'e' },
+    ];
+    const r = assignSides(plain);
+    expect(sidesOf(plain)).toEqual(
+      Object.fromEntries([
+        ...r.left.map((c) => [c.key, 'left']),
+        ...r.right.map((c) => [c.key, 'right']),
+      ]),
+    );
+  });
+
   it('never throws on a broken character', () => {
     const { script, dir } = classic('host: 안녕.');
     writeFileSync(join(dir, 'characters/host/character.yaml'), 'source: [broken');
@@ -83,5 +143,38 @@ describe('enrichCast: emotion faces', () => {
     enrichCast(again, dir);
     expect(again.meta.cast.a!.faceSets).toMatchObject({ full: ['neutral', 'happy'] });
     expect(findMissing(again, dir).every((r) => r.emotional.length === 0)).toBe(true);
+  });
+});
+
+describe('character missing: the head close-up (closeup-look plan)', () => {
+  it('draws a pose with its expression, and --apply copies the turned head it needs', () => {
+    const dir = mkdtempSync(join(tmpdir(), 's2v-faces-'));
+    const c = join(dir, 'c');
+    mkdirSync(c);
+    writeFileSync(
+      join(c, 'character.yaml'),
+      `source: generated\nlicense: test\nviews:\n  front: { facing: front, pivot: [20, 30] }\nheads:\n  front/glance: { facing: right }\nbodies:\n  front/wave: {}\nexpressions:\n  neutral: {}\n  happy: {}\nfaces:\n  neutral: { view: front, expression: neutral }\n  glance-neutral: { view: front, head: glance, expression: neutral }\n  wave: { view: front, body: wave, expression: happy }\nsets:\n  head:\n    views: { front: {} }\n    faces: [neutral]\n`,
+    );
+    const script = parseScript(
+      `---\nlang: ko\ncast:\n  a: { voice: "qwen:Sohee", character: c }\n---\n# s\n\n::shot{a=head}\n\na{face=wave}: 안녕.\n\na{face=glance-neutral}: 네.\n`,
+    ).script!;
+    const [r] = findMissing(script, dir);
+    expect(r!.impossible).toEqual([]);
+    expect(r!.notInSet.map((x) => x.face).sort()).toEqual(['glance-neutral', 'wave']);
+    const added = applyMissing(r!);
+    expect(added).toContain(
+      'head:heads.front/glance (turned faces in the head close-up now use this head)',
+    );
+    expect(readFileSync(join(c, 'character.yaml'), 'utf8')).toMatch(
+      /front\/glance: \{ facing: right \}|front\/glance:\n\s+facing: right/,
+    );
+    const spec = loadCharacterSpec(c) as LayeredSpec;
+    expect(spec.sets.head!.heads['front/glance']).toEqual({ facing: 'right' });
+    expect(spec.sets.head!.bodies).toEqual({});
+    expect(resolveFace(c, spec, 'head', 'wave', 'left', [1, 1]).key).toMatchObject({
+      head: 'base',
+      expr: 'happy',
+      body: 'stand',
+    });
   });
 });

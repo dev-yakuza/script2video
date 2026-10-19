@@ -24,6 +24,7 @@ import {
   closeupPrompt,
   expressionText,
   flipPrompt,
+  framePrompt,
   groupPrompt,
   HEADLESS_PROMPT,
   MOUTH_FRAMES,
@@ -246,7 +247,7 @@ export function planItems(dir: string, input: LayeredSpec): { items: Item[]; err
         input: frontRef,
         needs: [frontRef],
         group: viewRef,
-        prompt: groupPrompt(c.set, pose('base'), expressionText('neutral', undefined), 'still'),
+        prompt: groupPrompt(c.set, pose('base'), expressionText('neutral', undefined)),
         src: src('ref.png'),
         bottomOpen,
       });
@@ -300,13 +301,14 @@ export function planItems(dir: string, input: LayeredSpec): { items: Item[]; err
         input: frontRef,
         needs: [frontRef],
         group: still,
-        prompt: groupPrompt(c.set, pose(c.head), exprText, 'still'),
+        prompt: groupPrompt(c.set, pose(c.head), exprText),
         src: src(`still-${c.head}-${c.expr}.png`),
         bottomOpen,
       });
-    // Frames edit the approved still with no pose prefix (P1 exception, like the headless body):
-    // an edit of the front reference re-turns the head by a different angle each time (test r6:
-    // 5 of 6 turn / glance frames moved), and only the frame's part (mouth, eyes) is kept.
+    // Frames edit the approved still (P1 exception, like the headless body): an edit of the front
+    // reference re-turns the head by a different angle each time (test r6: 5 of 6 turn / glance
+    // frames moved), and only the frame's part (mouth, eyes) is kept. Their words name only the
+    // change, not the pose or the expression (prompts.ts).
     const frames: Frame[] = [...MOUTH_FRAMES, ...gazeFrames(ed?.gaze)];
     for (const f of frames)
       add({
@@ -321,7 +323,7 @@ export function planItems(dir: string, input: LayeredSpec): { items: Item[]; err
         input: still,
         needs: [still],
         group: still,
-        prompt: groupPrompt(c.set, {}, exprText, f),
+        prompt: framePrompt(c.set, f, c.expr),
         src: src(`frame-${c.head}-${c.expr}-${f}.png`),
         bottomOpen,
       });

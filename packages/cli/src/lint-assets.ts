@@ -10,6 +10,8 @@ import {
   logoOf,
   MOTIONS,
   sceneFramings,
+  listenerLookFaces,
+  paragraphActing,
   sentenceFace,
   type Diagnostic,
   type Framing,
@@ -276,6 +278,18 @@ export function lintCast(script: Script, scriptDir: string): Diagnostic[] {
         }
     for (const face of used)
       if (!faces[face]?.base) err(`cast.${key}: ${rel}/${face}.png is missing (face "${face}")`);
+    // a look variant the speaker talks with (acting stage 5b): without talk art the mouth stops
+    const looks = new Set<string>();
+    for (const scene of script.scenes)
+      for (const b of scene.blocks)
+        if (b.kind === 'paragraph' && b.cast === key)
+          for (const f of paragraphActing(meta, b, 'full').faces)
+            if (f.shown !== f.drawn) looks.add(f.shown);
+    for (const face of looks)
+      if (faces[face]?.base && !faces[face].talk && !faces[face].half)
+        warn(
+          `cast.${key}: ${rel}/${face}-talk.png is missing: the mouth does not move while it speaks with "${face}" (:look)`,
+        );
     if (!Object.values(faces).some((f) => f.talk || f.half))
       warn(`cast.${key}: no <face>-talk.png in ${rel}, so the mouth will not move`);
     // Every image must share one canvas, or the character jumps when images swap.
@@ -373,10 +387,13 @@ export function usedFaces(
       add(framing, member.face);
       for (const b of scene.blocks)
         if (b.kind === 'paragraph' && (!b.only || b.only.includes(name))) {
-          for (const s of b.sentences) {
-            if (b.cast === key) add(framing, sentenceFace(script.meta, b, s, framing)[which]);
+          if (b.cast === key)
+            for (const f of paragraphActing(script.meta, b, framing).faces)
+              add(framing, which === 'drawn' ? f.shown : f.wantedShown);
+          for (const s of b.sentences)
             for (const r of s.reacts ?? []) if (r.faces[key]) add(framing, r.faces[key]);
-          }
+          for (const l of listenerLookFaces(script.meta, b, (c) => framings[i]![c] ?? 'full'))
+            if (l.cast === key) add(framing, which === 'drawn' ? l.face : l.wanted);
         }
     });
   }
@@ -429,9 +446,8 @@ export function lintPartsCharacter(
   for (const scene of script.scenes)
     for (const b of scene.blocks)
       if (b.kind === 'paragraph' && b.cast === key)
-        for (const s of b.sentences)
-          for (const f of ['full', 'upper', 'head'] as const)
-            speaking.add(sentenceFace(script.meta, b, s, f).drawn);
+        for (const f of ['full', 'upper', 'head'] as const)
+          for (const x of paragraphActing(script.meta, b, f).faces) speaking.add(x.shown);
   for (const name of Object.keys(spec.faces))
     if (/-(talk|half|blink)$/.test(name))
       err(`face name "${name}" must not end in -talk, -half or -blink`);
@@ -494,6 +510,22 @@ export function lintPartsCharacter(
       warn(
         `"${ip}" appears in the character description: describe an original design instead (best-effort check)`,
       );
+  // The head close-up flips its turned head with the whole picture on one side (no body): say
+  // it once, not per face (closeup-look plan).
+  const hs = spec.sets.head;
+  if (
+    spec.mirror &&
+    used.has('head') &&
+    hs &&
+    Object.entries(hs.heads).some(
+      ([k, h]) => !k.endsWith('@flip') && (h.facing ?? 'front') !== 'front',
+    )
+  )
+    out.push({
+      severity: 'info',
+      code: 'character',
+      message: `cast.${key}: the head close-up mirrors its turned head on one side: asymmetric details (a hair clip) switch sides there`,
+    });
   // Every used face must resolve in its framing on both sides (sides can differ per output).
   const sizes = new Map<Framing, Set<string>>();
   for (const [framing, faces] of used)

@@ -374,10 +374,12 @@ function postItems(dir: string, g: Graph, items: Item[], repoRoot: string): Prom
  * The group's other frames (derive makes the mouth and eye parts from all of them) and another
  * group's blink placing the mouth when this group's blink finds no eyes (a closed-eye smile).
  */
-function frameContext(dir: string, g: Graph, it: Item, round: Item[]) {
+export function frameContext(dir: string, g: Graph, it: Item, round: Item[]) {
   const image = (x: Item) =>
     round.includes(x)
-      ? workPath(dir, x.id)
+      ? existsSync(workPath(dir, x.id))
+        ? workPath(dir, x.id)
+        : undefined
       : status(g, x.id) === 'approved' && existsSync(srcPath(dir, x))
         ? srcPath(dir, x)
         : undefined;
@@ -386,15 +388,16 @@ function frameContext(dir: string, g: Graph, it: Item, round: Item[]) {
     const p = x.kind === 'frame' && x.group === it.group && x.id !== it.id ? image(x) : undefined;
     if (p) frames[x.frame!] = p;
   }
-  // Borrowed blinks are approved ones only, as derive has them.
+  // Borrowed blinks: approved ones, as derive has them, and this round's (a round that makes
+  // every frame again has no approved blink to borrow; a bad one is skipped as leaving the eyes
+  // open).
   const blinks = [...g.items.values()].filter(
     (x) =>
       x.frame === 'blink' &&
       x.set === it.set &&
       x.view === it.view &&
       x.group !== it.group &&
-      status(g, x.id) === 'approved' &&
-      existsSync(srcPath(dir, x)),
+      image(x) !== undefined,
   );
   // Python takes the first that shows two eyes, in derive's order (character.py eye_order):
   // the same head's blinks, then the others, each sorted as Python sorts (head, expr) tuples.
@@ -403,7 +406,12 @@ function frameContext(dir: string, g: Graph, it: Item, round: Item[]) {
   const eyes = [
     ...blinks.filter((x) => x.head === it.head).sort(byName),
     ...blinks.filter((x) => x.head !== it.head).sort(byName),
-  ].map((x) => ({ still: stillPath(dir, g, x), blink: srcPath(dir, x) }));
+  ].map((x) => ({
+    still: stillPath(dir, g, x),
+    blink: image(x)!,
+    key: `${x.head}/${x.expr}`,
+    same_head: x.head === it.head,
+  }));
   // Split views: derive finds parts in the head region cut below pivot y + 4, so post does too.
   const p = it.set === 'full' ? '' : `${it.set}:`;
   const region = headRegionPath(dir, it.set, it.view);
@@ -482,8 +490,12 @@ export async function buildCharacter(
     g = loadGraph(dir);
   }
   // Layers of everything approved so far (also retries a derive that failed during approve).
-  if (!opts.dryRun && Object.values(g.prov.items).some((r) => r.state === 'approved'))
+  if (!opts.dryRun && Object.values(g.prov.items).some((r) => r.state === 'approved')) {
     await deriveLayers(dir, opts);
+    // derive recorded the layer hashes it wrote: saving the old graph later would put the old
+    // hashes back, and the next approve would keep the new layers as hand-edited.
+    g = loadGraph(dir);
+  }
   const rest = remaining(g);
   const plan = nextRound(g);
   log(
@@ -874,6 +886,8 @@ interface DeriveView {
   groups: Record<string, { offset: [number, number]; band_error: number }>;
   bodies: Record<string, Record<string, Check>>;
   checks: Record<string, Record<string, Check>>;
+  /** Groups whose approved blink leaves the eyes open, and the blink that placed their parts. */
+  eyes?: Record<string, { own_open: boolean; from: string | null }>;
 }
 
 /** Rebuild layers from approved sources and write pivots / offsets to the yaml (4.3, C16). */
@@ -969,6 +983,11 @@ export async function deriveLayers(
           `warning: ${k} body ${b}: ${bad.map(([n, x]) => `${n} ${x.value} (${x.limit})`).join(', ')}`,
         );
     }
+    for (const [gk, e] of Object.entries(r.eyes ?? {}))
+      if (e.own_open)
+        opts.log(
+          `warning: ${k} ${gk}: its approved blink leaves the eyes open; ${e.from ? `the eyes of ${e.from} place its parts` : 'no blink places its parts'} (s2v character redo ${dir} ${set === 'full' ? '' : `${set}:`}${view}/${gk}/blink)`,
+        );
     for (const [gk, c] of Object.entries(r.checks)) {
       const bad = Object.entries(c).filter(([, x]) => !x.ok);
       if (bad.length)

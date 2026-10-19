@@ -132,15 +132,37 @@ export function importedFaceProblems(
   return out;
 }
 
-/** Faces a line may ask for through an emotion: the standard ones and the user emotions' faces. */
-function emotionCandidates(script: Script): string[] {
+/**
+ * Faces a line may ask for: the standard emotions, the user emotions' faces, every cast face,
+ * paragraph `face=` and reaction face — and each one's look variants `front-` / `glance-`
+ * (acting stage 5b plan 5).
+ */
+function faceCandidates(script: Script): string[] {
   const user = Object.entries(script.meta.acting?.emotions ?? {}).map(([n, e]) => e.face ?? n);
-  return [...new Set([...EMOTIONS, ...user])];
+  const written = script.scenes.flatMap((s) =>
+    s.blocks.flatMap((b) =>
+      b.kind === 'paragraph'
+        ? [
+            ...(b.face ? [b.face] : []),
+            ...b.sentences.flatMap((x) => (x.reacts ?? []).flatMap((r) => Object.values(r.faces))),
+          ]
+        : [],
+    ),
+  );
+  const base = [
+    ...new Set([
+      ...EMOTIONS,
+      ...user,
+      ...Object.values(script.meta.cast).map((m) => m.face),
+      ...written,
+    ]),
+  ];
+  return [...base, ...base.flatMap((f) => [`front-${f}`, `glance-${f}`])];
 }
 
 /** Drawable emotion faces of one cast member (null: unknown — the line keeps its default face). */
 function faceSetsOf(script: Script, dir: string): CastMember['faceSets'] | null {
-  const candidates = emotionCandidates(script);
+  const candidates = faceCandidates(script);
   if (characterSource(dir) !== 'parts') {
     const faces = characterFaces(dir);
     return { any: candidates.filter((f) => faces[f]?.base) };

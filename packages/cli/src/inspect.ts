@@ -20,6 +20,7 @@ import {
   logoOf,
   outputScenes,
   paragraphActing,
+  listenerLookFaces,
   parseScript,
   presentationAttrs,
   schemaDefaults,
@@ -465,8 +466,11 @@ export function inspectScript(
         if (b.kind === 'paragraph') {
           const framing = framings[i]![b.cast] ?? 'full';
           for (const f of paragraphActing(meta, b, framing).faces) add(b.cast, f.drawn);
+          for (const f of paragraphActing(meta, b, framing).faces) add(b.cast, f.shown);
           for (const s of b.sentences)
             for (const r of s.reacts ?? []) for (const [c, f] of Object.entries(r.faces)) add(c, f);
+          for (const l of listenerLookFaces(meta, b, (c) => framings[i]![c] ?? 'full'))
+            add(l.cast, l.face);
         }
     });
   }

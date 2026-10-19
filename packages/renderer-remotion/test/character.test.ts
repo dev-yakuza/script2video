@@ -141,11 +141,15 @@ faces:
     expect(s.faces['glance-puzzled']).toMatchObject({ head: 'glance', motion: 'head-tilt' });
     expect(s.faces.wave).toEqual({ view: 'front', body: 'wave', expression: 'happy' });
     expect(s.sets.head?.faces).toContain('moved');
+    // The head close-up draws every face, with the glance head for turned ones (closeup-look).
+    expect(s.sets.head?.faces).toEqual(Object.keys(s.faces));
+    expect(s.sets.head?.heads['front/glance']).toEqual({ preset: 'glance', facing: 'right' });
     const x = spec('source: generated\npreset: standard@1\nexclude: [happy, glance]\n');
     for (const f of ['happy', 'front-happy', 'wave', 'glance-neutral'])
       expect(x.faces[f]).toBe(undefined);
     expect(x.sets.head?.faces).not.toContain('happy');
     expect(x.heads['front/glance']).toBe(undefined);
+    expect(x.sets.head?.heads['front/glance']).toBe(undefined);
   });
 
   it('overriding one field of a preset entry keeps the rest (no schema default in between)', () => {
@@ -271,6 +275,62 @@ describe('resolveFace (flip rule, pivots, offsets)', () => {
     const h = r('gasp', 'right', y, 'head');
     expect(h.head.states.closed[0]).toContain('/sets/head/views/front/face/base/neutral/head.png');
     expect(h.head.flip).toBe(false);
+  });
+
+  it('turns the head of turned faces in the head close-up only, toward the partner', () => {
+    const y = BASE.replace(
+      '    faces: [neutral]',
+      '    heads: { front/glance: { facing: right } }\n    faces: [neutral, gasp, listen, still, point]',
+    ).replace(
+      '  look: { view: front',
+      '  still: { view: turn, head: base, expression: neutral }\n  look: { view: front',
+    );
+    const at = (face: string, side: 'left' | 'right', yy = y) => r(face, side, yy, 'head');
+    const dir = (x: ReturnType<typeof at>) => x.head.states.closed[0]!.split('/face/')[1];
+    for (const side of ['left', 'right'] as const) {
+      expect(dir(at('gasp', side))).toBe('glance/neutral/head.png');
+      expect(dir(at('listen', side))).toBe('glance/neutral/head.png');
+      expect(dir(at('neutral', side))).toBe('base/neutral/head.png');
+      expect(dir(at('still', side))).toBe('base/neutral/head.png'); // an explicit head stays
+      expect(dir(at('point', side))).toBe('base/happy/head.png'); // a pose keeps its expression
+    }
+    // The glance faces the partner: flipped on the right side, as in the full framing.
+    expect(at('gasp', 'right').head.flip).toBe(true);
+    expect(at('gasp', 'left').head.flip).toBe(false);
+    // A glance preset wins over another turned head; the upper set keeps its turned faces frontal.
+    const two = y.replace(
+      'heads: { front/glance: { facing: right } }',
+      'heads: { front/away: { facing: right }, front/glance: { preset: glance, facing: right } }',
+    );
+    expect(dir(at('gasp', 'left', two))).toBe('glance/neutral/head.png');
+    const upper = y.replace('  head:\n', '  upper:\n');
+    expect(r('gasp', 'left', upper, 'upper').head.states.closed[0]).toContain(
+      '/face/base/neutral/',
+    );
+  });
+
+  it('mirror: false keeps turned faces frontal in the head close-up without a @flip twin', () => {
+    const y = `${BASE}mirror: false\n`
+      .replace(
+        '  turn: { facing: right, pivot: [14, 30], layers: split }',
+        '  turn: { facing: right }\n  turn@flip: { facing: left }',
+      )
+      .replace(
+        '    faces: [neutral]',
+        '    heads: { front/glance: { facing: right } }\n    faces: [neutral, gasp]',
+      );
+    for (const side of ['left', 'right'] as const)
+      expect(r('gasp', side, y, 'head').head.states.closed[0]).toContain('/face/base/neutral/');
+    const twin = y.replace(
+      'front/glance: { facing: right } }',
+      'front/glance: { facing: right }, front/glance@flip: { facing: left } }',
+    );
+    expect(r('gasp', 'left', twin, 'head').head.states.closed[0]).toContain(
+      '/face/glance/neutral/',
+    );
+    expect(r('gasp', 'right', twin, 'head').head.states.closed[0]).toContain(
+      '/face/glance@flip/neutral/',
+    );
   });
 
   it('resolves faces of the head set only from its list, without a body', () => {
