@@ -54,6 +54,7 @@ import {
   consistencyReasons,
   cosine,
   roundTripCer,
+  cerReason,
   sentenceId,
   toAlignText,
   toTtsText,
@@ -226,7 +227,12 @@ export interface LockEntry {
   duration: number;
   words: AlignedWord[];
   heard: string;
-  cer: number;
+  /** null: not heard by ASR (`asr: false`). */
+  cer: number | null;
+  /**
+   * `heard` and `cer` come from ASR (S9a). Absent in locks made before it: see `lockAsr`.
+   */
+  asr?: boolean;
   engine: string;
   model: string;
   seed: string;
@@ -265,6 +271,14 @@ export interface LockEntry {
   select?: AutoSelect | PickSelect;
   /** Non-speech cut at the edges (seconds of the take wav). */
   crop?: { from: number; to: number };
+}
+
+/**
+ * Whether a lock entry was heard by ASR (S9a). Locks made before the field: non-empty `heard`
+ * of a synthesized, non-mock line means ASR ran (nothing else fills it).
+ */
+export function lockAsr(e: Pick<LockEntry, 'asr' | 'engine' | 'model' | 'heard'>): boolean {
+  return e.asr ?? (e.engine !== 'recording' && e.model !== 'mock' && e.heard !== '');
 }
 
 /** Selection among the takes (stage 3a; `retry` only in locks made before 3b). */
@@ -734,9 +748,16 @@ export async function synthesizeScript(
     lang: meta.lang,
     entries: previous?.entries ?? {},
     sentences: {},
-    // Server identity / versions of the last run that synthesized; kept when everything is reused.
+    // Server identity / versions of the last run that used each service; kept when nothing ran.
     env: previous?.env ?? {},
   };
+  // locks made before S9a learn whether ASR heard them (fields only: wav and words stay)
+  for (const e of Object.values(manifest.entries))
+    if (e.asr === undefined) {
+      e.asr = lockAsr(e);
+      // what no ASR heard has no CER (an old mock line kept its script text as `heard`)
+      if (!e.asr) Object.assign(e, { cer: null, heard: '' });
+    }
   const warnings: string[] = [];
   const pushOnce = (w: string) => {
     if (!warnings.includes(w)) warnings.push(w);
@@ -744,12 +765,21 @@ export async function synthesizeScript(
   let synthesized = 0;
   let reused = 0;
   let started = false;
+  let alignerStarted = false;
+  /** Synthesis needs both servers. */
   const ensureServices = async () => {
     if (started) return;
-    opts.log('starting tts-server and aligner ...');
+    opts.log(alignerStarted ? 'starting tts-server ...' : 'starting tts-server and aligner ...');
     const [th, ah] = await Promise.all([tts.ensure(), aligner.ensure()]);
-    manifest.env = { tts: th, aligner: ah };
-    started = true;
+    manifest.env = { ...manifest.env, tts: th, aligner: ah };
+    started = alignerStarted = true;
+  };
+  /** Measuring and re-judging need the aligner only: no TTS model is loaded for them (S9a). */
+  const ensureAligner = async () => {
+    if (alignerStarted) return;
+    opts.log('starting aligner ...');
+    manifest.env = { ...manifest.env, aligner: await aligner.ensure() };
+    alignerStarted = true;
   };
   const save = () => writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
   // E7 (stage 3 plan 6): make all six takes of emotion lines; the choice stays the budget's
@@ -759,8 +789,15 @@ export async function synthesizeScript(
     todo: SentenceJob[],
     retry: (j: SentenceJob) => boolean,
     takesOf = new Map<SentenceJob, number>(),
+    /** Locked lines only ASR has to hear (S9a): the aligner, no synthesis. */
+    rejudges = 0,
   ) => {
-    if (mock || todo.length === 0) return;
+    if (mock || (todo.length === 0 && rejudges === 0)) return;
+    if (todo.length === 0) {
+      const s = SERVER_START_S + rejudges * 1.5;
+      opts.log(`about ${Math.max(1, Math.round(s / 60))} min to hear ${rejudges} locked line(s)`);
+      return;
+    }
     // highest raw take per synthesis key, read once
     const rawMax = new Map<string, number>();
     for (const f of readdirSync(rawDir)) {
@@ -791,6 +828,7 @@ export async function synthesizeScript(
         }
       }
     }
+    seconds += rejudges * 1.5;
     if (seconds > todo.length * 0.3 * TAKE_SECONDS.qwen) seconds += SERVER_START_S;
     opts.log(`about ${Math.max(1, Math.round(seconds / 60))} min for ${todo.length} sentence(s)`);
   };
@@ -1022,7 +1060,7 @@ export async function synthesizeScript(
     const rawSha = made!.rawSha;
     cached = readJson<TakeMeasure>(path);
     if (valid(cached, wavSha)) return { tk, wav, m: cached!, rawSha, synthesized };
-    await ensureServices();
+    await ensureAligner();
     const { data: aligned } = await aligner.post<{ words: AlignedWord[] }>('/align', {
       wav_path: wav,
       text: job.alignText,
@@ -1092,7 +1130,7 @@ export async function synthesizeScript(
     const pitchPath = join(takesDir, `${tk}.${measureKey(job)}.${tag}.pitch.json`);
     let p = readJson<{ wavSha: string; pitch: PitchResult }>(pitchPath);
     if (!p || p.wavSha !== m.wavSha) {
-      await ensureServices();
+      await ensureAligner();
       p = {
         wavSha: m.wavSha,
         pitch: (await aligner.post<PitchResult>('/pitch', { wav_path: cut })).data,
@@ -1384,13 +1422,15 @@ export async function synthesizeScript(
     for (const t of tried)
       if (t !== chosen && dirname(t.wavPath) === lockDir && existsSync(t.wavPath))
         unlinkSync(t.wavPath);
-    const cer = chosen.assessment.cer ?? 0;
+    // heard by ASR when it measured a CER (mock and --no-asr do not: S9a)
+    const cer = chosen.assessment.cer;
     manifest.entries[job.key] = {
       src,
       duration: Number(wavDuration(join(lockDir, src)).toFixed(4)),
       words: chosen.words,
-      heard: chosen.heard,
-      cer: Number(cer.toFixed(3)),
+      heard: cer === null ? '' : chosen.heard,
+      cer: cer === null ? null : Number(cer.toFixed(3)),
+      asr: cer !== null,
       engine: job.target.engine,
       model: chosen.info.model,
       seed: String(chosen.info.seed),
@@ -1443,6 +1483,38 @@ export async function synthesizeScript(
     save();
   };
 
+  /** A locked line no ASR has heard, in a run that hears (S9a plan 2.2). */
+  const needsAsr = (e: LockEntry) =>
+    opts.asr && !mock && e.engine !== 'recording' && e.model !== 'mock' && !lockAsr(e);
+  /**
+   * Hear a locked line no ASR heard, in place: the lock wav (what plays) is transcribed and its
+   * heard / cer / asr written; wav, words and the take stay. Returns the CER reason when it fails
+   * (null: it passes, or there was nothing to hear).
+   */
+  const rejudge = async (job: SentenceJob, e: LockEntry): Promise<string | null> => {
+    if (!needsAsr(e)) return null;
+    await ensureAligner();
+    const heard = (
+      await aligner.post<{ text: string }>('/transcribe', {
+        wav_path: join(lockDir, e.src),
+        lang: meta.lang,
+      })
+    ).data.text;
+    const cer = roundTripCer(job.text, heard, meta.lang, meta.pronounce);
+    const reason = cerReason(cer, meta.lang as Lang);
+    e.heard = heard;
+    e.cer = Number(cer.toFixed(3));
+    e.asr = true;
+    e.checks = [
+      ...(e.checks ?? []).filter((r) => !r.startsWith('ASR round-trip CER')),
+      ...(reason ? [reason] : []),
+    ];
+    // saved by the caller once the line is settled: a run cut short while choosing again leaves
+    // it unheard, to be heard (and chosen again) next time
+    opts.log(`  ${job.id} heard by ASR: cer=${cer.toFixed(2)}${reason ? ' — fails' : ''}`);
+    return reason;
+  };
+
   /** `--recheck` of a locked sentence: the per-sentence checks and its voice reference. */
   const recheckReasons = async (job: SentenceJob, e: LockEntry): Promise<string[]> => {
     const wav = join(lockDir, e.src);
@@ -1485,7 +1557,7 @@ export async function synthesizeScript(
     }
     if (!r) return reasons;
     if (e.f0 === undefined || e.ending === undefined) {
-      await ensureServices();
+      await ensureAligner();
       const p = (await aligner.post<PitchResult>('/pitch', { wav_path: wav })).data;
       e.f0 = p.median_hz ? Number(p.median_hz.toFixed(1)) : null;
       e.ending = p.ending_st !== null ? Number(p.ending_st.toFixed(2)) : null;
@@ -1543,7 +1615,7 @@ export async function synthesizeScript(
         reused += rec.items.length;
         continue;
       }
-      await ensureServices();
+      await ensureAligner();
       const whole = join(lockDir, `rec-${rec.sha.slice(0, 16)}.wav`);
       await postprocess(rec.src, whole, null);
       const duration = wavDuration(whole);
@@ -1572,7 +1644,8 @@ export async function synthesizeScript(
           duration: Number(wavDuration(join(lockDir, src)).toFixed(4)),
           words: cut.words,
           heard: '',
-          cer: 0,
+          cer: null,
+          asr: false,
           engine: 'recording',
           model: basename(rec.src),
           seed: rec.sha.slice(0, 16),
@@ -1660,6 +1733,8 @@ export async function synthesizeScript(
       const retryKeys = new Set<string>();
       const todo: SentenceJob[] = [];
       const pickTakes = new Map<SentenceJob, number>();
+      let rejudges = 0;
+      const heardKeys = new Set<string>();
       for (const j of jobs) {
         const e = locked(j);
         const p = usePicks ? picks.picks[j.pickKey] : undefined;
@@ -1670,8 +1745,12 @@ export async function synthesizeScript(
           todo.push(j);
           pickTakes.set(j, mock || takeMadeOf(takesDir, takeKey(j, p.take)) ? 0 : 1);
         } else if (!e || (!p && isPickSelect(e.select))) todo.push(j);
+        else if (needsAsr(e) && !heardKeys.has(j.key)) {
+          heardKeys.add(j.key);
+          rejudges++;
+        }
       }
-      estimateTime(todo, wantsRetry, pickTakes);
+      estimateTime(todo, wantsRetry, pickTakes, rejudges);
     }
 
     const logCommitted = (job: SentenceJob, chosen: Attempt, made: number) => {
@@ -1679,7 +1758,7 @@ export async function synthesizeScript(
       opts.log(
         `  ${job.id} ${job.target.engine}:${job.target.voice} ${e.duration.toFixed(2)}s` +
           (chosen.removed > 0 ? ` (-${chosen.removed.toFixed(2)}s pauses)` : '') +
-          ` cer=${(chosen.assessment.cer ?? 0).toFixed(2)}` +
+          ` cer=${chosen.assessment.cer === null ? '—' : chosen.assessment.cer.toFixed(2)}` +
           (job.emotional || isPickSelect(e.select) ? ` take ${chosen.attempt} of ${made}` : ''),
       );
     };
@@ -1837,6 +1916,11 @@ export async function synthesizeScript(
           if (existing && existing.attempt === pick.take) {
             existing.tried = Math.max(existing.tried ?? existing.attempt, made);
             existing.select = { pick: pick.take, by: pick.by };
+            if (await rejudge(job, existing))
+              keptPickFailures.push([
+                job.pickKey,
+                `${job.id}: picked take ${pick.take} fails: ${existing.checks!.join('; ')}`,
+              ]);
             save();
             reused++;
           } else {
@@ -1846,7 +1930,7 @@ export async function synthesizeScript(
           continue;
         }
         // a lock still holding an unpicked take chooses again (row 4), so lock and picks agree
-        if (existing && !isPickSelect(existing.select)) {
+        if (existing && !isPickSelect(existing.select) && !(await rejudge(job, existing))) {
           warnings.push(`${job.id}: no new take passed (${why}) — kept the locked take`);
           existing.tried = Math.max(existing.tried ?? existing.attempt, made);
           save();
@@ -1856,7 +1940,7 @@ export async function synthesizeScript(
         // no entry under the current key (or an unpicked one): the budget takes
         if (existing)
           warnings.push(
-            `${job.id}: no new take passed (${why}) — chose again from the first takes`,
+            `${job.id}: no new take passed (${why})${existing.asr && existing.checks?.some((c) => c.startsWith('ASR round-trip CER')) ? ' and ASR heard the locked take fail' : ''} — chose again from the first takes`,
           );
         await budgetJob(job, tried, made);
         synthesized++;
@@ -1880,6 +1964,11 @@ export async function synthesizeScript(
           if (!existing.synthKey || !existing.pickKey) {
             existing.synthKey = job.synthKey;
             existing.pickKey = job.pickKey;
+            dirty = true;
+          }
+          // heard by ASR if it was not (S9a): judged, never replaced; warned below as any failure
+          if (needsAsr(existing)) {
+            await rejudge(job, existing);
             dirty = true;
           }
           if (opts.recheck) {
@@ -1911,13 +2000,32 @@ export async function synthesizeScript(
       if (existing && isPickSelect(existing.select)) {
         opts.log(`  ${job.id}: take ${existing.select.pick} is no longer picked → choosing again`);
       } else if (existing) {
-        // Sentences already in the lock are not checked again unless asked (Q9).
-        const reasons = opts.recheck ? await recheckReasons(job, existing) : [];
+        // Sentences already in the lock are not checked again unless asked (Q9), except a line no
+        // ASR has heard, in a run that hears (S9a).
+        const wasHeard = lockAsr(existing);
+        const heard = await rejudge(job, existing);
+        // a line ASR heard fail is chosen again before anything saves it (--recheck saves)
+        const reasons = heard ? [heard] : opts.recheck ? await recheckReasons(job, existing) : [];
         if (reasons.length === 0) {
+          if (!wasHeard && lockAsr(existing)) save();
           reused++;
           continue;
         }
         opts.log(`  ${job.id} recheck failed: ${reasons.join('; ')} → re-synthesizing`);
+        if (heard) {
+          const before = { attempt: existing.attempt, sha: sha16(join(lockDir, existing.src)) };
+          await budgetJob(job, [], madeBefore);
+          synthesized++;
+          const after = manifest.entries[job.key];
+          if (
+            after &&
+            (after.attempt !== before.attempt || sha16(join(lockDir, after.src)) !== before.sha)
+          )
+            warnings.push(
+              `${job.id}: ASR heard the locked take fail (${heard}) — chose again; the audio changed`,
+            );
+          continue;
+        }
       }
       await budgetJob(job, [], madeBefore);
       synthesized++;

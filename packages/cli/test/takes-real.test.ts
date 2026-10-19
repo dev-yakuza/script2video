@@ -3,6 +3,7 @@
  * cache, judging, selection and a reference that fails mid-sentence. The repo root is a temporary
  * folder, so the caches never touch the real `.s2v-cache`.
  */
+import { createHash } from 'node:crypto';
 import {
   copyFileSync,
   mkdirSync,
@@ -52,11 +53,19 @@ interface Calls {
   embed: number;
   align: number;
   pitch: number;
+  transcribe: number;
+  /** `/health` of the tts-server: it was started (S9a: hearing needs the aligner only). */
+  ttsHealth: number;
 }
 
 /** Stub tts-server and aligner: tones for speech, fixed pitch, a constant voice vector. */
-function stubs(root: string, failEmbedFrom: () => number) {
-  const calls: Calls = { synthesize: 0, embed: 0, align: 0, pitch: 0 };
+function stubs(
+  root: string,
+  failEmbedFrom: () => number,
+  heard: (wavPath: string) => string = () => '',
+  failTranscribeAfter: () => number = () => Infinity,
+) {
+  const calls: Calls = { synthesize: 0, embed: 0, align: 0, pitch: 0, transcribe: 0, ttsHealth: 0 };
   const scratch = mkdtempSync(join(tmpdir(), 's2v-stub-'));
   const json = (res: import('node:http').ServerResponse, body: unknown, status = 200) => {
     res.writeHead(status, { 'content-type': 'application/json' });
@@ -69,12 +78,14 @@ function stubs(root: string, failEmbedFrom: () => number) {
       req.on('data', (c) => (data += c));
       req.on('end', () => {
         const body = data ? (JSON.parse(data) as Record<string, string>) : {};
-        if (req.url === '/health')
+        if (req.url === '/health') {
+          if (spec.id === TTS_SERVER.id) calls.ttsHealth++;
           return json(res, {
             id: spec.id,
             lock_hash: new Service(spec, root).expectedLockHash(),
             wrapper_version: spec.wrapper,
           });
+        }
         if (req.url === '/synthesize') {
           calls.synthesize++;
           const out = join(scratch, `${calls.synthesize}.wav`);
@@ -114,7 +125,12 @@ function stubs(root: string, failEmbedFrom: () => number) {
             noise_s: 0,
           });
         }
-        if (req.url === '/transcribe') return json(res, { text: '' });
+        if (req.url === '/transcribe') {
+          calls.transcribe++;
+          if (calls.transcribe > failTranscribeAfter())
+            return json(res, { detail: 'stub failure' }, 500);
+          return json(res, { text: heard(body.wav_path!) });
+        }
         json(res, { detail: 'unknown' }, 404);
       });
     };
@@ -138,18 +154,33 @@ describe('stage 3 takes against stub servers', { timeout: 120_000 }, () => {
   /** Scripts live in subfolders of one folder whose voices/ they share (one reference per lang). */
   let scripts: string;
   let failFrom = Infinity;
+  /** What the stub ASR hears (S9a tests set it). */
+  let heardText = '';
+  /** What the stub ASR hears in the lock wavs (the locked takes), when set; takes hear heardText. */
+  let heardLocked: string | null = null;
+  /** `/transcribe` fails once it has answered this many calls in all. */
+  let transcribeUpTo = Infinity;
   let stub: ReturnType<typeof stubs>;
   beforeAll(async () => {
     delete process.env.S2V_TTS;
     root = fakeRepo();
     scripts = mkdtempSync(join(tmpdir(), 's2v-real-'));
     mkdirSync(join(scripts, 'voices'));
-    stub = stubs(root, () => failFrom);
+    stub = stubs(
+      root,
+      () => failFrom,
+      // takes are measured in the cache; the lock wavs live beside the scripts
+      (wav) => (heardLocked !== null && !wav.includes('.s2v-cache') ? heardLocked : heardText),
+      () => transcribeUpTo,
+    );
     process.env.S2V_TTS_PORT = String(await listen(stub.tts));
     process.env.S2V_ALIGNER_PORT = String(await listen(stub.aligner));
   });
   beforeEach(() => {
     failFrom = Infinity;
+    heardText = '';
+    heardLocked = null;
+    transcribeUpTo = Infinity;
   });
   afterAll(async () => {
     await new Promise((ok) => stub.tts.close(ok));
@@ -170,7 +201,7 @@ describe('stage 3 takes against stub servers', { timeout: 120_000 }, () => {
     const source = `---\nlang: ${lang}\ncast:\n  host: { voice: "qwen:Sohee" }\noutputs:\n  youtube: { aspect: "16:9", layout: presenter }\n---\n\n# one {#one}\n\n${body}\n`;
     writeFileSync(path, source);
     const parsed = parseScript(source).script!;
-    const run = async (extra: { retry?: string[] } = {}) => {
+    const run = async (extra: { retry?: string[]; asr?: boolean; recheck?: boolean } = {}) => {
       const logs: string[] = [];
       const r = await synthesizeScript(path, parsed, root, {
         asr: false,
@@ -528,5 +559,179 @@ describe('stage 3 takes against stub servers', { timeout: 120_000 }, () => {
     rmSync(p.picksPath);
     writeFileSync(p.s.lockPath, '{ half');
     await expect(page(p.s)).rejects.toThrow(/is tts running/);
+  });
+
+  describe('lines heard by ASR (S9a)', () => {
+    const sha = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex');
+    const edit = (
+      s: ReturnType<typeof script>,
+      f: (e: LockManifest['entries'][string]) => void,
+    ) => {
+      const m = s.lock();
+      for (const e of Object.values(m.entries)) f(e);
+      writeFileSync(s.lockPath, JSON.stringify(m));
+    };
+
+    it('writes asr; without ASR the cer is null, not 0', async () => {
+      const s = script('ko', 'host: 듣지 않은 문장입니다.');
+      await s.run();
+      const e = Object.values(s.lock().entries)[0]!;
+      expect([e.asr, e.cer, e.heard]).toEqual([false, null, '']);
+      const s2 = script('ko', 'host: 들은 문장입니다.');
+      heardText = '들은 문장입니다.';
+      await s2.run({ asr: true });
+      const e2 = Object.values(s2.lock().entries)[0]!;
+      expect([e2.asr, e2.cer, e2.heard]).toEqual([true, 0, '들은 문장입니다.']);
+    });
+
+    it('a locked line no ASR heard is heard in place: no synthesis, same audio, no tts-server', async () => {
+      const s = script('ko', 'host: 제자리에서 듣는 문장입니다.');
+      await s.run();
+      const before = Object.values(s.lock().entries)[0]!;
+      const wav = sha(join(s.dir, 'audio', 'ko', before.src));
+      const env = s.lock().env.tts;
+      const calls = { ...stub.calls };
+      heardText = '제자리에서 듣는 문장입니다.';
+      const r = await s.run({ asr: true });
+      const e = Object.values(s.lock().entries)[0]!;
+      expect([e.asr, e.cer, e.attempt]).toEqual([true, 0, before.attempt]);
+      // what the audio hash reads stays: wav, duration, words
+      expect([e.duration, e.words]).toEqual([before.duration, before.words]);
+      expect(s.lock().env.tts).toEqual(env);
+      expect(sha(join(s.dir, 'audio', 'ko', e.src))).toBe(wav);
+      expect(stub.calls.transcribe - calls.transcribe).toBe(1);
+      expect(stub.calls.synthesize - calls.synthesize).toBe(0);
+      expect(stub.calls.align - calls.align).toBe(0);
+      expect(stub.calls.ttsHealth - calls.ttsHealth).toBe(0);
+      expect(r.logs.join('\n')).toMatch(/to hear 1 locked line/);
+      // heard once: the next run leaves it
+      const again = stub.calls.transcribe;
+      await s.run({ asr: true });
+      expect(stub.calls.transcribe).toBe(again);
+    });
+
+    it('locks from before the field: heard text means heard; none means not', async () => {
+      const s = script('ko', 'host: 옛 잠금의 문장입니다.');
+      await s.run();
+      heardText = '옛 잠금의 문장입니다.';
+      edit(s, (e) => {
+        delete e.asr;
+        e.heard = '옛 잠금의 문장입니다.';
+        e.cer = 0;
+      });
+      const calls = stub.calls.transcribe;
+      await s.run({ asr: true });
+      expect(stub.calls.transcribe).toBe(calls);
+      expect(Object.values(s.lock().entries)[0]!.asr).toBe(true);
+      edit(s, (e) => {
+        delete e.asr;
+        e.heard = '';
+        e.cer = 0;
+      });
+      await s.run({ asr: true });
+      expect(stub.calls.transcribe).toBe(calls + 1);
+    });
+
+    it('heard wrong: an unpicked line chooses again, a picked one stays with a warning', async () => {
+      const s = script('ko', 'host: 잘못 들리는 문장입니다.');
+      await s.run();
+      heardText = '전혀 다른 말';
+      const calls = { ...stub.calls };
+      const r = await s.run({ asr: true });
+      const e = Object.values(s.lock().entries)[0]!;
+      expect(e.asr).toBe(true);
+      expect(e.checks!.some((c) => c.startsWith('ASR round-trip CER'))).toBe(true);
+      // it was chosen again: heard in place, then the takes measured with ASR
+      expect(r.logs.join('\n')).toMatch(/recheck failed: ASR round-trip CER/);
+      expect(stub.calls.transcribe - calls.transcribe).toBeGreaterThan(1);
+      expect(stub.calls.align - calls.align).toBeGreaterThan(0);
+      // the same take came back (nothing else passed either): no "audio changed" claim
+      expect(r.warnings.join('\n')).not.toMatch(/the audio changed/);
+
+      const p = script('ko', 'host: 사람이 고른 문장입니다.');
+      await p.run();
+      pickTakes(p.path, p.parsed, root, ['one:0:0=0']);
+      await p.run();
+      heardText = '전혀 다른 말';
+      const before = sha(join(p.dir, 'audio', 'ko', Object.values(p.lock().entries)[0]!.src));
+      const synth = stub.calls.synthesize;
+      const kept = await p.run({ asr: true });
+      const pe = Object.values(p.lock().entries)[0]!;
+      expect(sha(join(p.dir, 'audio', 'ko', pe.src))).toBe(before);
+      expect(stub.calls.synthesize).toBe(synth);
+      expect(kept.warnings.join('\n')).toMatch(/picked take 0 fails: ASR round-trip CER/);
+    });
+
+    it('the take measure cache keeps ASR and no-ASR measurements of one take apart', async () => {
+      const s = script('ko', 'host: 측정을 나누는 문장입니다.');
+      await s.run();
+      const takes = join(root, '.s2v-cache', 'tts-takes');
+      const measures = () =>
+        readdirSync(takes).filter((f) => /^[0-9a-f]+\.[0-9a-f]+\.json$/.test(f));
+      const before = new Set(measures());
+      // no lock: the same take 0 is measured again, now with ASR, into a file of its own
+      rmSync(s.lockPath);
+      heardText = '측정을 나누는 문장입니다.';
+      await s.run({ asr: true });
+      const added = measures().filter((f) => !before.has(f));
+      expect(added).toHaveLength(1);
+      const tk = added[0]!.split('.')[0]!;
+      expect([...before].some((f) => f.startsWith(`${tk}.`))).toBe(true);
+    });
+
+    it('a run cut short while choosing again leaves the line to hear next time', async () => {
+      const s = script('ko', 'host: 다시 고르다 멈춘 문장입니다.');
+      await s.run();
+      heardText = '전혀 다른 말';
+      // heard in place (wrong), then measuring the takes to choose again fails: the run stops
+      transcribeUpTo = stub.calls.transcribe + 1;
+      await expect(s.run({ asr: true })).rejects.toThrow();
+      expect(Object.values(s.lock().entries)[0]!.asr).toBe(false);
+      // next time it is heard again, and chosen again
+      transcribeUpTo = Infinity;
+      const r = await s.run({ asr: true });
+      expect(r.logs.join('\n')).toMatch(/recheck failed: ASR round-trip CER/);
+    });
+
+    it('a retry whose new takes fail keeps the locked take if ASR hears it right', async () => {
+      const s = script('ko', 'host: 잠긴 테이크를 지키는 문장입니다.');
+      await s.run();
+      const before = Object.values(s.lock().entries)[0]!;
+      heardLocked = '잠긴 테이크를 지키는 문장입니다.';
+      heardText = '전혀 다른 말';
+      const r = await s.run({ asr: true, retry: ['one:0:0'] });
+      const e = Object.values(s.lock().entries)[0]!;
+      expect([e.asr, e.attempt]).toEqual([true, before.attempt]);
+      expect(r.warnings.join('\n')).toMatch(/kept the locked take/);
+      // heard wrong too: chosen again, and the warning says why
+      const t = script('ko', 'host: 잠긴 테이크도 틀린 문장입니다.');
+      await t.run();
+      heardLocked = '전혀 다른 말';
+      const r2 = await t.run({ asr: true, retry: ['one:0:0'] });
+      expect(r2.warnings.join('\n')).toMatch(/ASR heard the locked take fail — chose again/);
+    });
+
+    it('a retry of a picked line whose new takes fail keeps the pick and says it fails', async () => {
+      const s = script('ko', 'host: 고른 테이크를 지키는 문장입니다.');
+      await s.run();
+      pickTakes(s.path, s.parsed, root, ['one:0:0=0']);
+      await s.run();
+      heardLocked = '전혀 다른 말';
+      heardText = '전혀 다른 말';
+      const r = await s.run({ asr: true, retry: ['one:0:0'] });
+      const e = Object.values(s.lock().entries)[0]!;
+      expect([e.asr, e.attempt]).toEqual([true, 0]);
+      expect(r.warnings.join('\n')).toMatch(/kept your pick/);
+      expect(r.warnings.join('\n')).toMatch(/picked take 0 fails: .*ASR round-trip CER/);
+    });
+
+    it('with --recheck too, a run cut short leaves the line unheard', async () => {
+      const s = script('ko', 'host: 재검사 중에 멈춘 문장입니다.');
+      await s.run();
+      heardText = '전혀 다른 말';
+      transcribeUpTo = stub.calls.transcribe + 1;
+      await expect(s.run({ asr: true, recheck: true })).rejects.toThrow();
+      expect(Object.values(s.lock().entries)[0]!.asr).toBe(false);
+    });
   });
 });

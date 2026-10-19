@@ -66,6 +66,7 @@ export {
   assessSentence,
   bestAttempt,
   CER_LIMIT,
+  cerReason,
   RATE_RANGE,
   MAX_TAIL_S,
   type SentenceAssessment,

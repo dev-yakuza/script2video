@@ -70,8 +70,14 @@ export function assessSentence(input: {
         reasons.push(`${(b - a).toFixed(2)}s of non-speech sound ${where} (${db.toFixed(0)} dB)`);
     }
   } else if (tail > MAX_TAIL_S) reasons.push(`${tail.toFixed(2)}s of sound after the last word`);
-  if (cer !== null && cer > CER_LIMIT[lang]) reasons.push(`ASR round-trip CER ${cer.toFixed(2)}`);
+  const cerFails = cer !== null ? cerReason(cer, lang) : null;
+  if (cerFails) reasons.push(cerFails);
   return { ok: reasons.length === 0, cer, rate, tail, reasons };
+}
+
+/** The failed-check reason of an ASR round-trip CER over the language's limit (S9a), or null. */
+export function cerReason(cer: number, lang: Lang): string | null {
+  return cer > CER_LIMIT[lang] ? `ASR round-trip CER ${cer.toFixed(2)}` : null;
 }
 
 /**

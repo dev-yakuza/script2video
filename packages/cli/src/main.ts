@@ -5,7 +5,7 @@
  *   s2v --version [--json]   (the version a tool pins)
  *   s2v lint <script.md>
  *   s2v check <script.md>   (subtitles fit their boxes)
- *   s2v sentences <script.md>   (sentence ids to retry)
+ *   s2v sentences <script.md> [--json]   (sentence ids to retry; with lock state as JSON)
  *   s2v tts <script.md> [--no-asr] [--recheck] [--retry <scene[:paragraph[:sentence]]>]...
  *   s2v takes <script.md> [--all] [--id <id>]... [--no-open] [--out-dir <dir>] | --list [--id <id>]...   (listening page | takes of each line)
  *   s2v takes pick <script.md> <id>=<take> ...   (choose a take)
@@ -108,6 +108,7 @@ import { inspectScript } from './inspect.js';
 import { directDiagnostics, directHtml, directManifest } from './direct.js';
 import { commandOf, onOff, parseFor, USAGE, UsageError } from './args.js';
 import { printVersion, versionInfo } from './version.js';
+import { sentencesReport } from './sentences.js';
 import { proxyPlacement, writeProxyPng } from './watermark.js';
 import { cacheDirOf, checkOutDir, outDirOf } from './paths.js';
 
@@ -132,8 +133,11 @@ function load(path: string) {
   return loadWithDiagnostics(path).script;
 }
 
-/** `load`, also returning every diagnostic it printed. */
-function loadWithDiagnostics(path: string) {
+/**
+ * `load`, also returning every diagnostic it printed. `keepGoing`: lint errors do not stop it
+ * (only a script that does not parse) — for reports that show those errors themselves.
+ */
+function loadWithDiagnostics(path: string, keepGoing = false) {
   const { script, diagnostics } = parseScript(readFileSync(path, 'utf8'));
   const all = [...diagnostics.items];
   if (script) enrichCast(script, dirname(path));
@@ -172,7 +176,7 @@ function loadWithDiagnostics(path: string) {
     const over = d.code === 'max-duration' ? /^"([^"]+)"/.exec(d.message) : null;
     if (over) estimatedOver.add(over[1]!);
   }
-  if (!script || all.some((d) => d.severity === 'error')) process.exit(1);
+  if (!script || (!keepGoing && all.some((d) => d.severity === 'error'))) process.exit(1);
   return { script, diagnostics: all };
 }
 
@@ -638,8 +642,20 @@ async function main(): Promise<void> {
       break;
     }
     case 'sentences': {
+      const { values } = parseFor('sentences', rest);
+      // --json reports the lines that cannot be made (a missing recording, a speed out of range)
+      const loaded = values.json ? loadWithDiagnostics(path, true) : null;
+      const script = loaded ? loaded.script : load(path);
+      // for tools (S9a): lock key, voice attributes, pick and lock state of every sentence; the
+      // JSON is printed even when lint fails, and the exit code still says it failed
+      if (values.json) {
+        process.stdout.write(
+          `${JSON.stringify(sentencesReport(path, script, REPO_ROOT), null, 2)}\n`,
+        );
+        if (loaded!.diagnostics.some((d) => d.severity === 'error')) process.exitCode = 1;
+        break;
+      }
       // Sentence ids (for `tts --retry`) with their text.
-      const script = load(path);
       for (const scene of script.scenes)
         scene.blocks.forEach((b, bi) => {
           if (b.kind !== 'paragraph') return;

@@ -59,7 +59,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `new <dir> [--lang ko]`                                                                                                                | a new video folder with a starter script                                                                                                                       |
 | `lint <script>`                                                                                                                        | static checks: syntax, assets (pictures PNG/JPEG by their bytes, `::video` mp4/webm/mov/m4v), pronunciation, subtitle budget, length                           |
 | `check <script>`                                                                                                                       | lays every subtitle out in the real renderer and reports overflow                                                                                              |
-| `sentences <script>`                                                                                                                   | sentence ids (for `tts --retry`)                                                                                                                               |
+| `sentences <script> [--json]`                                                                                                          | sentence ids (for `tts --retry`); `--json`: each line's lock key, voice attributes, picked take and lock state (whether ASR heard it)                          |
 | `say "<text>" --script <script>`                                                                                                       | synthesize and play one sentence (pronunciation check)                                                                                                         |
 | `tts <script> [--retry id]`                                                                                                            | synthesize into the audio lock (only what changed)                                                                                                             |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>] [--watermark proxy]` | video + `.srt` `.vtt` chapters, description draft, thumbnail                                                                                                   |
@@ -101,6 +101,12 @@ share a work folder). `.s2v-cache/` can be deleted at any time; its `render/`, `
 `check/` folders are keyed `<script folder>-<hash>`, and folders without the hash are from older
 versions. `*.tmp.*` files in a results folder are left by an interrupted run. `dev` watches the script
 folder: keep `--out-dir` outside it.
+
+Each line in the audio lock records whether ASR heard it (`asr`); `cer` is `null` when it did not
+(`--no-asr`, mock audio, recordings). A `tts` run with ASR hears every locked line that was not
+heard, in place: the audio stays unless the line fails, and then it is chosen again (a picked take
+stays, with a warning). Only the aligner starts for that (the
+TTS server too when a line has to be chosen again).
 
 `render --watermark proxy` puts a red PROXY band on the video and the thumbnail and names the
 results `<output>.<lang>[.draft].proxy.*`, so they never replace unmarked ones (tools mark a render

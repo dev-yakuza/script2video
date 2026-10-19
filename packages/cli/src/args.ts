@@ -53,7 +53,7 @@ type Option = keyof typeof OPTIONS;
 export const FLAGS = {
   lint: [],
   check: [],
-  sentences: [],
+  sentences: ['json'],
   'export-script': [],
   doctor: [],
   pick: [],
@@ -200,7 +200,7 @@ export const USAGE = [
   's2v --version [--json]   (the version a tool pins)',
   's2v lint <script.md>',
   's2v check <script.md>   (subtitles fit their boxes)',
-  's2v sentences <script.md>   (sentence ids to retry)',
+  's2v sentences <script.md> [--json]   (sentence ids to retry; with lock state as JSON)',
   's2v tts <script.md> [--no-asr] [--recheck] [--retry <scene[:paragraph[:sentence]]>]...',
   's2v takes <script.md> [--all] [--id <id>]... [--no-open] [--out-dir <dir>] | --list [--id <id>]...   (listening page | takes of each line)',
   's2v takes pick <script.md> <id>=<take> ...   (choose a take)',

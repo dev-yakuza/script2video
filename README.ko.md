@@ -58,7 +58,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `new <dir> [--lang ko]`                                                                                                                | 시작용 대본이 든 새 영상 폴더 만들기                                                                                                   |
 | `lint <script>`                                                                                                                        | 정적 검사: 문법, 에셋(그림은 바이트로 PNG/JPEG, `::video`는 mp4/webm/mov/m4v), 발음, 자막 분량, 길이                                   |
 | `check <script>`                                                                                                                       | 모든 자막을 실제 렌더러로 배치해 넘침 확인                                                                                             |
-| `sentences <script>`                                                                                                                   | 문장 id 목록(`tts --retry`용)                                                                                                          |
+| `sentences <script> [--json]`                                                                                                          | 문장 id 목록(`tts --retry`용). `--json`: 문장마다 lock 키, 연기 속성, 고른 테이크, lock 상태(ASR이 들었는지)                           |
 | `say "<text>" --script <script>`                                                                                                       | 한 문장을 합성해 재생(발음 확인)                                                                                                       |
 | `tts <script> [--retry id]`                                                                                                            | 오디오 잠금에 합성(바뀐 부분만)                                                                                                        |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>] [--watermark proxy]` | 영상 + `.srt` `.vtt` 챕터, 설명문 초안, 썸네일                                                                                         |
@@ -94,6 +94,8 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 함께 씁니다. 같은 대본·출력·언어의 render와 snapshot은 작업 폴더를 함께 쓰므로 한 번에 하나씩 돌리세요.
 `.s2v-cache/`는 언제든 지워도 됩니다. 그 안의 `render/`·`draft-audio/`·`check/`는 `<대본 폴더>-<해시>`로 나뉘며,
 해시가 없는 폴더는 이전 버전의 것입니다. 결과물 폴더의 `*.tmp.*`는 중단된 실행이 남긴 것입니다. `dev`는 대본 폴더를 감시하므로 `--out-dir`은 그 밖에 두세요.
+
+음성 lock의 각 문장은 ASR이 들었는지(`asr`)를 기록하고, 듣지 않았으면(`--no-asr`, mock 음성, 녹음) `cer`는 `null`입니다. ASR을 켠 `tts`는 아직 듣지 않은 lock 문장을 그 자리에서 듣습니다. 음성은 그대로이고, 떨어지면 다시 고릅니다(고른 테이크는 경고만 하고 둡니다). 이때는 정렬 서버만 띄웁니다(다시 고를 문장이 있으면 TTS 서버도).
 
 `render --watermark proxy`는 영상과 썸네일에 빨간 PROXY 띠를 넣고 결과물 이름을 `<output>.<lang>[.draft].proxy.*`로 해서 표시 없는 결과물을 덮지 않습니다(도구가 사람이 승인하지 않은 렌더를 표시할 때). 띠는 로고 반대쪽 위 모서리에 놓입니다(자막이 위에 있으면 아래). 영상을 한 번 더 인코딩하므로(긴 1080p 영상은 몇 분) 시간이 더 걸리고, 장면 캐시는 표시 없는 렌더와 함께 쓰므로 둘을 동시에 돌리지 마세요. 글 파일은 표시 없는 것과 같습니다. 캐릭터가 있고 자막이 위에 있으면 아래 모서리의 띠가 캐릭터의 발을 가릴 수 있습니다.
 

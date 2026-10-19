@@ -58,7 +58,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `new <dir> [--lang ko]`                                                                                                                | 最初の台本が入った新しい動画フォルダを作る                                                                                                      |
 | `lint <script>`                                                                                                                        | 静的チェック: 文法、素材（画像はバイト列で PNG/JPEG、`::video` は mp4/webm/mov/m4v）、読み、字幕の分量、長さ                                    |
 | `check <script>`                                                                                                                       | すべての字幕を実際のレンダラーで配置し、はみ出しを確認                                                                                          |
-| `sentences <script>`                                                                                                                   | 文の id 一覧（`tts --retry` 用）                                                                                                                |
+| `sentences <script> [--json]`                                                                                                          | 文の id 一覧（`tts --retry` 用）。`--json`: 文ごとの lock キー、演技の属性、選んだテイク、lock の状態（ASR が聞いたか）                         |
 | `say "<text>" --script <script>`                                                                                                       | 1 文を合成して再生（読みの確認）                                                                                                                |
 | `tts <script> [--retry id]`                                                                                                            | オーディオロックに合成（変わった部分だけ）                                                                                                      |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>] [--watermark proxy]` | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル                                                                                     |
@@ -96,6 +96,8 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 実行してください。`.s2v-cache/` はいつ消してもかまいません。その中の `render/`・`draft-audio/`・`check/` は
 `<台本フォルダ>-<ハッシュ>` で分かれ、ハッシュのないフォルダは以前のバージョンのものです。成果物フォルダの
 `*.tmp.*` は中断した実行が残したものです。`dev` は台本フォルダを監視するので、`--out-dir` はその外に置いてください。
+
+音声 lock の各文は ASR が聞いたか（`asr`）を記録し、聞いていなければ（`--no-asr`、mock 音声、録音）`cer` は `null` です。ASR を有効にした `tts` は、まだ聞いていない lock の文をその場で聞きます。音声はそのままで、落ちたら選び直します（選んだテイクは警告だけで残します）。このときは整列サーバーだけを起動します（選び直す文があれば TTS サーバーも）。
 
 `render --watermark proxy` は動画とサムネイルに赤い PROXY の帯を入れ、成果物の名前を `<output>.<lang>[.draft].proxy.*` にして、印のない成果物を上書きしません（人が承認していないレンダーにツールが印を付けるとき）。帯はロゴと反対側の上の隅に置きます（字幕が上にあるときは下）。動画をもう一度エンコードするので（長い 1080p 動画では数分）時間が延び、シーンのキャッシュは印のないレンダーと共有するので同時に実行しないでください。テキストファイルは印のないものと同じです。キャラクターがいて字幕が上にあるときは、下の隅の帯がキャラクターの足元を隠すことがあります。
 

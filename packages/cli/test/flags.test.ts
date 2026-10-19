@@ -37,8 +37,8 @@ describe('strict flags', { timeout: 60_000 }, () => {
   it('refuse a flag the command does not take', () => {
     for (const [args, message] of [
       [
-        ['sentences', 'videos/sample-ko/script.ko.md', '--json'],
-        /s2v sentences: unknown option --json \(takes no options\)/,
+        ['sentences', 'videos/sample-ko/script.ko.md', '--frames'],
+        /s2v sentences: unknown option --frames \(takes: --json\)/,
       ],
       [
         ['snapshot', 'videos/sample-ko/script.ko.md', '--idle', 'on'],

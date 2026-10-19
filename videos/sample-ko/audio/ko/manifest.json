@@ -25,7 +25,8 @@
       "attempt": 1,
       "pauseRemoved": 0,
       "checks": [],
-      "f0": 234.3
+      "f0": 234.3,
+      "asr": true
     },
     "b4e7bfbf35bccb09be43aed2": {
       "src": "b4e7bfbf35bccb09be43aed2.wav",
@@ -95,7 +96,8 @@
       "attempt": 0,
       "pauseRemoved": 0,
       "checks": [],
-      "f0": 261.5
+      "f0": 261.5,
+      "asr": true
     },
     "526ac2fed8a56bbd782ec46f": {
       "src": "526ac2fed8a56bbd782ec46f.wav",
@@ -130,7 +132,8 @@
       "attempt": 0,
       "pauseRemoved": 0,
       "checks": [],
-      "f0": 200.5
+      "f0": 200.5,
+      "asr": true
     },
     "1f103d64e399f6a68d529241": {
       "src": "1f103d64e399f6a68d529241.wav",
@@ -180,7 +183,8 @@
       "attempt": 0,
       "pauseRemoved": 0,
       "checks": [],
-      "f0": 285.2
+      "f0": 285.2,
+      "asr": true
     },
     "a5837b08980246d7e2fa25d1": {
       "src": "a5837b08980246d7e2fa25d1.wav",
@@ -225,7 +229,8 @@
       "attempt": 0,
       "pauseRemoved": 0,
       "checks": [],
-      "f0": 273.9
+      "f0": 273.9,
+      "asr": true
     },
     "0e1d300529da6b3085ae544f": {
       "src": "0e1d300529da6b3085ae544f.wav",
@@ -280,7 +285,8 @@
       "attempt": 0,
       "pauseRemoved": 0.08,
       "checks": [],
-      "f0": 237
+      "f0": 237,
+      "asr": true
     }
   },
   "sentences": {
