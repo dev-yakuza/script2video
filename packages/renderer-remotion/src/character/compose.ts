@@ -8,19 +8,20 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Side } from '../shared.js';
+import {
+  type ImportedFacePlan,
+  type Layer,
+  type LayeredFacePlan,
+  planImportedFace,
+  planLayeredFace,
+} from './plan.js';
 import { type Placement, type ResolvedFace } from './resolve.js';
-import { IMPORTED_PARTS, type ImportedSpec } from './spec.js';
+import { type ImportedSpec } from './spec.js';
+
+export { HAIR_OVER_OPACITY, type Layer, YMM4_ORDER } from './plan.js';
 
 /** Bump when composition output changes for the same inputs. */
 export const COMPOSER_VERSION = 1;
@@ -36,15 +37,6 @@ export function ffmpegVersion(): string {
 }
 
 const fileHash = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
-
-export interface Layer {
-  file: string;
-  x: number;
-  y: number;
-  flip: boolean;
-  /** 0–1, for semi-transparent layers. */
-  opacity?: number;
-}
 
 /** Stack layers on a transparent W×H canvas into `out` (one ffmpeg call). */
 export function composite(out: string, size: [number, number], layers: Layer[]): void {
@@ -106,28 +98,12 @@ export interface ComposedFace {
 
 /** Compose one resolved (framing, face, side) into `cacheRoot/<hash>/`, reusing a cached result. */
 export function composeFace(resolved: ResolvedFace, cacheRoot: string): ComposedFace {
-  const exists = (f: string) => existsSync(f);
-  const { states } = resolved.head;
-  if (!exists(states.closed[0]!)) throw new Error(`head image missing: ${states.closed[0]}`);
-  for (const f of states.closed.slice(1)) if (!exists(f)) throw new Error(`eye part missing: ${f}`);
-  // Optional parts fall back: half → talk → closed; blink → closed.
-  const talk = exists(states.talk.at(-1)!) ? states.talk : states.closed;
-  const half = exists(states.half.at(-1)!) ? states.half : talk;
-  const blink = exists(states.blink.at(-1)!) ? states.blink : states.closed;
-  if (resolved.body && !exists(resolved.body.file))
-    throw new Error(`body image missing: ${resolved.body.file}`);
-  const front = resolved.front && exists(resolved.front.file) ? resolved.front : undefined;
+  return composePlanned(planLayeredFace(resolved, fileHash), cacheRoot);
+}
 
-  const inputs = [
-    ...new Set([
-      ...talk,
-      ...half,
-      ...blink,
-      ...states.closed,
-      ...(resolved.body ? [resolved.body.file] : []),
-      ...(front ? [front.file] : []),
-    ]),
-  ];
+/** Run a layered face plan (plan.ts): the cache key is the same as before the plan split (S4b). */
+export function composePlanned(plan: LayeredFacePlan, cacheRoot: string): ComposedFace {
+  const { resolved, states, front } = plan;
   const hash = createHash('sha256')
     .update(
       JSON.stringify({
@@ -138,8 +114,13 @@ export function composeFace(resolved: ResolvedFace, cacheRoot: string): Composed
         head: { flip: resolved.head.flip, x: resolved.head.x, y: resolved.head.y },
         body: resolved.body ? { ...resolved.body, file: null } : null,
         front: front ? { ...front, file: null } : null,
-        states: { closed: states.closed, half, talk, blink },
-        files: inputs.map((f) => [f, fileHash(f)]),
+        states: {
+          closed: states.closed,
+          half: states.half,
+          talk: states.talk,
+          blink: states.blink,
+        },
+        files: plan.files,
       }),
     )
     .digest('hex')
@@ -155,15 +136,15 @@ export function composeFace(resolved: ResolvedFace, cacheRoot: string): Composed
     }));
   const place = (p: Placement): Layer => ({ file: p.file, x: p.x, y: p.y, flip: p.flip });
   const done = out('.done');
-  if (!exists(done)) {
+  if (!existsSync(done)) {
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
     if (resolved.body) composite(out('body.png'), resolved.canvas, [place(resolved.body)]);
     if (front) composite(out('front.png'), resolved.canvas, [place(front)]);
     composite(out('head.png'), resolved.canvas, headLayers(states.closed));
-    composite(out('head-talk.png'), resolved.canvas, headLayers(talk));
-    composite(out('head-half.png'), resolved.canvas, headLayers(half));
-    composite(out('head-blink.png'), resolved.canvas, headLayers(blink));
+    composite(out('head-talk.png'), resolved.canvas, headLayers(states.talk));
+    composite(out('head-half.png'), resolved.canvas, headLayers(states.half));
+    composite(out('head-blink.png'), resolved.canvas, headLayers(states.blink));
     writeFileSync(done, '');
   }
   return {
@@ -183,30 +164,6 @@ export function composeFace(resolved: ResolvedFace, cacheRoot: string): Composed
   };
 }
 
-/**
- * YMM4 「動く立ち絵」 draw order, back to front (plan 3.2). Selection keys `後1`–`後3` / `他1`–`他3`
- * pick files in the 後 / 他 folders; a bare `後` / `他` is slot 1.
- */
-export const YMM4_ORDER = [
-  '後3',
-  '後2',
-  '後1',
-  '体',
-  '顔色',
-  '髪',
-  '口',
-  '目',
-  '眉',
-  '髪(半透明)',
-  '他3',
-  '他2',
-  '他1',
-] as const;
-/** Opacity of the second hair pass that lets eyes and brows show through the bangs (YMM4). */
-export const HAIR_OVER_OPACITY = 0.5;
-const folderOf = (key: string) => (key === '髪(半透明)' ? '髪' : key.replace(/[123]$/, ''));
-const slotKey = (key: string) => (key === '後' || key === '他' ? `${key}1` : key);
-
 export interface ImportedFrames {
   base: string;
   talk: string;
@@ -215,11 +172,7 @@ export interface ImportedFrames {
   hash: string;
 }
 
-/**
- * Whole images (closed / half / open / blink) of an imported YMM4 face for one side (plan C2 b).
- * Faces name a file stem per folder; folders a face leaves out use `faces.neutral`. The mouth uses
- * `stem.0` closed, the middle intermediate frame half, `stem` open; eyes `stem.0` for the blink.
- */
+/** Whole images (closed / half / open / blink) of an imported YMM4 face for one side (plan C2 b). */
 export function composeImported(
   dir: string,
   spec: ImportedSpec,
@@ -228,53 +181,12 @@ export function composeImported(
   size: [number, number],
   cacheRoot: string,
 ): ImportedFrames {
-  dir = join(dir, IMPORTED_PARTS);
-  const pick: Record<string, string> = {
-    ...normalize(spec.faces.neutral ?? {}),
-    ...normalize(spec.faces[face] ?? {}),
-  };
-  if (pick['髪']) pick['髪(半透明)'] = pick['髪'];
-  if (!spec.faces[face]) throw new Error(`face "${face}" is not defined in character.yaml`);
-  const fileOf = (key: string, name: string) => join(dir, folderOf(key), name);
-  const frames = (key: string, stem: string) => {
-    const folder = join(dir, folderOf(key));
-    const mids = existsSync(folder)
-      ? readdirSync(folder)
-          .map((f) => new RegExp(`^${escape(stem)}\\.(\\d+)\\.png$`).exec(f.normalize('NFC')))
-          .filter((m): m is RegExpExecArray => !!m && m[1] !== '0')
-          .map((m) => Number(m[1]))
-          .sort((a, b) => a - b)
-      : [];
-    const open = fileOf(key, `${stem}.png`);
-    const closed = existsSync(fileOf(key, `${stem}.0.png`)) ? fileOf(key, `${stem}.0.png`) : open;
-    const half =
-      mids.length > 0
-        ? fileOf(key, `${stem}.${mids[Math.floor((mids.length - 1) / 2)]}.png`)
-        : open;
-    return { open, closed, half };
-  };
-  const flip = spec.facing === side;
-  const layersFor = (state: 'base' | 'talk' | 'half' | 'blink'): Layer[] =>
-    YMM4_ORDER.filter((k) => pick[k]).map((k) => {
-      const stem = pick[k]!;
-      let file = fileOf(k, `${stem}.png`);
-      if (k === '口') {
-        const fr = frames(k, stem);
-        file = state === 'talk' ? fr.open : state === 'half' ? fr.half : fr.closed;
-      } else if (k === '目') {
-        const fr = frames(k, stem);
-        file = state === 'blink' ? fr.closed : fr.open;
-      }
-      if (!existsSync(file)) throw new Error(`part missing: ${file}`);
-      return {
-        file,
-        x: 0,
-        y: 0,
-        flip,
-        ...(k === '髪(半透明)' ? { opacity: HAIR_OVER_OPACITY } : {}),
-      };
-    });
-  const all = (['base', 'talk', 'half', 'blink'] as const).map((s) => layersFor(s));
+  return composeImportedPlanned(planImportedFace(dir, spec, face, side, size, fileHash), cacheRoot);
+}
+
+/** Run an imported face plan (plan.ts): the cache key is the same as before the plan split. */
+export function composeImportedPlanned(plan: ImportedFacePlan, cacheRoot: string): ImportedFrames {
+  const { size, flip, layers: all } = plan;
   const hash = createHash('sha256')
     .update(
       JSON.stringify({
@@ -282,7 +194,7 @@ export function composeImported(
         ffmpeg: ffmpegVersion(),
         size,
         flip,
-        layers: all.map((ls) => ls.map((l) => [l.file, fileHash(l.file), l.opacity ?? 1])),
+        layers: all.map((ls) => ls.map((l) => [l.file, plan.sha[l.file]!, l.opacity ?? 1])),
       }),
     )
     .digest('hex')
@@ -304,11 +216,3 @@ export function composeImported(
     hash,
   };
 }
-
-function normalize(sel: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(sel).map(([k, v]) => [slotKey(k.normalize('NFC')), v.normalize('NFC')]),
-  );
-}
-
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

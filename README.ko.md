@@ -121,6 +121,9 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 부분만 다시 검수할 수 있습니다. 형식에 없는 것(철자가 틀린 속성, 글자로 보일 자리의 지시문)이 있는
 대본은 거부합니다. 계산할 수 없는 해시는 이유와 함께 `null`입니다. `engine`은 구성 요소별로 비교하세요.
 `defaults_*`에 새 키가 생긴 것은 s2v에 새 필드가 생긴 것으로, 대본 해시에는 영향이 없습니다.
+캐릭터를 그리는 출력의 `presentation`에는 그 출력이 보여 주는 모든 face의 그림(합성이 읽는 파일의
+sha256)이 들어가고, 그림이 없는 face가 있으면 `null`입니다. 단일 이미지(classic) 캐릭터는 framing과
+무관하게 같은 그림입니다.
 
 ## 대본 쓰기
 

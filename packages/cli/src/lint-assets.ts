@@ -379,27 +379,47 @@ export function usedFaces(
   which: 'drawn' | 'wanted' = 'drawn',
 ): Map<Framing, Set<string>> {
   const used = new Map<Framing, Set<string>>();
+  for (const name of Object.keys(script.meta.outputs))
+    for (const [framing, faces] of outputUsedFaces(script, name, key, which)) {
+      const set = used.get(framing) ?? used.set(framing, new Set()).get(framing)!;
+      for (const f of faces) set.add(f);
+    }
+  return used;
+}
+
+/**
+ * The faces of one output (S4b plan 4.1; `inspect` hashes these): per scene framing the cast's
+ * default face first, then its lines' shown faces, the reaction faces as written and the faces
+ * listener looks may turn them into. Timing does not matter here, so this holds every face the
+ * renderer's timeline can ask for in this output.
+ */
+export function outputUsedFaces(
+  script: Script,
+  name: string,
+  key: string,
+  which: 'drawn' | 'wanted' = 'drawn',
+): Map<Framing, Set<string>> {
+  const used = new Map<Framing, Set<string>>();
   const add = (f: Framing, face: string) =>
     (used.get(f) ?? used.set(f, new Set()).get(f)!).add(face);
   const member = script.meta.cast[key]!;
-  for (const [name, profile] of Object.entries(script.meta.outputs)) {
-    const scenes = script.scenes.filter((s) => !profile.scenes || profile.scenes.includes(s.id));
-    const framings = sceneFramings(script.meta, scenes, profile);
-    scenes.forEach((scene, i) => {
-      const framing = framings[i]![key] ?? 'full';
-      add(framing, member.face);
-      for (const b of scene.blocks)
-        if (b.kind === 'paragraph' && (!b.only || b.only.includes(name))) {
-          if (b.cast === key)
-            for (const f of paragraphActing(script.meta, b, framing).faces)
-              add(framing, which === 'drawn' ? f.shown : f.wantedShown);
-          for (const s of b.sentences)
-            for (const r of s.reacts ?? []) if (r.faces[key]) add(framing, r.faces[key]);
-          for (const l of listenerLookFaces(script.meta, b, (c) => framings[i]![c] ?? 'full'))
-            if (l.cast === key) add(framing, which === 'drawn' ? l.face : l.wanted);
-        }
-    });
-  }
+  const profile = script.meta.outputs[name]!;
+  const scenes = script.scenes.filter((s) => !profile.scenes || profile.scenes.includes(s.id));
+  const framings = sceneFramings(script.meta, scenes, profile);
+  scenes.forEach((scene, i) => {
+    const framing = framings[i]![key] ?? 'full';
+    add(framing, member.face);
+    for (const b of scene.blocks)
+      if (b.kind === 'paragraph' && (!b.only || b.only.includes(name))) {
+        if (b.cast === key)
+          for (const f of paragraphActing(script.meta, b, framing).faces)
+            add(framing, which === 'drawn' ? f.shown : f.wantedShown);
+        for (const s of b.sentences)
+          for (const r of s.reacts ?? []) if (r.faces[key]) add(framing, r.faces[key]);
+        for (const l of listenerLookFaces(script.meta, b, (c) => framings[i]![c] ?? 'full'))
+          if (l.cast === key) add(framing, which === 'drawn' ? l.face : l.wanted);
+      }
+  });
   return used;
 }
 

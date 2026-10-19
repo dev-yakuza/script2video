@@ -31,7 +31,7 @@ const FM = (extra = '') =>
   `---\nlang: ko\ncast:\n  a: { voice: "qwen:Sohee" }\n  b: { voice: "qwen:Sohee" }\n${extra}---\n`;
 
 /** Writes a script (and files) into a fresh folder and inspects it. */
-function run(script: string, files: Record<string, string> = {}) {
+function run(script: string, files: Record<string, string | Buffer> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 's2v-inspect-'));
   for (const [p, data] of Object.entries(files)) {
     mkdirSync(dirname(join(dir, p)), { recursive: true });
@@ -41,7 +41,7 @@ function run(script: string, files: Record<string, string> = {}) {
   writeFileSync(path, script);
   return inspectScript(path, ROOT);
 }
-const ok = (script: string, files?: Record<string, string>): InspectResult => {
+const ok = (script: string, files?: Record<string, string | Buffer>): InspectResult => {
   const r = run(script, files);
   if ('errors' in r) throw new Error(r.errors.map((e) => e.message).join('\n'));
   return r.result;
@@ -588,7 +588,11 @@ describe('inspect: committed samples', () => {
       content: '02eb56d5d3c472e9f4a8c4c9c5acfea52112872f8ce903e01d7982e303044c75',
       voice: '5c6cd01ec8e066eddffc2e64ee832e2998a9fd429c61edb9709c09778f02d335',
       audio: 'd26e098ccacc1323c65a6b565049f4a0d8341f326a53f361180e02264f7b8e55',
-      presentation_by_output: { youtube: null, shorts: null },
+      // classic characters, hashed since S4b (null before: no approved value to migrate)
+      presentation_by_output: {
+        youtube: '742b087fde8d834fcdad754c0fc685f67d3c400b11cb1bb3bec125d5f5b1f368',
+        shorts: 'e065d5c7b90758c99931095ef0b8bae25d918d125d8b73c4a980cdc27aab25a5',
+      },
     },
   };
   it.each(Object.keys(GOLDEN))('%s', (rel) => {

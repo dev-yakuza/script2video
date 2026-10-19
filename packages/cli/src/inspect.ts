@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import {
   ACTING_VERSION,
   actingTable,
@@ -37,13 +37,19 @@ import {
   rhythmOn,
 } from '@script2video/core';
 import {
+  ArtMissing,
   assignSides,
+  CharacterSpecError,
   COMPOSER_VERSION,
   defaultCastColor,
+  FaceError,
   loadCharacterSpec,
+  planCharacter,
+  planIdentity,
   rendererSourceHash,
 } from '@script2video/renderer-remotion';
 import { enrichCast } from './cast-faces.js';
+import { outputUsedFaces } from './lint-assets.js';
 import { mockEnabled } from './mock-tts.js';
 import {
   ALIGN_VERSION,
@@ -96,7 +102,7 @@ export interface InspectResult {
   screen_text: ScreenText[];
   voices: { cast: string; voice: string; engine: string; lang: string }[];
   characters: { cast: string; dir: string; source: string }[];
-  faces: { output: string; cast: string; framing: string; face: string }[];
+  faces: { output: string; cast: string; framing: string; face: string; side?: string }[];
   files: InspectFile[];
 }
 
@@ -124,6 +130,13 @@ class Files {
     const f = this.seen.get(rel)!;
     return f.sha256 ? `${rel}@${f.sha256}` : `missing:${rel}`;
   }
+  /** sha256 of an existing file given by absolute path (character art: listed, then hashed). */
+  shaAbs(abs: string, kind: string): string {
+    const v = this.sha(relative(this.scriptDir, abs), kind);
+    if (v.startsWith('missing:'))
+      throw new ArtMissing(`missing file: ${v.slice('missing:'.length)}`);
+    return v.slice(v.lastIndexOf('@') + 1);
+  }
   list(): InspectFile[] {
     return [...this.seen.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
@@ -137,6 +150,12 @@ function rendererHash(repoRoot: string): string {
   const h = createHash('sha256').update(rendererSourceHash());
   const files = [
     join(repoRoot, 'packages', 'renderer-remotion', 'src', 'index.ts'),
+    join(repoRoot, 'packages', 'renderer-remotion', 'src', 'prepare.ts'),
+    // what a character composition reads (S4b): the plan, the face resolution, the yaml rules
+    ...readdirSync(join(repoRoot, 'packages', 'renderer-remotion', 'src', 'character'))
+      .filter((f) => f.endsWith('.ts'))
+      .sort()
+      .map((f) => join(repoRoot, 'packages', 'renderer-remotion', 'src', 'character', f)),
     join(repoRoot, 'fonts.lock.json'),
     // CLI code that shapes the picture and the sound: mouths, cast, mix, sound effects, publishing
     ...['mouth.ts', 'cast.ts', 'cast-faces.ts', 'media.ts', 'soundtrack.ts', 'publish.ts'].map(
@@ -397,6 +416,15 @@ export function inspectScript(
     // default subtitle mode (word for shorts)
     const transition = profile.transition ?? meta.transition;
     if (look.subtitles === (look.layout === 'shorts' ? 'word' : 'sentence')) delete look.subtitles;
+    const why: string[] = [];
+    // characters (S4b): drawn only when every cast member of the output has one (dialogueShape)
+    const castKeys = new Set(cast.map((c) => c.key));
+    const characterMode = cast.length > 0 && cast.every((c) => meta.cast[c.key]!.character);
+    const characters = characterArt(script, name, castResolved, scriptDir, files, why);
+    const lookOf = (looks: Record<string, string>) => {
+      const kept = Object.fromEntries(Object.entries(looks).filter(([c]) => castKeys.has(c)));
+      return Object.keys(kept).length > 0 ? kept : undefined;
+    };
     const value = {
       common,
       output: withoutDefaults(look, d.output!),
@@ -427,6 +455,15 @@ export function inspectScript(
             meta.cast[b.cast]?.character && b.sentences.some((s) => s.acting?.emo !== undefined)
               ? paragraphActing(meta, b, framings[i]![b.cast] ?? 'full')
               : undefined;
+          // what the stage shows of the characters (S4b plan 4.3): only in character mode
+          const acted = characterMode
+            ? paragraphActing(meta, b, framings[i]![b.cast] ?? 'full')
+            : undefined;
+          const listen = characterMode
+            ? listenerLookFaces(meta, b, (c) => framings[i]![c] ?? 'full')
+                .filter((l) => castKeys.has(l.cast))
+                .map(({ cast: c, wanted, face }) => ({ cast: c, wanted, face }))
+            : [];
           return [
             {
               p: b.cast,
@@ -435,6 +472,8 @@ export function inspectScript(
               motion: b.motion,
               faces: drawn?.faces.map((f) => f.drawn),
               runs: drawn?.runs,
+              acting: acted && { shown: acted.faces.map((f) => f.shown), runs: acted.runs },
+              listen: listen.length > 0 ? listen : undefined,
               sentences: b.sentences.map((s) => ({
                 pause: s.pauseAfter,
                 cues: s.cues.map((c) => ({
@@ -443,16 +482,18 @@ export function inspectScript(
                   attrs: presentationAttrs('cue', c.attrs, (p) => files.sha(p, 'image')),
                 })),
                 reacts: s.reacts,
+                looks: characterMode
+                  ? s.looks
+                      ?.map(({ at, looks }) => ({ at, looks: lookOf(looks) }))
+                      .filter((l) => l.looks)
+                  : undefined,
               })),
             },
           ];
         }),
       })),
+      characters: characterMode ? characters : undefined,
     };
-    const why: string[] = [];
-    const withArt = cast.filter((c) => meta.cast[c.key]!.character).map((c) => c.key);
-    if (withArt.length > 0)
-      why.push(`character art is hashed from S4b (cast ${withArt.join(', ')})`);
     const gone = missingIn(value);
     if (gone.length > 0) why.push(`missing file(s): ${[...new Set(gone)].join(', ')}`);
     presentation[name] = why.length ? null : hashOf(value);
@@ -474,7 +515,8 @@ export function inspectScript(
         const k = `${c}\u0000${framing}\u0000${face}`;
         if (seen.has(k)) return;
         seen.add(k);
-        faces.push({ output: name, cast: c, framing, face });
+        const side = castResolved.find((x) => x.key === c)?.side;
+        faces.push({ output: name, cast: c, framing, face, ...(side ? { side } : {}) });
       };
       for (const c of cast) add(c.key, meta.cast[c.key]!.face);
       for (const b of scene.blocks)
@@ -543,4 +585,80 @@ export function inspectScript(
       files: files.list(),
     },
   };
+}
+
+const ART_ERRORS = [ArtMissing, FaceError, CharacterSpecError];
+
+/**
+ * The composition input plans of the output's characters (S4b plan 4.2), with the faces the
+ * output can show. Problems the renderer would stop on become null reasons in `why`.
+ */
+function characterArt(
+  script: Script,
+  output: string,
+  cast: { key: string; side: string }[],
+  scriptDir: string,
+  files: Files,
+  why: string[],
+): Record<string, unknown> | undefined {
+  const { meta } = script;
+  const out: Record<string, unknown> = {};
+  for (const c of cast) {
+    const m = meta.cast[c.key]!;
+    if (!m.character) continue;
+    const ch =
+      typeof m.character === 'string' ? { dir: m.character, facing: 'front' } : m.character;
+    const abs = resolve(scriptDir, ch.dir);
+    // folder-relative paths, and no second "character <key> …:" (the plan names the cast too)
+    const tell = (msg: string) =>
+      why.push(
+        `character ${c.key} (${ch.dir}): ${msg
+          .replace(new RegExp(`^character ${c.key}( \\([^)]*\\))?: `), '')
+          .split(abs + sep)
+          .join('')
+          .split(abs)
+          .join(ch.dir)}`,
+      );
+    if (!existsSync(abs)) {
+      tell(`character folder not found: ${ch.dir}`);
+      continue;
+    }
+    const used = outputUsedFaces(script, output, c.key);
+    try {
+      const plan = planCharacter(
+        abs,
+        used,
+        m.face,
+        c.side as 'left' | 'right',
+        (f) => files.shaAbs(f, 'character'),
+        { key: c.key, dir: ch.dir },
+      );
+      const art: Record<string, unknown> = {};
+      if (plan.source === 'classic')
+        for (const [face, p] of plan.faces) art[face] = planIdentity(p, abs);
+      else if (plan.source === 'imported') {
+        for (const f of plan.ignoredFramings)
+          tell(`imported characters have only the full framing (::shot ${f})`);
+        for (const [face, p] of plan.faces) art[`full/${face}/${c.side}`] = planIdentity(p, abs);
+      } else
+        for (const set of plan.sets)
+          for (const [face, p] of set.faces)
+            art[`${set.framing}/${face}/${c.side}`] = planIdentity(p, abs);
+      const shown = new Set([...used.values()].flatMap((s) => [...s]));
+      out[c.key] = {
+        dir: relative(scriptDir, abs).split(sep).join('/'),
+        // parts characters are drawn facing the center whatever the script says (index.ts)
+        facing: plan.source === 'classic' ? ch.facing : undefined,
+        source: plan.source,
+        motions: m.faceMotions
+          ? Object.fromEntries(Object.entries(m.faceMotions).filter(([f]) => shown.has(f)))
+          : undefined,
+        art,
+      };
+    } catch (e) {
+      if (!ART_ERRORS.some((k) => e instanceof k)) throw e;
+      tell((e as Error).message);
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }

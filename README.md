@@ -149,7 +149,9 @@ and files, and gives one hash per kind of change (`content`, `voice`, `audio`, o
 refuses scripts with anything the format does not know (a misspelled attribute, a directive
 where it would be shown as text). A hash it cannot compute is `null` with a reason. Compare
 `engine` part by part; a new key in `defaults_*` comes from a new s2v field and changes no
-script hash.
+script hash. When an output draws characters, its `presentation` includes the art of every face it
+shows (the files each composition reads, by sha256); a face without its pictures makes it `null`.
+Classic single-image characters look the same in every framing.
 
 ## Writing scripts
 
