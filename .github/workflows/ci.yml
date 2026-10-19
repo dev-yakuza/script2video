@@ -76,6 +76,11 @@ jobs:
       - run: node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output youtube --frozen-audio
       - run: node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output shorts --frozen-audio
       - run: test -s out/sample-ko/youtube.ko.mp4 && test -s out/sample-ko/youtube.ko.srt && test -s out/sample-ko/youtube.ko.thumbnail.png
+      - name: snapshot stills (S6)
+        run: |
+          node packages/cli/dist/main.js snapshot videos/sample-ko/script.ko.md --output youtube --frozen-audio --frames --out-dir "$RUNNER_TEMP/stills"
+          test -s "$RUNNER_TEMP/stills/youtube.ko.snapshot.png"
+          node scripts/check-frames.mjs "$RUNNER_TEMP/stills/youtube.ko.frames" 2
       - uses: actions/upload-artifact@v4
         if: always()
         with:

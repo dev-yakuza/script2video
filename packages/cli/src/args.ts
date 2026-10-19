@@ -43,6 +43,7 @@ export const OPTIONS = {
   idle: { type: 'string' },
   rhythm: { type: 'string' },
   'out-dir': { type: 'string' },
+  frames: { type: 'boolean', default: false },
 } as const satisfies Record<string, ParseArgsOptionDescriptor>;
 
 type Option = keyof typeof OPTIONS;
@@ -78,7 +79,7 @@ export const FLAGS = {
   'character redo': ['seed'],
   'character missing': ['apply'],
   'character import': ['out', 'name'],
-  snapshot: ['output', 'draft', 'fps', 'rhythm', 'out-dir'],
+  snapshot: ['output', 'draft', 'fps', 'rhythm', 'out-dir', 'frozen-audio', 'frames'],
   say: ['voice', 'lang', 'style', 'script', 'no-play'],
   tts: ['no-asr', 'recheck', 'retry'],
   direct: ['output', 'fps', 'rhythm', 'no-open', 'out-dir'],
@@ -205,7 +206,7 @@ export const USAGE = [
   's2v inspect <script.md> --json [--hash-version 1]   (what the script is made of, hashed by kind)',
   's2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open] [--out-dir <dir>]   (direction plan and notes)',
   's2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]',
-  's2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>]',
+  's2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>] [--frozen-audio] [--frames]',
   's2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>]',
   's2v audio prune <script.md>   (drop locked audio the script no longer uses)',
   's2v export-script <script.md>   (reading script for a recording session)',

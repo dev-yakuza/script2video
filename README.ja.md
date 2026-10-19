@@ -62,7 +62,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `say "<text>" --script <script>`                                                                                   | 1 文を合成して再生（読みの確認）                                                                                                                |
 | `tts <script> [--retry id]`                                                                                        | オーディオロックに合成（変わった部分だけ）                                                                                                      |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>]` | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル                                                                                     |
-| `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>]`                                           | シーンごとの静止画を並べて数秒で確認                                                                                                            |
+| `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>] [--frozen-audio] [--frames]`               | シーンごとの静止画を並べて数秒で確認。`--frames`: 画面が変わるたびの静止画と `index.json`                                                       |
 | `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>]`                               | 演出計画と演出ノートのページ（`out/<video>/direct/`）、音声なしでも可                                                                           |
 | `dev <script> [--video]`                                                                                           | 編集ループ: 保存のたびに lint → tts → snapshot                                                                                                  |
 | `takes <script> [--all] [--id id] [--no-open] [--out-dir <dir>]`                                                   | 試聴ページ（`out/<動画>/takes/<lang>/`）: 文ごとのすべてのテイクを単独・前後の文とつなげて聞き、ラジオで `takes pick` / `unpick` コマンドを作る |
@@ -96,6 +96,8 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 実行してください。`.s2v-cache/` はいつ消してもかまいません。その中の `render/`・`draft-audio/`・`check/` は
 `<台本フォルダ>-<ハッシュ>` で分かれ、ハッシュのないフォルダは以前のバージョンのものです。成果物フォルダの
 `*.tmp.*` は中断した実行が残したものです。`dev` は台本フォルダを監視するので、`--out-dir` はその外に置いてください。
+
+`snapshot --frames` は並べた一枚の隣に `<output>.<lang>.frames/` を書きます。画面が変わる時点（最初の画が落ち着いた後、画と cue ごと、キャラクターの表情と既定の表情に戻るとき、舞台の入れ替え、保たれる動き）ごとに原寸の静止画をシーンあたり最大 12 枚、動画全体の通し番号で、そして静止画ごとのシーン・フレーム・秒・理由と s2v id、台本の sha256 を記した `index.json` を書きます。静止画のキャラクターは休んだ姿勢です（呼吸・まばたき・うなずきなし）。実行は前回の並べた一枚と静止画を先に消します。`--frames` なしで実行すると静止画フォルダはそのままです。`--frozen-audio` は音声 lock をそのまま使い、音声のない文があれば失敗します。`script_sha256` は台本だけを見て、素材とキャラクターの絵は見ません。中断した実行は `<…>.frames.tmp/` を残すことがあります。
 
 `inspect --json` は動画を検収するツール向けです。出力、シーン、画面の文字、声、ファイルの一覧と、変更の
 種類ごとのハッシュ（`content`、`voice`、`audio`、出力ごとの `presentation`、`engine` の構成要素）を出すので、

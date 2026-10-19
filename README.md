@@ -63,7 +63,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `say "<text>" --script <script>`                                                                                   | synthesize and play one sentence (pronunciation check)                                                                                                         |
 | `tts <script> [--retry id]`                                                                                        | synthesize into the audio lock (only what changed)                                                                                                             |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>]` | video + `.srt` `.vtt` chapters, description draft, thumbnail                                                                                                   |
-| `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>]`                                           | one still per scene, tiled, in seconds                                                                                                                         |
+| `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>] [--frozen-audio] [--frames]`               | one still per scene, tiled, in seconds; `--frames`: every change of picture as its own still, with an `index.json`                                             |
 | `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>]`                               | direction plan and director notes as a page (`out/<video>/direct/`); no audio needed                                                                           |
 | `dev <script> [--video]`                                                                                           | edit loop: lint → tts → snapshot on every save                                                                                                                 |
 | `takes <script> [--all] [--id id] [--no-open] [--out-dir <dir>]`                                                   | a listening page (`out/<video>/takes/<lang>/`): every take of each line, alone or between its neighbours; the radios write the `takes pick` / `unpick` command |
@@ -101,6 +101,15 @@ share a work folder). `.s2v-cache/` can be deleted at any time; its `render/`, `
 `check/` folders are keyed `<script folder>-<hash>`, and folders without the hash are from older
 versions. `*.tmp.*` files in a results folder are left by an interrupted run. `dev` watches the script
 folder: keep `--out-dir` outside it.
+
+`snapshot --frames` writes `<output>.<lang>.frames/` beside the sheet: a full-size still at every
+point the picture changes (the first visual settled, each visual and cue, a character's face and
+its return to the default, stage switches, held motions), at most 12 a scene, numbered over the
+video, and `index.json` with each still's scene, frame, second and reasons plus the s2v id and the
+script's sha256. Stills show characters at rest: no breathing, blinking or nodding. A run removes
+last run's sheet and stills first; without `--frames` the stills folder is left as it is.
+`--frozen-audio` uses the audio lock as it is and fails if a line has none. `script_sha256` covers
+the script only, not its assets or character art; an interrupted run may leave `<…>.frames.tmp/`.
 
 `inspect --json` is for tools that review videos: it lists outputs, scenes, screen text, voices
 and files, and gives one hash per kind of change (`content`, `voice`, `audio`, one

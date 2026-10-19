@@ -41,8 +41,8 @@ describe('strict flags', { timeout: 60_000 }, () => {
         /s2v sentences: unknown option --json \(takes no options\)/,
       ],
       [
-        ['snapshot', 'videos/sample-ko/script.ko.md', '--frozen-audio'],
-        /unknown option --frozen-audio \(takes: --output/,
+        ['snapshot', 'videos/sample-ko/script.ko.md', '--idle', 'on'],
+        /unknown option --idle \(takes: --output/,
       ],
       [
         ['tts', 'videos/sample-ko/script.ko.md', '--output', 'shorts'],

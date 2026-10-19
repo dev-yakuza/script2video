@@ -4,7 +4,7 @@
  */
 
 import { bundle } from '@remotion/bundler';
-import { renderMedia, renderStill, selectComposition } from '@remotion/renderer';
+import { openBrowser, renderMedia, renderStill, selectComposition } from '@remotion/renderer';
 import type { Timeline, TimelineScene } from '@script2video/core';
 import { createHash } from 'node:crypto';
 import {
@@ -28,6 +28,7 @@ import {
   loadCharacterSpec,
 } from './character/spec.js';
 import type { PartsFace, PartsSet } from './remotion/types.js';
+import { stillPoints, type SceneStills } from './stills.js';
 import {
   assignSides,
   stagePlan,
@@ -52,6 +53,14 @@ export {
 } from './character/spec.js';
 export { FaceError, isSingle, resolveFace, setOf } from './character/resolve.js';
 export { COMPOSER_VERSION } from './character/compose.js';
+export {
+  SETTLE,
+  STILLS_PER_SCENE,
+  stillPoints,
+  type SceneStills,
+  type StillPoint,
+  type StillPointOptions,
+} from './stills.js';
 export {
   assignSides,
   dialogueShape,
@@ -701,64 +710,100 @@ export interface StillRequest {
   /** Scene-local frame. */
   frame: number;
   output: string;
+  /** Pixel scale of this still (default: the options' scale, else 1). */
+  scale?: number;
+}
+
+/** What a still plan sees once the cast and the stage are prepared (S6 plan 2.3). */
+export interface StillContext {
+  /** When each scene's picture changes, by the renderer's rules. */
+  points: () => SceneStills[];
 }
 
 /**
- * Render single frames (PNG) of scenes without encoding video — used by `s2v snapshot` to
- * review the layout of every scene in seconds (PLAN 5.12).
+ * Render single frames (PNG) of scenes without encoding video — `s2v snapshot` (contact sheet
+ * and `--frames`) and the thumbnail. The plan is the requests, or a function of the prepared
+ * cast and stage that returns them; one bundle and one browser serve them all.
  */
-export async function renderStills(opts: RenderOptions, requests: StillRequest[]): Promise<void> {
+export async function renderStills(
+  opts: RenderOptions,
+  plan: StillRequest[] | ((ctx: StillContext) => StillRequest[]),
+): Promise<StillRequest[]> {
   mkdirSync(opts.workDir, { recursive: true });
   const { publicDir, imageSizes, assetPaths, cast, subtitleStyle, logo } = preparePublicDir(opts);
+  const stage = stages(opts);
+  const transition = opts.transition ?? 'none';
+  const requests =
+    typeof plan === 'function'
+      ? plan({ points: () => stillPoints(opts.timeline.scenes, { cast, stage, transition }) })
+      : plan;
+  if (requests.length === 0) return requests;
   const serveUrl = await bundle({
     entryPoint: ENTRY,
     outDir: join(opts.workDir, 'bundle'),
     publicDir,
   });
-  const stage = stages(opts);
-  for (const r of requests) {
-    const scene = opts.timeline.scenes.find((s) => s.id === r.sceneId);
-    if (!scene) throw new Error(`unknown scene ${r.sceneId}`);
-    const inputProps = {
-      scene,
-      lang: opts.timeline.lang,
-      fps: opts.timeline.fps,
-      aspect: opts.aspect,
-      subtitleMode: opts.subtitleMode ?? 'sentence',
-      imageSizes,
-      assetPaths,
-      layout: opts.layout ?? 'presenter',
-      cast,
-      mouths: Object.fromEntries(
-        scene.audio.map((a) => [a.sentenceId, opts.mouths?.[a.sentenceId] ?? '']),
-      ),
-      stage: stage[scene.id] ?? { left: [], right: [] },
-      ...(subtitleStyle ? { subtitleStyle } : {}),
-      transition: opts.transition ?? 'none',
-      idle: opts.idle ?? true,
-      output: opts.timeline.output,
-      still: true,
-      ...(opts.theme ? { theme: opts.theme } : {}),
-      ...(logo ? { logo } : {}),
-    };
-    const composition = await selectComposition({
-      serveUrl,
-      id: 'S2VScene',
-      inputProps,
-      logLevel: 'warn',
-    });
-    await renderStill({
-      serveUrl,
-      composition,
-      inputProps,
-      frame: Math.min(Math.max(0, r.frame), scene.durationFrames - 1),
-      output: r.output,
-      imageFormat: 'png',
-      scale: opts.scale ?? 1,
-      logLevel: 'warn',
-      chromiumOptions: { gl: GL },
-    });
+  // One browser for every still (GL goes here: a shared browser ignores per-call options; no
+  // forced device scale, so each still keeps its own scale).
+  const browser = await openBrowser('chrome', { chromiumOptions: { gl: GL }, logLevel: 'warn' });
+  try {
+    const props = new Map<string, Record<string, unknown>>();
+    const compositions = new Map<string, Awaited<ReturnType<typeof selectComposition>>>();
+    for (const r of requests) {
+      const scene = opts.timeline.scenes.find((s) => s.id === r.sceneId);
+      if (!scene) throw new Error(`unknown scene ${r.sceneId}`);
+      if (!props.has(scene.id)) {
+        const inputProps = {
+          scene,
+          lang: opts.timeline.lang,
+          fps: opts.timeline.fps,
+          aspect: opts.aspect,
+          subtitleMode: opts.subtitleMode ?? 'sentence',
+          imageSizes,
+          assetPaths,
+          layout: opts.layout ?? 'presenter',
+          cast,
+          mouths: Object.fromEntries(
+            scene.audio.map((a) => [a.sentenceId, opts.mouths?.[a.sentenceId] ?? '']),
+          ),
+          stage: stage[scene.id] ?? { left: [], right: [] },
+          ...(subtitleStyle ? { subtitleStyle } : {}),
+          transition,
+          idle: opts.idle ?? true,
+          output: opts.timeline.output,
+          still: true,
+          ...(opts.theme ? { theme: opts.theme } : {}),
+          ...(logo ? { logo } : {}),
+        };
+        props.set(scene.id, inputProps);
+        compositions.set(
+          scene.id,
+          await selectComposition({
+            serveUrl,
+            id: 'S2VScene',
+            inputProps,
+            logLevel: 'warn',
+            puppeteerInstance: browser,
+          }),
+        );
+      }
+      await renderStill({
+        serveUrl,
+        composition: compositions.get(scene.id)!,
+        inputProps: props.get(scene.id)!,
+        frame: Math.min(Math.max(0, r.frame), scene.durationFrames - 1),
+        output: r.output,
+        imageFormat: 'png',
+        scale: r.scale ?? opts.scale ?? 1,
+        logLevel: 'warn',
+        puppeteerInstance: browser,
+      });
+    }
+  } finally {
+    // a failure to close must not hide the error that got us here
+    await browser.close({ silent: true }).catch(() => {});
   }
+  return requests;
 }
 
 export interface SubtitleMeasureOptions {

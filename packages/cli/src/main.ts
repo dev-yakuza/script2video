@@ -13,7 +13,7 @@
  *   s2v inspect <script.md> --json [--hash-version 1]   (what the script is made of, hashed by kind)
  *   s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open] [--out-dir <dir>]   (direction plan and notes)
  *   s2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]
- *   s2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>]
+ *   s2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>] [--frozen-audio] [--frames]
  *   s2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>]
  *   s2v audio prune <script.md>   (drop locked audio the script no longer uses)
  *   s2v export-script <script.md>   (reading script for a recording session)
@@ -40,6 +40,7 @@
  *   s2v tts-server start   (keep the TTS server running)
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,7 +98,7 @@ import {
 } from './lint-assets.js';
 import { pick } from './pick.js';
 import { runResident, say } from './say.js';
-import { snapshot } from './snapshot.js';
+import { clearSnapshot, snapshot, type SnapshotTargets } from './snapshot.js';
 import { loadAudioManifest, pruneAudio, synthesizeScript } from './tts.js';
 import { listTakes, pickTakes, unpickTakes } from './takes.js';
 import { buildTakesPage, openPage } from './takes-page.js';
@@ -106,7 +107,7 @@ import { voiceRefs } from './voice-refs.js';
 import { inspectScript } from './inspect.js';
 import { directDiagnostics, directHtml, directManifest } from './direct.js';
 import { commandOf, onOff, parseFor, USAGE, UsageError } from './args.js';
-import { printVersion } from './version.js';
+import { printVersion, versionInfo } from './version.js';
 import { cacheDirOf, checkOutDir, outDirOf } from './paths.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -500,10 +501,32 @@ async function main(): Promise<void> {
       const lockDir = draft
         ? join(cacheDirOf(REPO_ROOT, 'draft-audio', path), script.meta.lang)
         : undefined;
-      // Snapshot needs the timeline (audio durations + word timings); synthesize what is missing.
+      const name = `${outputName}.${script.meta.lang}`;
+      const targets: SnapshotTargets = {
+        sheet: join(outDir, `${name}.snapshot.png`),
+        ...(values.frames
+          ? {
+              frames: {
+                dir: join(outDir, `${name}.frames`),
+                meta: {
+                  output: outputName,
+                  lang: script.meta.lang,
+                  draft,
+                  s2v_version: versionInfo(REPO_ROOT, { git: false }).id,
+                  script_sha256: createHash('sha256').update(readFileSync(path)).digest('hex'),
+                },
+              },
+            }
+          : {}),
+      };
+      // last run's results go first: a failed run leaves none (S2 rule)
+      clearSnapshot(targets);
+      // Snapshot needs the timeline (audio durations + word timings): synthesize what is missing,
+      // or with --frozen-audio take the lock as it is (S6).
       const tts = await synthesizeScript(path, script, REPO_ROOT, {
         asr: false,
         draft,
+        frozen: values['frozen-audio'],
         ...(lockDir ? { lockDir } : {}),
         log,
       });
@@ -515,9 +538,10 @@ async function main(): Promise<void> {
         Number(values.fps),
         rhythmOpts,
       );
+      // its own work folder: a render of the same output may run beside it (S6)
       const workDir = join(
         cacheDirOf(REPO_ROOT, 'render', path),
-        `${outputName}.${script.meta.lang}`,
+        `${name}${draft ? '.draft' : ''}.snapshot`,
       );
       mkdirSync(outDir, { recursive: true });
       const sheet = await snapshot(
@@ -537,7 +561,7 @@ async function main(): Promise<void> {
           workDir,
           log,
         },
-        join(outDir, `${outputName}.${script.meta.lang}.snapshot.png`),
+        targets,
       );
       log(`→ ${sheet}`);
       break;

@@ -27,7 +27,9 @@ import {
   crowdScale,
   crowdStep,
   drawnFace,
+  availableFaces,
   drawnFaceChanges,
+  partsOf,
   FACE_HOLD,
   faceAt,
   hash,
@@ -464,18 +466,6 @@ function classicFace(c: CastInfo, face: string): CharacterFace {
 
 function partsFace(set: PartsSet, face: string, fallback: string): PartsFace {
   return set.faces[drawnFace(face, fallback, Object.keys(set.faces))]!;
-}
-
-/** Parts set a character uses in this scene's framing (null: classic art). */
-function partsOf(c: CastInfo, framing: Record<string, string>): PartsSet | null {
-  return c.character?.parts
-    ? (c.character.parts[framing[c.key] ?? 'full'] ?? c.character.parts.full ?? null)
-    : null;
-}
-
-/** Faces the art can draw in this scene (the order is the art's own: its first face is the last resort). */
-function availableFaces(c: CastInfo, parts: PartsSet | null): string[] {
-  return Object.keys(parts ? parts.faces : (c.character?.faces ?? {}));
 }
 
 /** Additive listener nod of a character at a frame (40% of nod / head-nod). */

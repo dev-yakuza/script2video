@@ -637,7 +637,7 @@ export function listenerNods(input: {
       if (stage[side].some((sw) => sw.keys.includes(key))) return side;
     return undefined;
   };
-  const held = new Set(['sink', 'lean', 'head-tilt']);
+  const held = HELD_MOTIONS;
   // Lines of others ended since each character's last nod (absent: no nod yet in this scene).
   const since = new Map<string, number>();
   const everyone = new Set([
@@ -738,4 +738,32 @@ export function breath(input: {
   return (
     b.amplitude * envelope * (1 - 0.5 * speaking) * (1 - Math.cos((2 * Math.PI * t) / T)) * 0.5
   );
+}
+
+/** Motions that end in a pose kept until the motion ends (the others play once). */
+export const HELD_MOTIONS: ReadonlySet<string> = new Set(['sink', 'lean', 'head-tilt']);
+
+/** What the face choice reads of a cast member (the prepared cast and the bundle's CastInfo). */
+export interface FaceArt<P extends { faces: Record<string, unknown> }> {
+  key: string;
+  face: string;
+  character?: { faces: Record<string, unknown>; parts?: Record<string, P> };
+}
+
+/** Parts set a character uses in this scene's framing (null: classic art). */
+export function partsOf<P extends { faces: Record<string, unknown> }>(
+  c: FaceArt<P>,
+  framing: Record<string, string>,
+): P | null {
+  return c.character?.parts
+    ? (c.character.parts[framing[c.key] ?? 'full'] ?? c.character.parts.full ?? null)
+    : null;
+}
+
+/** Faces the art can draw in this scene (the order is the art's own: its first face is the last resort). */
+export function availableFaces<P extends { faces: Record<string, unknown> }>(
+  c: FaceArt<P>,
+  parts: P | null,
+): string[] {
+  return Object.keys(parts ? parts.faces : (c.character?.faces ?? {}));
 }

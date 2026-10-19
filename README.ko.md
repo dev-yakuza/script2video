@@ -62,7 +62,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `say "<text>" --script <script>`                                                                                   | 한 문장을 합성해 재생(발음 확인)                                                                                                       |
 | `tts <script> [--retry id]`                                                                                        | 오디오 잠금에 합성(바뀐 부분만)                                                                                                        |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>]` | 영상 + `.srt` `.vtt` 챕터, 설명문 초안, 썸네일                                                                                         |
-| `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>]`                                           | 장면마다 정지 화면 한 장을 모아 몇 초 만에 확인                                                                                        |
+| `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>] [--frozen-audio] [--frames]`               | 장면마다 정지 화면 한 장을 모아 몇 초 만에 확인. `--frames`: 화면이 바뀌는 시점마다 낱장과 `index.json`                                |
 | `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>]`                               | 연출 계획과 감독 노트 페이지(`out/<video>/direct/`), 음성 없이도 됨                                                                    |
 | `dev <script> [--video]`                                                                                           | 편집 루프: 저장할 때마다 lint → tts → snapshot                                                                                         |
 | `takes <script> [--all] [--id id] [--no-open] [--out-dir <dir>]`                                                   | 청취 페이지(`out/<영상>/takes/<lang>/`): 문장별 모든 테이크를 단독·앞뒤 문장과 이어 듣고, 라디오로 `takes pick` / `unpick` 명령을 만듦 |
@@ -94,6 +94,8 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 함께 씁니다. 같은 대본·출력·언어의 render와 snapshot은 작업 폴더를 함께 쓰므로 한 번에 하나씩 돌리세요.
 `.s2v-cache/`는 언제든 지워도 됩니다. 그 안의 `render/`·`draft-audio/`·`check/`는 `<대본 폴더>-<해시>`로 나뉘며,
 해시가 없는 폴더는 이전 버전의 것입니다. 결과물 폴더의 `*.tmp.*`는 중단된 실행이 남긴 것입니다. `dev`는 대본 폴더를 감시하므로 `--out-dir`은 그 밖에 두세요.
+
+`snapshot --frames`는 모아 찍은 한 장 옆에 `<output>.<lang>.frames/`를 씁니다. 화면이 바뀌는 시점(첫 그림이 자리 잡은 뒤, 그림과 cue마다, 캐릭터의 얼굴과 기본 얼굴로 돌아갈 때, 무대 교체, 유지되는 동작)마다 원래 크기의 낱장을 장면당 최대 12장, 영상 전체 번호로, 그리고 낱장마다 장면·프레임·초·이유와 s2v id, 대본 sha256을 적은 `index.json`을 씁니다. 정지 화면의 캐릭터는 쉬는 자세입니다(숨쉬기·깜빡임·끄덕임 없음). 실행은 지난 정지 화면과 낱장을 먼저 지웁니다. `--frames` 없이 돌리면 낱장 폴더는 그대로입니다. `--frozen-audio`는 음성 lock을 그대로 쓰고, 음성이 없는 문장이 있으면 실패합니다. `script_sha256`은 대본만 보며 에셋과 캐릭터 그림은 보지 않습니다. 중단된 실행은 `<…>.frames.tmp/`를 남길 수 있습니다.
 
 `inspect --json`은 영상을 검수하는 도구용입니다. 출력, 장면, 화면 글자, 목소리, 파일 목록과 함께 변경
 종류별 해시(`content`, `voice`, `audio`, 출력마다 `presentation`, `engine`의 구성 요소)를 내므로, 바뀐
