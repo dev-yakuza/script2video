@@ -108,6 +108,21 @@ export const YMM4_SLOTS = [
   '他3',
 ];
 
+/** The part files an imported face draws: (YMM4 folder, path), its own over neutral's. */
+export function importedFaceFiles(
+  dir: string,
+  spec: CharacterSpec,
+  face: string,
+): [string, string][] {
+  if (!spec.faces[face]) return [];
+  const pick = { ...spec.faces.neutral, ...spec.faces[face] } as Record<string, string>;
+  const parts = join(dir, IMPORTED_PARTS);
+  return Object.entries(pick).map(([folder, stem]) => [
+    folder,
+    join(parts, folder.replace(/[123]$/, ''), `${stem}.png`),
+  ]);
+}
+
 /**
  * Problems of an imported (YMM4) face: part folders that are not YMM4 slots and missing part
  * files (as lint reports them), or null when the face is not defined.
@@ -119,13 +134,11 @@ export function importedFaceProblems(
 ): string[] | null {
   if (!spec.faces[face]) return null;
   const pick = { ...spec.faces.neutral, ...spec.faces[face] } as Record<string, string>;
-  const parts = join(dir, IMPORTED_PARTS);
   const out: string[] = [];
   for (const slot of Object.keys(pick))
     if (!YMM4_SLOTS.includes(slot.normalize('NFC')))
       out.push(`face "${face}": "${slot}" is not a YMM4 part folder (${YMM4_SLOTS.join(' ')})`);
-  for (const [folder, stem] of Object.entries(pick)) {
-    const file = join(parts, folder.replace(/[123]$/, ''), `${stem}.png`);
+  for (const [folder, file] of importedFaceFiles(dir, spec, face)) {
     if (!existsSync(file))
       out.push(`${file.slice(dir.length + 1)} is missing (face "${face}", folder ${folder})`);
   }

@@ -89,6 +89,7 @@ import { checkVoice, createVoice, pickVoice } from './persona.js';
 import { buildNarration, concatAndMux, ensureFonts, master, probe } from './media.js';
 import {
   lintAssets,
+  lintImageFormats,
   lintBgm,
   lintCast,
   lintSubtitleFonts,
@@ -136,6 +137,7 @@ function loadWithDiagnostics(path: string) {
     }
     all.push(
       ...lintAssets(script, dirname(path)),
+      ...lintImageFormats(script, dirname(path)),
       ...lintCast(script, dirname(path)),
       ...lintSubtitleFonts(script, dirname(path)),
       ...lintBgm(script, dirname(path)),

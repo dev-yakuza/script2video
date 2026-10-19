@@ -4,11 +4,13 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import {
   bgmOf,
+  castsIn,
   logoOf,
   MOTIONS,
+  outputScenes,
   sceneFramings,
   listenerLookFaces,
   paragraphActing,
@@ -26,9 +28,10 @@ import {
   imageSize,
   loadCharacterSpec,
   MAX_AVATARS,
+  VIDEO_EXT,
   type CharacterSpec,
 } from '@script2video/renderer-remotion';
-import { importedFaceProblems, partsFaceProblems } from './cast-faces.js';
+import { importedFaceFiles, importedFaceProblems, partsFaceProblems } from './cast-faces.js';
 import { isTrainedProblem, resolvePersona, resolveTrained, type PersonaRef } from './persona.js';
 import { loadGraph } from './character-gen/commands.js';
 import { PROVENANCE, status } from './character-gen/state.js';
@@ -105,13 +108,9 @@ export function lintAssets(script: Script, scriptDir: string): Diagnostic[] {
       });
       continue;
     }
-    let size: [number, number];
-    try {
-      size = imageSize(abs);
-    } catch (e) {
-      out.push({ severity: 'error', code: 'asset-format', message: (e as Error).message, line });
-      continue;
-    }
+    // a picture that is not PNG or JPEG: lintImageFormats says so
+    const size = sizeOf(abs);
+    if (!size) continue;
     const [iw, ih] = size;
     for (const [name, profile] of Object.entries(script.meta.outputs)) {
       const [fw, fh] = FRAME[profile.aspect]!;
@@ -295,7 +294,11 @@ export function lintCast(script: Script, scriptDir: string): Diagnostic[] {
     // Every image must share one canvas, or the character jumps when images swap.
     const sizes = new Set<string>();
     for (const files of Object.values(faces))
-      for (const f of Object.values(files)) sizes.add(imageSize(join(dir, f)).join('×'));
+      for (const f of Object.values(files)) {
+        const size = sizeOf(join(dir, f));
+        if (size) sizes.add(size.join('×'));
+        else formatError(out, `character ${rel}: ${f} must be a PNG or JPEG image`);
+      }
     if (sizes.size > 1)
       warn(
         `cast.${key}: images in ${rel} have different sizes (${[...sizes].join(', ')}); use one canvas`,
@@ -424,6 +427,7 @@ export function lintPartsCharacter(
     warn(`character.facing is ignored for ${CHARACTER_YAML} characters (set facing in the yaml)`);
   if (!spec.license) warn(`${rel}/${CHARACTER_YAML} has no license`);
   const used = usedFaces(script, key);
+  const badFiles = new Set<string>(); // a file shared by faces, framings, sides: reported once
   if (spec.source === 'imported') {
     if (!readdirSync(dir).some((f) => TERMS_FILE.test(f.normalize('NFC'))))
       warn(`${rel} has no README / terms file: check the material's terms of use`);
@@ -437,6 +441,15 @@ export function lintPartsCharacter(
           continue;
         }
         for (const p of problems) err(p);
+        // the renderer reads PNG and JPEG only (S12); a neutral part is in every face: once
+        for (const [, file] of importedFaceFiles(dir, spec, f))
+          if (existsSync(file) && !badFiles.has(file) && !sizeOf(file)) {
+            badFiles.add(file);
+            formatError(
+              out,
+              `character ${rel}: ${relative(dir, file)} must be a PNG or JPEG image`,
+            );
+          }
       }
     }
     return out;
@@ -542,10 +555,15 @@ export function lintPartsCharacter(
         speaking.has(face),
       );
       // Every image must share the canvas, or parts land in the wrong place.
-      for (const f of [...optional, ...files])
-        (sizes.get(framing) ?? sizes.set(framing, new Set()).get(framing)!).add(
-          imageSize(f).join('×'),
-        );
+      for (const f of [...optional, ...files]) {
+        const size = sizeOf(f);
+        if (size)
+          (sizes.get(framing) ?? sizes.set(framing, new Set()).get(framing)!).add(size.join('×'));
+        else if (!badFiles.has(f)) {
+          badFiles.add(f);
+          formatError(out, `character ${rel}: ${relative(dir, f)} must be a PNG or JPEG image`);
+        }
+      }
       // Report a problem once; name the side only when it happens on one side.
       for (const [msg, sides] of problems) {
         if (sides[0] === 'warn') warn(msg);
@@ -638,4 +656,152 @@ function customVoiceRevision(scriptDir: string): string | null {
       }
     if (dirname(dir) === dir) return null;
   }
+}
+
+/** Width and height of a PNG or JPEG, or null for anything else (S12). */
+function sizeOf(path: string): [number, number] | null {
+  try {
+    return imageSize(path);
+  } catch {
+    return null;
+  }
+}
+
+function formatError(out: Diagnostic[], message: string, line?: number): void {
+  out.push({ severity: 'error', code: 'asset-format', message, ...(line ? { line } : {}) });
+}
+
+/** Where a script shows a file: the renderer draws pictures and plays `::video` clips. */
+export interface RenderedFile {
+  src: string;
+  /** For the message: `::image`, `show=`, `:::gallery`, `cast.host.avatar`, … */
+  place: string;
+  video: boolean;
+  line?: number;
+}
+
+/**
+ * The files some render reads, as the renderer will (S12 plan 2): each output's scenes and
+ * paragraphs, a cue's `show=` wherever it is, the avatars of the casts on stage, the logo. One
+ * per file.
+ */
+export function renderedImages(script: Script): RenderedFile[] {
+  // every output's scenes, without the paragraphs it leaves out: what some render reads, walked
+  // in script order so the first line reported is the first in the file
+  const perOutput = Object.keys(script.meta.outputs).map((o) => outputScenes(script, o));
+  const shown = new Set(perOutput.flatMap((sc) => sc.flatMap((s) => s.blocks)));
+  const scenes = script.scenes
+    .map((s) => ({ ...s, blocks: s.blocks.filter((b) => shown.has(b)) }))
+    .filter((s) => s.blocks.length > 0);
+  const out = new Map<string, RenderedFile>();
+  // a file drawn as a picture and also played as a clip is checked for both
+  const add = (f: RenderedFile) => {
+    const key = `${f.video}\0${f.src}`;
+    if (!out.has(key)) out.set(key, f);
+  };
+  for (const scene of scenes) {
+    for (const b of scene.blocks) {
+      if (b.kind === 'visual') {
+        if (b.type === 'image' && b.attrs.src)
+          add({
+            src: b.attrs.src,
+            place: '::image',
+            video: false,
+            line: b.line,
+          });
+        else if (b.type === 'video' && b.attrs.src)
+          add({
+            src: b.attrs.src,
+            place: '::video',
+            video: true,
+            line: b.line,
+          });
+        else if (b.type === 'gallery' || b.type === 'split')
+          for (const im of b.images ?? [])
+            add({
+              src: im.src,
+              place: `:::${b.type}`,
+              video: false,
+              line: b.line,
+            });
+        continue;
+      }
+      for (const sen of b.sentences)
+        for (const c of sen.cues)
+          if (c.attrs.show)
+            add({
+              src: c.attrs.show,
+              place: 'show=',
+              video: false,
+              line: b.line,
+            });
+    }
+  }
+  for (const key of new Set(perOutput.flatMap((sc) => [...castsIn(sc)]))) {
+    const avatar = script.meta.cast[key]?.avatar;
+    if (avatar) add({ src: avatar, place: `cast.${key}.avatar`, video: false });
+  }
+  const logo = logoOf(script.meta);
+  if (logo && scenes.length > 0) add({ src: logo.src, place: 'logo', video: false });
+  return [...out.values()];
+}
+
+/** Pictures must be PNG or JPEG (judged by their bytes); `::video` clips a video file (S12). */
+export function lintImageFormats(script: Script, scriptDir: string): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  // what the other checks already report missing (over every scene, as they look)
+  const checked = existenceChecked(script);
+  const missing = new Set<string>();
+  for (const f of renderedImages(script)) {
+    const abs = resolve(scriptDir, f.src);
+    if (!existsSync(abs)) {
+      if (!checked.has(f.src) && !missing.has(f.src))
+        out.push({
+          severity: 'error',
+          code: 'asset-missing',
+          message: `image not found: ${f.src}`,
+          ...(f.line ? { line: f.line } : {}),
+        });
+      missing.add(f.src);
+      continue;
+    }
+    if (f.video) {
+      if (!VIDEO_EXT.test(f.src))
+        formatError(out, `::video needs .mp4, .webm, .mov or .m4v: ${f.src}`, f.line);
+    } else if (!sizeOf(abs))
+      formatError(out, `${f.place} must be a PNG or JPEG image: ${f.src}`, f.line);
+  }
+  return out;
+}
+
+/**
+ * Files whose absence lintAssets, lintCast and lintBgm report: `::image` and the `show=` after
+ * it, gallery, split and video files, avatars, the logo.
+ */
+function existenceChecked(script: Script): Set<string> {
+  const out = new Set<string>();
+  for (const scene of script.scenes) {
+    let current: string | null = null;
+    for (const b of scene.blocks) {
+      if (b.kind === 'visual') {
+        current = b.type === 'image' ? (b.attrs.src ?? null) : null;
+        if (current) out.add(current);
+        if (b.type === 'gallery' || b.type === 'split')
+          for (const im of b.images ?? []) out.add(im.src);
+        if (b.type === 'video' && b.attrs.src) out.add(b.attrs.src);
+        continue;
+      }
+      if (!current) continue;
+      for (const sen of b.sentences)
+        for (const c of sen.cues)
+          if (c.attrs.show) {
+            current = c.attrs.show;
+            out.add(current);
+          }
+    }
+  }
+  for (const m of Object.values(script.meta.cast)) if (m.avatar) out.add(m.avatar);
+  const logo = logoOf(script.meta);
+  if (logo) out.add(logo.src);
+  return out;
 }

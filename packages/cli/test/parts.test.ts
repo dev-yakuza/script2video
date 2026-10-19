@@ -160,6 +160,31 @@ describe('lintPartsCharacter (fallbacks, imported keys)', () => {
   });
 });
 
+describe('picture formats in a character (S12)', () => {
+  it('a part that is not an image is one diagnostic, not a crash', () => {
+    const dir = character();
+    // a WebP named .png, shared by every face and framing on both sides
+    writeFileSync(join(dir, 'views/front/body/stand.png'), Buffer.from('RIFF\0\0\0\0WEBPVP8 '));
+    const m = messages(dir, '# 하나\n\na: 안녕.\n\na{face=listen}: 네.\n');
+    expect(
+      m.filter((x) => x.includes('views/front/body/stand.png must be a PNG or JPEG')),
+    ).toHaveLength(1);
+  });
+
+  it('an imported part that is not an image is reported', () => {
+    const dir = mkdtempSync(join(tmpdir(), 's2v-imp-'));
+    writeFileSync(
+      join(dir, 'character.yaml'),
+      'source: imported\nfaces:\n  neutral: { "体": "体_00" }\n  happy: { "体": "体_00" }\n',
+    );
+    mkdirSync(join(dir, 'views/main/体'), { recursive: true });
+    writeFileSync(join(dir, 'views/main/体/体_00.png'), 'GIF89a');
+    // the neutral part is in every face: one report
+    const m = messages(dir, '# 하나\n\na: 안녕.\n\na{face=happy}: 네.\n');
+    expect(m.filter((x) => x.includes('体_00.png must be a PNG or JPEG image'))).toHaveLength(1);
+  });
+});
+
 describe('character import (YMM4)', () => {
   const material = () => {
     const root = mkdtempSync(join(tmpdir(), 's2v-ymm4-src-'));

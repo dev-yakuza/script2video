@@ -217,7 +217,11 @@ export function imageSize(path: string): [number, number] {
   throw new Error(`unsupported image format (PNG/JPEG only): ${path}`);
 }
 
-function referencedImages(timeline: Timeline): string[] {
+/** Files a `::video` plays (by extension); every other picture must be a PNG or JPEG. */
+export const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i;
+
+/** Pictures and clips the timeline shows (lint holds its own list to this, S12). */
+export function referencedImages(timeline: Timeline): string[] {
   const out = new Set<string>();
   for (const s of timeline.scenes)
     for (const v of s.visuals)
@@ -494,7 +498,7 @@ function preparePublicDir(opts: RenderOptions) {
     mkdirSync(join(publicDir, 'assets'), { recursive: true });
     copyFileSync(abs, join(publicDir, rel));
     // Videos are copied but have no image size (they fit with object-fit).
-    if (!/\.(mp4|webm|mov|m4v)$/i.test(abs)) imageSizes[src] = imageSize(abs);
+    if (!VIDEO_EXT.test(abs)) imageSizes[src] = imageSize(abs);
     assetPaths[src] = rel;
     hashes[`asset:${src}`] = sha256File(abs);
   });
