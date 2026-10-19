@@ -17,11 +17,14 @@
  *   s2v inspect <script.md> --json [--hash-version 1]   (what the script is made of, hashed by kind)
  *   s2v export-script <script.md>   (reading script for a recording session)
  *   s2v import-recording <script.md> <take.wav> [--write]   (one take → per-paragraph files)
- *   s2v timeline <script.md> [--output youtube] [--fps 30]
+ *   s2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]
+ *              (with rhythm on, the paragraph gaps go to stderr as a table)
  *   s2v render <script.md> [--output youtube|shorts] [--no-asr] [--recheck] [--draft] [--no-cache]
  *              [--frozen-audio]   (never synthesize; fail if audio is missing)
  *              [--workers N]      (browser tabs rendering in parallel)
  *              [--idle on|off]    (idle motion; overrides acting.idle)
+ *              [--rhythm on|off]  (content-aware gaps; overrides acting.rhythm and the output's;
+ *                                  also for snapshot and timeline)
  *   s2v audio prune <script.md>   (drop locked audio the script no longer uses)
  *   s2v dev <script.md> [--video]  (edit loop: lint → tts → snapshot on every save)
  *   s2v doctor                    (is this machine ready?)
@@ -59,6 +62,7 @@ import {
   type Lang,
 } from '@script2video/core';
 import { renderScenes, type Aspect } from '@script2video/renderer-remotion';
+import { renderedLengthWarning } from './length.js';
 import { enrichCast } from './cast-faces.js';
 import { castOptions } from './cast.js';
 import { buildSfxTrack, mixSoundtrack } from './soundtrack.js';
@@ -131,6 +135,9 @@ function usage(): never {
   process.exit(2);
 }
 
+/** Outputs whose estimated length already went over maxDuration in `load()` (5d plan 2). */
+const estimatedOver = new Set<string>();
+
 function load(path: string) {
   const { script, diagnostics } = parseScript(readFileSync(path, 'utf8'));
   const all = [...diagnostics.items];
@@ -164,7 +171,11 @@ function load(path: string) {
         message: `cannot parse ${script.meta.translationOf}`,
       });
   }
-  for (const d of all) console.error(formatDiagnostic(d, path));
+  for (const d of all) {
+    console.error(formatDiagnostic(d, path));
+    const over = d.code === 'max-duration' ? /^"([^"]+)"/.exec(d.message) : null;
+    if (over) estimatedOver.add(over[1]!);
+  }
   if (!script || all.some((d) => d.severity === 'error')) process.exit(1);
   return script;
 }
@@ -220,6 +231,7 @@ function parseCli(rest: string[]) {
       'min-emotion': { type: 'string' },
       id: { type: 'string', multiple: true },
       idle: { type: 'string' },
+      rhythm: { type: 'string' },
     },
   });
 }
@@ -235,6 +247,16 @@ async function main(): Promise<void> {
   }
   const { values, positionals } = parsed;
   const file = positionals[0];
+  // --rhythm changes the timing: only commands that build a timeline take it (5d plan 2).
+  let rhythm: boolean | undefined;
+  if (values.rhythm !== undefined) {
+    if (!['render', 'snapshot', 'timeline'].includes(command ?? ''))
+      throw new Error(`--rhythm is for render, snapshot and timeline, not ${command}`);
+    if (values.rhythm !== 'on' && values.rhythm !== 'off')
+      throw new Error(`--rhythm must be on or off, not "${values.rhythm}"`);
+    rhythm = values.rhythm === 'on';
+  }
+  const rhythmOpts = rhythm === undefined ? {} : { rhythm };
   if (command === 'tts-server' && file === 'start') {
     await runResident(REPO_ROOT, (m) => console.error(m));
     return;
@@ -520,6 +542,7 @@ async function main(): Promise<void> {
         outputName,
         loadAudioManifest(path, script.meta.lang, lockDir),
         Number(values.fps),
+        rhythmOpts,
       );
       const workDir = join(
         REPO_ROOT,
@@ -649,13 +672,21 @@ async function main(): Promise<void> {
     }
     case 'timeline': {
       const script = load(path);
-      const { timeline, issues } = buildTimeline(
+      const { timeline, issues, gaps } = buildTimeline(
         script,
         values.output!,
         loadAudioManifest(path, script.meta.lang),
         Number(values.fps),
+        rhythmOpts,
       );
       for (const i of issues) console.error(`warning: ${i.sentenceId}: ${i.message}`);
+      if (gaps) {
+        console.error('rhythm: paragraph gaps (line, seconds, ×factor, rules)');
+        for (const g of gaps)
+          console.error(
+            `  ${g.sceneId}:${g.line}  ${g.seconds.toFixed(2)}s  ×${g.factor.toFixed(2)}  ${g.rules.join(' ')}`,
+          );
+      }
       process.stdout.write(JSON.stringify(timeline, null, 2) + '\n');
       break;
     }
@@ -690,8 +721,16 @@ async function main(): Promise<void> {
         outputName,
         loadAudioManifest(path, script.meta.lang, lockDir),
         Number(values.fps),
+        rhythmOpts,
       );
       for (const i of issues) log(`warning: ${i.sentenceId}: ${i.message}`);
+      const long = renderedLengthWarning(
+        outputName,
+        timeline.totalFrames / timeline.fps,
+        profile.maxDuration,
+        estimatedOver.has(outputName),
+      );
+      if (long) log(`warning: ${long}`);
       const suffix = draft ? '.draft' : '';
       const workDir = join(
         REPO_ROOT,

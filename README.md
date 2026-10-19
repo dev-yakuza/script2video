@@ -52,32 +52,32 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 
 ## Commands
 
-| command                                                                                | what it does                                                                                                                                                   |
-| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `doctor`                                                                               | checks Node, ffmpeg, uv, Python environments, models, fonts                                                                                                    |
-| `new <dir> [--lang ko]`                                                                | a new video folder with a starter script                                                                                                                       |
-| `lint <script>`                                                                        | static checks: syntax, assets, pronunciation, subtitle budget, length                                                                                          |
-| `check <script>`                                                                       | lays every subtitle out in the real renderer and reports overflow                                                                                              |
-| `sentences <script>`                                                                   | sentence ids (for `tts --retry`)                                                                                                                               |
-| `say "<text>" --script <script>`                                                       | synthesize and play one sentence (pronunciation check)                                                                                                         |
-| `tts <script> [--retry id]`                                                            | synthesize into the audio lock (only what changed)                                                                                                             |
-| `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off]`          | video + `.srt` `.vtt` chapters, description draft, thumbnail                                                                                                   |
-| `snapshot <script> --output <name>`                                                    | one still per scene, tiled, in seconds                                                                                                                         |
-| `dev <script> [--video]`                                                               | edit loop: lint → tts → snapshot on every save                                                                                                                 |
-| `takes <script> [--all] [--id id] [--no-open]`                                         | a listening page (`out/<video>/takes/<lang>/`): every take of each line, alone or between its neighbours; the radios write the `takes pick` / `unpick` command |
-| `takes <script> --list [--id id]`                                                      | the takes of each line: take wav, pass/fail, pitch, pace                                                                                                       |
-| `takes pick <script> <id>=<n> …` / `takes unpick <script> <id> …`                      | choose a take yourself (not `pick <image>`)                                                                                                                    |
-| `pick <image>`                                                                         | click / drag on a screenshot to get cue coordinates                                                                                                            |
-| `voice create / pick`                                                                  | design a persona voice and pick a candidate                                                                                                                    |
-| `voice check <voices/id.yaml>`                                                         | judge a persona's reference clip (noise, pauses, cut ending, pitch)                                                                                            |
-| `voice train <voices/id.yaml> [--lang ko] [--min-emotion N]`                           | train a persona's speaker so it acts emotions (about 3 hours, resumable)                                                                                       |
-| `voice refs <script> [--refresh]`                                                      | reference voices the sentences are checked against                                                                                                             |
-| `audio prune <script>`                                                                 | remove audio the script no longer uses                                                                                                                         |
-| `inspect <script> --json`                                                              | what a script is made of, with one hash per kind of change (tooling)                                                                                           |
-| `export-script <script>`                                                               | a reading script for recording the narration yourself                                                                                                          |
-| `import-recording <script> <take.wav> [--write]`                                       | split one recorded take into paragraphs (`:audio`)                                                                                                             |
-| `tts-server start`                                                                     | keep the TTS server running between commands                                                                                                                   |
-| `character import / setup / create / pick / build / review / approve / redo / missing` | character art: YMM4 import and generation (see below)                                                                                                          |
+| command                                                                                          | what it does                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `doctor`                                                                                         | checks Node, ffmpeg, uv, Python environments, models, fonts                                                                                                    |
+| `new <dir> [--lang ko]`                                                                          | a new video folder with a starter script                                                                                                                       |
+| `lint <script>`                                                                                  | static checks: syntax, assets, pronunciation, subtitle budget, length                                                                                          |
+| `check <script>`                                                                                 | lays every subtitle out in the real renderer and reports overflow                                                                                              |
+| `sentences <script>`                                                                             | sentence ids (for `tts --retry`)                                                                                                                               |
+| `say "<text>" --script <script>`                                                                 | synthesize and play one sentence (pronunciation check)                                                                                                         |
+| `tts <script> [--retry id]`                                                                      | synthesize into the audio lock (only what changed)                                                                                                             |
+| `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off]` | video + `.srt` `.vtt` chapters, description draft, thumbnail                                                                                                   |
+| `snapshot <script> --output <name> [--rhythm on\|off]`                                           | one still per scene, tiled, in seconds                                                                                                                         |
+| `dev <script> [--video]`                                                                         | edit loop: lint → tts → snapshot on every save                                                                                                                 |
+| `takes <script> [--all] [--id id] [--no-open]`                                                   | a listening page (`out/<video>/takes/<lang>/`): every take of each line, alone or between its neighbours; the radios write the `takes pick` / `unpick` command |
+| `takes <script> --list [--id id]`                                                                | the takes of each line: take wav, pass/fail, pitch, pace                                                                                                       |
+| `takes pick <script> <id>=<n> …` / `takes unpick <script> <id> …`                                | choose a take yourself (not `pick <image>`)                                                                                                                    |
+| `pick <image>`                                                                                   | click / drag on a screenshot to get cue coordinates                                                                                                            |
+| `voice create / pick`                                                                            | design a persona voice and pick a candidate                                                                                                                    |
+| `voice check <voices/id.yaml>`                                                                   | judge a persona's reference clip (noise, pauses, cut ending, pitch)                                                                                            |
+| `voice train <voices/id.yaml> [--lang ko] [--min-emotion N]`                                     | train a persona's speaker so it acts emotions (about 3 hours, resumable)                                                                                       |
+| `voice refs <script> [--refresh]`                                                                | reference voices the sentences are checked against                                                                                                             |
+| `audio prune <script>`                                                                           | remove audio the script no longer uses                                                                                                                         |
+| `inspect <script> --json`                                                                        | what a script is made of, with one hash per kind of change (tooling)                                                                                           |
+| `export-script <script>`                                                                         | a reading script for recording the narration yourself                                                                                                          |
+| `import-recording <script> <take.wav> [--write]`                                                 | split one recorded take into paragraphs (`:audio`)                                                                                                             |
+| `tts-server start`                                                                               | keep the TTS server running between commands                                                                                                                   |
+| `character import / setup / create / pick / build / review / approve / redo / missing`           | character art: YMM4 import and generation (see below)                                                                                                          |
 
 Run them as `node packages/cli/dist/main.js <command> …`. `S2V_TTS=mock` runs everything with
 synthetic audio (no models), useful for layout work and CI.
@@ -243,6 +243,19 @@ Characters also move a little on their own: they breathe, blink every 2–6 seco
 face changes), and a listener sometimes nods at the end of the other side's sentence (not after a
 question, nor right before answering). Set `acting: { idle: false }` in the frontmatter to turn this
 off (blinks then come once every 4 seconds), or try either way with `s2v render … --idle on|off`. Snapshots and thumbnails never blink.
+
+Gaps between paragraphs follow the content (rhythm): an answer to another speaker's question comes
+sooner (×0.6, a question is a line ending in `?`), a paragraph whose emotion differs from the one
+before takes a breath (×1.3), a sad, moved or serious paragraph is followed by a pause (×1.4), and
+each of these gaps varies a little (±12%). Gaps you write (`gap=`), pauses, scene gaps and gaps
+between sentences stay as they are, nothing carries over a scene boundary (a sad last paragraph
+keeps the usual scene gap), and the audio does not change. A paragraph's emotion is its `emo` (or
+an `:emo` at its very start). Rhythm is on by default; `acting: { rhythm: false }` keeps every gap
+even (as before — use it to render an older video again exactly), and an object sets the factors:
+`acting: { rhythm: { answer: 0.8, emotion: 1.2, linger: 1.6, jitter: 0 } }` (any of them). Set it
+per output with `outputs.shorts.rhythm` (`false`, or factors over the script's), or try it with
+`s2v render|snapshot|timeline … --rhythm on|off` (`timeline` then lists each gap and its rules on
+stderr).
 
 A character folder comes in one of two forms.
 

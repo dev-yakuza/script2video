@@ -145,6 +145,14 @@ export const logoSchema = z.object({
 });
 export type Logo = z.infer<typeof logoSchema>;
 
+/** Rhythm factors (acting stage 5d): each optional, strict so a misspelled key is an error. */
+export const rhythmValuesSchema = z.strictObject({
+  answer: z.number().min(0.2).max(1.5).optional(),
+  emotion: z.number().min(0.5).max(3).optional(),
+  linger: z.number().min(0.5).max(3).optional(),
+  jitter: z.number().min(0).max(0.5).optional(),
+});
+
 export const outputProfileSchema = z.object({
   aspect: z.enum(ASPECTS),
   layout: z.enum(LAYOUTS).default('presenter'),
@@ -157,6 +165,8 @@ export const outputProfileSchema = z.object({
   transition: z.enum(['none', 'fade']).optional(),
   /** `full`: ignore `::shot` and draw every character full-length in this output. */
   shot: z.literal('full').optional(),
+  /** Rhythm for this output (acting stage 5d), over `acting.rhythm`; an object sets factors. */
+  rhythm: z.union([z.boolean(), rhythmValuesSchema]).optional(),
 });
 export type OutputProfile = z.infer<typeof outputProfileSchema>;
 
@@ -180,6 +190,8 @@ export const actingSchema = z.object({
   emotions: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/), userEmotionSchema).optional(),
   /** Idle motion (acting stage 5a): breathing, blinks, listener nods. Absent = on. */
   idle: z.boolean().optional(),
+  /** Rhythm (acting stage 5d): paragraph gaps follow the content. Absent = on; an object sets factors. */
+  rhythm: z.union([z.boolean(), rhythmValuesSchema]).optional(),
 });
 
 export const pacingSchema = z.object({

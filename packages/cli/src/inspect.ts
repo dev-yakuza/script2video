@@ -33,6 +33,8 @@ import {
   type Script,
   type ScreenText,
   engineOf,
+  rhythmGaps,
+  rhythmOn,
 } from '@script2video/core';
 import {
   assignSides,
@@ -380,7 +382,14 @@ export function inspectScript(
     const { left } = assignSides(cast);
     const castResolved = cast.map((c) => ({ ...c, side: left.includes(c) ? 'left' : 'right' }));
     const style = subtitleStyleFor(meta, name);
-    const { scenes: _s, maxDuration: _m, subtitleStyle: _st, transition: _t, ...look } = profile;
+    const {
+      scenes: _s,
+      maxDuration: _m,
+      subtitleStyle: _st,
+      transition: _t,
+      rhythm: _r,
+      ...look
+    } = profile;
     // what the renderer applies: the output's transition over the script's, and the layout's
     // default subtitle mode (word for shorts)
     const transition = profile.transition ?? meta.transition;
@@ -392,6 +401,8 @@ export function inspectScript(
       subtitleStyle: { ...style, font: style.font ? files.sha(style.font, 'font') : undefined },
       cast: castResolved,
       thumbnail: profile.aspect === '16:9' ? thumbSha : undefined,
+      // rhythm (5d plan 4): the gap factors, which also carry the paragraph emotions they read
+      rhythm: rhythmOn(script, name) ? rhythmGaps(script, name).map((g) => g.factor) : undefined,
       scenes: scenes.map((scene, i) => ({
         id: scene.id,
         framing: framings[i],

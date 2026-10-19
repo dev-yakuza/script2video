@@ -14,6 +14,7 @@ import remarkFrontmatter from 'remark-frontmatter';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { KNOWN_DIRECTIVES, type ParseTrace } from './parse.js';
+import { RHYTHM } from './rhythm.js';
 import { castsIn, outputScenes } from './stage.js';
 import {
   bgmSchema,
@@ -128,6 +129,7 @@ export const FRONTMATTER: Record<string, Kind> = {
   'outputs.*.subtitles': 'presentation',
   'outputs.*.transition': 'presentation',
   'outputs.*.shot': 'presentation',
+  'outputs.*.rhythm': 'presentation',
   'outputs.*.subtitleStyle.size': 'presentation',
   'outputs.*.subtitleStyle.position': 'presentation',
   'outputs.*.subtitleStyle.color': 'presentation',
@@ -174,6 +176,15 @@ export const FRONTMATTER: Record<string, Kind> = {
   'acting.emotions.*.face': 'presentation',
   'acting.emotions.*.motion': 'presentation',
   'acting.idle': 'presentation',
+  'acting.rhythm': 'presentation',
+  'outputs.*.rhythm.answer': 'presentation',
+  'outputs.*.rhythm.emotion': 'presentation',
+  'outputs.*.rhythm.linger': 'presentation',
+  'outputs.*.rhythm.jitter': 'presentation',
+  'acting.rhythm.answer': 'presentation',
+  'acting.rhythm.emotion': 'presentation',
+  'acting.rhythm.linger': 'presentation',
+  'acting.rhythm.jitter': 'presentation',
 };
 const RECORDS = new Set(['cast', 'outputs', 'pronounce', 'acting.emotions']);
 
@@ -699,6 +710,7 @@ export function schemaDefaults(): {
       sfx: top.sfx,
       transition: top.transition,
       idle: true,
+      rhythm: { ...RHYTHM },
     },
   };
 }

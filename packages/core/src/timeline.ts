@@ -35,7 +35,11 @@ import {
   STAGE_SLIDE_S,
   stageEvents,
 } from './stage.js';
+import { isQuestion, textKey } from './keys.js';
+import { rhythmGaps, rhythmOn, type RhythmRule } from './rhythm.js';
 import { toAlignText, ttsRangeToDisplay } from './tts-text.js';
+
+export { isQuestion, textKey };
 
 export interface AlignedWord {
   /** Token text as returned by the aligner (a substring of the TTS text, modulo normalization). */
@@ -76,40 +80,6 @@ export interface TimelineAudio {
   contentKey?: string;
   ordinal?: number;
   question?: boolean;
-}
-
-/**
- * 64-bit FNV-1a of `cast NUL text` (UTF-8 bytes), 16 hex characters. The idle motion of a line
- * depends on what is said, not on its lock key, so drafts and re-synthesis keep the same motion.
- */
-export function textKey(cast: string, text: string): string {
-  let h = 0xcbf29ce484222325n;
-  const mix = (byte: number) => {
-    h = BigInt.asUintN(64, (h ^ BigInt(byte)) * 0x100000001b3n);
-  };
-  // UTF-8 by hand: core has no TextEncoder (no DOM or node types).
-  for (const ch of `${cast}\u0000${text}`) {
-    let cp = ch.codePointAt(0)!;
-    if (cp >= 0xd800 && cp <= 0xdfff) cp = 0xfffd; // a lone surrogate, as TextEncoder
-    if (cp < 0x80) mix(cp);
-    else if (cp < 0x800) [0xc0 | (cp >> 6), 0x80 | (cp & 63)].forEach(mix);
-    else if (cp < 0x10000)
-      [0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63)].forEach(mix);
-    else
-      [
-        0xf0 | (cp >> 18),
-        0x80 | ((cp >> 12) & 63),
-        0x80 | ((cp >> 6) & 63),
-        0x80 | (cp & 63),
-      ].forEach(mix);
-  }
-  return h.toString(16).padStart(16, '0');
-}
-
-/** A sentence that ends in a question mark, closing quotes, brackets, `!`, `.`, `…` and `~` aside (`?"`, `?!`, `?…`). */
-export function isQuestion(text: string): boolean {
-  const t = text.replace(/[\s"'”’」』）)\]］】〉》〕｝}!！.。…~～]+$/u, '');
-  return /[?？]$/.test(t);
 }
 
 export interface TimelineCue {
@@ -408,12 +378,23 @@ function listenerLooks(
   return out;
 }
 
+/** A paragraph gap as rhythm (acting stage 5d) made it, for the `timeline` gap table. */
+export interface TimelineGap {
+  sceneId: string;
+  line: number;
+  rules: RhythmRule[];
+  factor: number;
+  /** The gap in seconds before the paragraph. */
+  seconds: number;
+}
+
 export function buildTimeline(
   script: Script,
   outputName: string,
   manifest: AudioManifest,
   fps = 30,
-): { timeline: Timeline; issues: TimelineIssue[] } {
+  opts: { rhythm?: boolean } = {},
+): { timeline: Timeline; issues: TimelineIssue[]; gaps?: TimelineGap[] } {
   const { meta } = script;
   const profile = meta.outputs[outputName];
   if (!profile) throw new Error(`unknown output "${outputName}"`);
@@ -427,6 +408,11 @@ export function buildTimeline(
   const framings = sceneFramings(meta, selected, profile);
   const stage = stageEvents(script, outputName).events;
   const fade = (profile.transition ?? meta.transition) === 'fade';
+  // Rhythm (5d plan 4): factors per paragraph, kept out of the timeline itself.
+  const rhythm = rhythmOn(script, outputName, opts.rhythm)
+    ? new Map(rhythmGaps(script, outputName).map((g) => [g.paragraph, g]))
+    : null;
+  const gaps: TimelineGap[] = [];
   let sceneStart = 0;
 
   selected.forEach((scene, sceneIndex) => {
@@ -436,6 +422,9 @@ export function buildTimeline(
     let pendingGap = 0;
     let started = false;
     let anyAudio = false;
+    // the first subtitle of a paragraph whose gap rhythm widened, and by how many frames: the
+    // bridge to it widens exactly as much (factor 1 or less: 0, as with rhythm off)
+    const widened = new Map<TimelineSubtitle, number>();
     const events = stage.get(scene.id) ?? [];
     const entering = new Set(events.filter((e) => e.kind === 'enter').map((e) => e.cast));
     const out: TimelineScene = {
@@ -461,7 +450,23 @@ export function buildTimeline(
         return;
       }
       if (!includesParagraph(block, outputName)) return;
-      if (started) t += block.gap ?? pendingGap;
+      const rg = rhythm?.get(block);
+      let extra = 0;
+      if (started) {
+        const gap = block.gap ?? pendingGap * (rg?.factor ?? 1);
+        if (block.gap === undefined)
+          extra = Math.max(0, toFrame(t + gap) - toFrame(t + pendingGap));
+        t += gap;
+        if (rg)
+          gaps.push({
+            sceneId: scene.id,
+            line: rg.line,
+            rules: rg.rules,
+            factor: rg.factor,
+            seconds: gap,
+          });
+      }
+      const firstSubtitle = out.subtitles.length;
       started = true;
       const blockReactions: (TimelineReaction & { motion?: string })[] = [];
       const blockLooks: { cast: string; look: LookValue; startFrame: number; order: number }[] = [];
@@ -581,6 +586,8 @@ export function buildTimeline(
           endFrame: (next && at(next.sentence)) ?? blockEnd,
         });
       });
+      if (extra > 0 && out.subtitles[firstSubtitle])
+        widened.set(out.subtitles[firstSubtitle]!, extra);
       pendingGap = pacing.paragraphGap;
     });
 
@@ -626,9 +633,13 @@ export function buildTimeline(
       const next = out.subtitles[k + 1];
       let end = s.endFrame + hold;
       if (next) {
+        // a paragraph gap rhythm widened bridges as much wider (5d plan 4)
+        // (+2: earlier shifts and the first word's offset are rounded on their own — up to two
+        // frames either way; it may bridge two frames more than rhythm off would)
+        const reach = bridge + (widened.has(next) ? widened.get(next)! + 2 : 0);
         if (next.cast === s.cast)
           end =
-            next.startFrame - s.endFrame <= bridge
+            next.startFrame - s.endFrame <= reach
               ? next.startFrame
               : Math.min(end, next.startFrame);
         else if (next.startFrame >= s.endFrame) end = Math.min(end, next.startFrame);
@@ -644,5 +655,6 @@ export function buildTimeline(
   return {
     timeline: { fps, lang: meta.lang, output: outputName, totalFrames: sceneStart, scenes },
     issues,
+    ...(rhythm ? { gaps } : {}),
   };
 }

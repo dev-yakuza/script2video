@@ -56,6 +56,7 @@ export {
   type TimelineLook,
   type TimelineVisual,
   type TimelineIssue,
+  type TimelineGap,
   sceneFramings,
   textKey,
   isQuestion,
@@ -178,6 +179,16 @@ export {
   type StageEvent,
   type StageResult,
 } from './stage.js';
+export {
+  resolveRhythm,
+  RHYTHM,
+  rhythmGaps,
+  rhythmOn,
+  type RhythmGap,
+  type RhythmRule,
+  type RhythmValues,
+} from './rhythm.js';
+export { unitHash } from './keys.js';
 export {
   FIRST_TAKES,
   MAX_TAKES,

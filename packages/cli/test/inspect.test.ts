@@ -287,11 +287,14 @@ describe('inspect: hashes', () => {
     expect(more.voice).toBe(h.voice);
     expect(more.content).not.toBe(h.content);
     expect(more.presentation_by_output.youtube).not.toBe(h.presentation_by_output.youtube);
-    // a word: content and voice, not presentation (no cue)
-    const word = ok(FM() + BODY.replace('대답합니다', '답합니다'), { 'a.png': 'A' }).hashes;
-    expect(word.content).not.toBe(h.content);
-    expect(word.voice).not.toBe(h.voice);
-    expect(word.presentation_by_output.youtube).toBe(h.presentation_by_output.youtube);
+    // a word: content and voice, not presentation (no cue) — with rhythm off; with rhythm on
+    // (the default) the first words of a paragraph seed its gap's jitter, so they move it too
+    const off = FM('acting: { rhythm: false }\n');
+    const plain = ok(off + BODY, { 'a.png': 'A' }).hashes;
+    const word = ok(off + BODY.replace('대답합니다', '답합니다'), { 'a.png': 'A' }).hashes;
+    expect(word.content).not.toBe(plain.content);
+    expect(word.voice).not.toBe(plain.voice);
+    expect(word.presentation_by_output.youtube).toBe(plain.presentation_by_output.youtube);
     // the pronunciation dictionary: voice only
     const said = ok(FM('pronounce:\n  문장: 뮨장\n') + BODY, { 'a.png': 'A' }).hashes;
     expect(said.voice).not.toBe(h.voice);
@@ -490,6 +493,44 @@ describe('inspect: committed samples', () => {
     }
   });
 
+  it('rhythm (5d): off written out keeps the hash; on adds its gaps, emotions included', () => {
+    const body = '\n# 하나 {#one}\n\na: 어디 가요?\n\nb: 시장에 가요.\n';
+    const out = (extra: string) =>
+      ok(FM(`outputs:\n  youtube: { aspect: "16:9"${extra} }\n`) + body).hashes
+        .presentation_by_output.youtube;
+    // on by default: writing true changes nothing, off drops the gaps
+    const on = out('');
+    expect(out(', rhythm: true')).toBe(on);
+    expect(out(', rhythm: false')).not.toBe(on);
+    // factors written out at their defaults change nothing; other factors do
+    expect(out(', rhythm: { answer: 0.6, jitter: 0.12 }')).toBe(on);
+    expect(out(', rhythm: { answer: 0.8 }')).not.toBe(on);
+    const sad = ok(
+      FM('outputs:\n  youtube: { aspect: "16:9", rhythm: true }\n') +
+        body.replace('b: 시장', 'b{emo=sad}: 시장'),
+    ).hashes.presentation_by_output.youtube;
+    expect(sad).not.toBe(on);
+  });
+
+  it('takes --rhythm only where a timeline is built', () => {
+    const cli = join(ROOT, 'packages/cli/dist/main.js');
+    const status = (args: string[]) => {
+      try {
+        execFileSync('node', [cli, ...args], { cwd: ROOT, stdio: 'pipe' });
+        return 0;
+      } catch (e) {
+        return (e as { status: number }).status;
+      }
+    };
+    expect(status(['lint', 'videos/sample-ko/script.ko.md', '--rhythm', 'on'])).not.toBe(0);
+    expect(status(['dev', 'videos/sample-ko/script.ko.md', '--rhythm', 'on'])).not.toBe(0);
+    expect(
+      status(['inspect', 'videos/sample-ko/script.ko.md', '--json', '--rhythm', 'on']),
+    ).not.toBe(0);
+    expect(status(['timeline', 'videos/sample-ko/script.ko.md', '--rhythm', 'maybe'])).not.toBe(0);
+    expect(status(['timeline', 'videos/sample-ko/script.ko.md', '--rhythm', 'on'])).toBe(0);
+  });
+
   it('exits 2 on usage errors', () => {
     const cli = join(ROOT, 'packages/cli/dist/main.js');
     for (const args of [['--draft=false'], ['-o', 'x'], ['--hash-version'], ['--fps', '30']]) {
@@ -526,8 +567,8 @@ describe('inspect: committed samples', () => {
       voice: '2541d5db1861841aa27970c2c8beab4ca9a9d9df3c5a355e16c6bab11b5f87ff',
       audio: '125d2a1c3ced53be003433775779ad30a9d3a5cb54a6f11ac0d9a185cb9075e0',
       presentation_by_output: {
-        youtube: '4f8e1f8b9203b8bddd4ba189fb834c9ab9d802ed27d5399de669f2442dda6202',
-        shorts: 'b7d70f08c659fda350a1da014a38abcf44e96c4a0ce692386f312d626f36b712',
+        youtube: '8731a38d81018f5183ba1a95206ae4b65316fb887a0d26a1fee475af6d6d78e8',
+        shorts: '1c6ca858b8699baadc464040fabc65d58c2b5a87ba521c90fba47a554d2dea8e',
       },
     },
     'videos/sample-en/script.en.md': {
@@ -535,8 +576,8 @@ describe('inspect: committed samples', () => {
       voice: 'e5bba9ade9e6f6386c76901b72778da91dbf2fa11d18f49f8f864bc281bf93b2',
       audio: 'dd6297569afe8ede11730310b3162c713a6e95c3ddc2fecd6a423601fb810a81',
       presentation_by_output: {
-        youtube: 'aeb70fc55fe7d05d8fdb6c1caa5bd96515d7e7aac70b242141dc0fe03728029d',
-        shorts: '67c835a489516a5c9f018e1785509cbb0d7fd9a34f5719ffd8a7d4044186452a',
+        youtube: '697f6134e35f7542737aa4c9208695109b5e2225d35043b2880ef2adbd000c97',
+        shorts: 'ec27d3ba67feb1ac71a739e9f8e035133714cbc240496dac92fa91b2881c01ae',
       },
     },
     'videos/sample-dialogue-ko/script.ko.md': {

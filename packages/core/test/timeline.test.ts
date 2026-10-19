@@ -177,7 +177,10 @@ describe('groupSubtitles with cue phrases', () => {
 
 describe('buildTimeline', () => {
   it('quantizes scenes, places audio with pacing, resolves cues and subtitles', () => {
-    const { timeline, issues } = buildTimeline(script(), 'youtube', MANIFEST, 30);
+    // the plain pacing arithmetic: rhythm off (rhythm.test.ts covers the gaps it makes)
+    const { timeline, issues } = buildTimeline(script(), 'youtube', MANIFEST, 30, {
+      rhythm: false,
+    });
     expect(issues).toEqual([]);
     const [intro, settings] = timeline.scenes;
     // lead 1.3s → 39; sentence 1.2s + gap 0.3s → second sentence at 2.8s → 84
