@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'packages/**'
+      - 'scripts/**'
       - 'package.json'
       - 'yarn.lock'
       - 'tsconfig.base.json'
@@ -22,6 +23,7 @@ on:
     branches: [main]
     paths:
       - 'packages/**'
+      - 'scripts/**'
       - 'package.json'
       - 'yarn.lock'
       - 'tts-server/**'

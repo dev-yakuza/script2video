@@ -54,6 +54,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | 명령어                                                                                           | 하는 일                                                                                                                                |
 | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `doctor`                                                                                         | Node, ffmpeg, uv, Python 환경, 모델, 폰트 점검                                                                                         |
+| `--version [--json]`                                                                             | 고정할 버전: semver와 코드 해시(도구는 `--json`)                                                                                       |
 | `new <dir> [--lang ko]`                                                                          | 시작용 대본이 든 새 영상 폴더 만들기                                                                                                   |
 | `lint <script>`                                                                                  | 정적 검사: 문법, 에셋, 발음, 자막 분량, 길이                                                                                           |
 | `check <script>`                                                                                 | 모든 자막을 실제 렌더러로 배치해 넘침 확인                                                                                             |
@@ -81,6 +82,11 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 
 `node packages/cli/dist/main.js <command> …` 형태로 실행합니다. `S2V_TTS=mock`을 붙이면 모델 없이
 합성 음성으로 전체를 돌려 볼 수 있어 레이아웃 작업과 CI에 편리합니다.
+
+각 명령은 자기 플래그만 받으며, 모르는 플래그는 오류입니다(exit 2). `say`의 문장이 `-`로 시작하면
+`--` 뒤에 씁니다. `--version --json`은 `id`(semver + s2v가 실행하는 코드와 고정 데이터의 해시, 커밋하지
+않은 변경 포함)를 냅니다. 도구는 `id`를 고정하고 바뀌면 멈춥니다. `stale_build`는 어떤 패키지의 `dist`가
+소스보다 오래됐다는 뜻입니다(`yarn build`). `inspect`의 `s2v_version`도 같은 `id`입니다.
 
 `inspect --json`은 영상을 검수하는 도구용입니다. 출력, 장면, 화면 글자, 목소리, 파일 목록과 함께 변경
 종류별 해시(`content`, `voice`, `audio`, 출력마다 `presentation`, `engine`의 구성 요소)를 내므로, 바뀐

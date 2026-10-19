@@ -26,6 +26,7 @@ RUN yarn install --immutable
 
 COPY tsconfig.base.json models.lock.json fonts.lock.json ./
 COPY packages packages
+COPY scripts scripts
 RUN yarn build
 
 # Everything a render needs is fetched at build time (pinned fonts, Chromium): no network later.

@@ -2,49 +2,47 @@
 /**
  * s2v — script2video command line.
  *
+ *   s2v --version [--json]   (the version a tool pins)
  *   s2v lint <script.md>
- *   s2v check <script.md>
+ *   s2v check <script.md>   (subtitles fit their boxes)
+ *   s2v sentences <script.md>   (sentence ids to retry)
+ *   s2v tts <script.md> [--no-asr] [--recheck] [--retry <scene[:paragraph[:sentence]]>]...
+ *   s2v takes <script.md> [--all] [--id <id>]... [--no-open] | --list [--id <id>]...   (listening page | takes of each line)
+ *   s2v takes pick <script.md> <id>=<take> ...   (choose a take)
+ *   s2v takes unpick <script.md> <id> ...
+ *   s2v inspect <script.md> --json [--hash-version 1]   (what the script is made of, hashed by kind)
+ *   s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open]   (direction plan and notes)
+ *   s2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]
+ *   s2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off]
+ *   s2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30]
+ *   s2v audio prune <script.md>   (drop locked audio the script no longer uses)
+ *   s2v export-script <script.md>   (reading script for a recording session)
+ *   s2v import-recording <script.md> <take.wav> [--write]
+ *   s2v dev <script.md> [--output youtube] [--video] [--no-asr]   (edit loop)
+ *   s2v say [--voice qwen:Sohee] [--lang ko] [--style ...] [--script script.md] [--no-play] [--] "<sentence>"   (a sentence starting with - goes after the bare double dash)
  *   s2v voice create <voices/id.yaml> [--lang ko] [--candidates 3] [--play]
  *   s2v voice pick <voices/id.yaml> <n> [--lang ko]
  *   s2v voice check <voices/id.yaml> [--lang ko]   (judge a persona's reference clip)
- *   s2v voice train <voices/id.yaml> [--lang ko] [--min-emotion 150]   (its trained speaker, ~3 h)
+ *   s2v voice train <voices/id.yaml> [--lang ko] [--min-emotion 150]   (its trained speaker, about 3 h)
  *   s2v voice refs <script.md> [--refresh]   (reference voices for the consistency checks)
- *   s2v tts <script.md> [--no-asr] [--recheck] [--retry <scene[:paragraph[:sentence]]> ...]
- *   s2v sentences <script.md>   (sentence ids for --retry)
- *   s2v takes <script.md> [--all] [--id <scene[:paragraph[:sentence]]> ...] [--no-open]   (listening page)
- *   s2v takes <script.md> --list [--id <scene[:paragraph[:sentence]]> ...]   (takes of each line)
- *   s2v takes pick <script.md> <id>=<take> ... | unpick <script.md> <id> ...   (choose a take)
- *   s2v inspect <script.md> --json [--hash-version 1]   (what the script is made of, hashed by kind)
- *   s2v export-script <script.md>   (reading script for a recording session)
- *   s2v import-recording <script.md> <take.wav> [--write]   (one take → per-paragraph files)
- *   s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open]
- *              (direction plan and director notes as an HTML page; no audio needed)
- *   s2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]
- *              (with rhythm on, the paragraph gaps go to stderr as a table)
- *   s2v render <script.md> [--output youtube|shorts] [--no-asr] [--recheck] [--draft] [--no-cache]
- *              [--frozen-audio]   (never synthesize; fail if audio is missing)
- *              [--workers N]      (browser tabs rendering in parallel)
- *              [--idle on|off]    (idle motion; overrides acting.idle)
- *              [--rhythm on|off]  (content-aware gaps; overrides acting.rhythm and the output's;
- *                                  also for snapshot, timeline and direct)
- *   s2v audio prune <script.md>   (drop locked audio the script no longer uses)
- *   s2v dev <script.md> [--video]  (edit loop: lint → tts → snapshot on every save)
- *   s2v doctor                    (is this machine ready?)
- *   s2v character setup [--max-memory-gb N]   (optional: character image generation, Apple silicon)
- *   s2v character create <dir> [--candidates 4] | pick <dir> <n> | build <dir> [--dry-run]
- *                 | review <dir> | approve <dir> <item>...|--all [--except <item>...]
- *                 | redo <dir> <item>... [--seed N] | missing <script.md> [--apply]
- *   s2v new <dir> [--lang ko]     (a new video folder with a starter script)
- *   s2v snapshot <script.md> [--output youtube] [--draft]
- *   s2v pick <image>
- *   s2v say "<sentence>" [--voice qwen:Sohee] [--lang ko] [--style ...] [--script script.md] [--no-play]
- *   s2v tts-server start
+ *   s2v character setup [--max-memory-gb N]   (optional image generation; Apple silicon)
+ *   s2v character create <dir> [--candidates 4] [--max-memory-gb N]
+ *   s2v character pick <dir> <n>
+ *   s2v character build <dir> [--dry-run] [--reset-derived] [--max-memory-gb N]
+ *   s2v character review <dir>
+ *   s2v character approve <dir> <item>... | --all [--except <item>...] [--reset-derived]
+ *   s2v character redo <dir> <item>... [--seed N]
+ *   s2v character missing <script.md> [--apply]
+ *   s2v character import <ymm4 folder|zip> --out <characters/id> [--name <character>]
+ *   s2v new <dir> [--lang ko|ja|en]   (a new video folder with a starter script)
+ *   s2v pick <image>   (mark a spot on an image)
+ *   s2v doctor   (is this machine ready?)
+ *   s2v tts-server start   (keep the TTS server running)
  */
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseArgs } from 'node:util';
 import {
   buildTimeline,
   directPlan,
@@ -106,37 +104,13 @@ import { trainVoice } from './voice-train.js';
 import { voiceRefs } from './voice-refs.js';
 import { inspectScript } from './inspect.js';
 import { directDiagnostics, directHtml, directManifest } from './direct.js';
+import { commandOf, onOff, parseFor, USAGE, UsageError } from './args.js';
+import { printVersion } from './version.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 function usage(): never {
-  console.error(
-    'usage: s2v <lint|check|sentences|tts|timeline|render|snapshot|pick|say> <file|text> [options]\n' +
-      '       s2v voice create <voices/id.yaml> [--lang ko] [--candidates 3] [--play]\n' +
-      '       s2v voice pick <voices/id.yaml> <n> [--lang ko]\n' +
-      '       s2v voice check <voices/id.yaml> [--lang ko]\n' +
-      '       s2v voice train <voices/id.yaml> [--lang ko] [--min-emotion 150]\n' +
-      '       s2v voice refs <script.md> [--refresh]\n' +
-      '       s2v character import <ymm4 folder|zip> --out <characters/id> [--name <character>]\n' +
-      '       s2v character setup [--max-memory-gb N]   (image generation models; Apple silicon)\n' +
-      '       s2v character create <dir> [--candidates 4]   (round 1: candidate front images)\n' +
-      '       s2v character pick <dir> <n>   (a candidate becomes the front reference)\n' +
-      '       s2v character build <dir> [--dry-run] [--reset-derived]   (the next round)\n' +
-      '       s2v character review <dir>\n' +
-      '       s2v character approve <dir> <item>...|--all [--except <item>...]\n' +
-      '       s2v character redo <dir> <item>... [--seed N]\n' +
-      '       s2v character missing <script.md> [--apply]\n' +
-      '       s2v audio prune <script.md>\n' +
-      '       s2v takes <script.md> [--all] [--id <id>] [--no-open] | --list [--id <id>] | takes pick <script.md> <id>=<take> ... | takes unpick <script.md> <id> ...\n' +
-      '       s2v inspect <script.md> --json [--hash-version 1]\n' +
-      '       s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open]   (direction plan, notes)\n' +
-      '       s2v export-script <script.md>   (reading script for recording)\n' +
-      '       s2v import-recording <script.md> <take.wav> [--write]\n' +
-      '       s2v dev <script.md> [--output youtube] [--video] [--no-asr]\n' +
-      '       s2v doctor\n' +
-      '       s2v new <dir> [--lang ko|ja|en]\n' +
-      '       s2v tts-server start',
-  );
+  console.error(USAGE.map((l, i) => `${i === 0 ? 'usage: ' : '       '}${l}`).join('\n'));
   process.exit(2);
 }
 
@@ -201,81 +175,34 @@ function memoryLimit(value: string | undefined): number {
   return n;
 }
 
-function parseCli(rest: string[]) {
-  return parseArgs({
-    args: rest,
-    allowPositionals: true,
-    options: {
-      'no-asr': { type: 'boolean', default: false },
-      recheck: { type: 'boolean', default: false },
-      retry: { type: 'string', multiple: true },
-      draft: { type: 'boolean', default: false },
-      'no-cache': { type: 'boolean', default: false },
-      'frozen-audio': { type: 'boolean', default: false },
-      video: { type: 'boolean', default: false },
-      workers: { type: 'string' },
-      write: { type: 'boolean', default: false },
-      output: { type: 'string', default: 'youtube' },
-      fps: { type: 'string', default: '30' },
-      voice: { type: 'string' },
-      lang: { type: 'string' },
-      style: { type: 'string' },
-      script: { type: 'string' },
-      'no-play': { type: 'boolean', default: false },
-      play: { type: 'boolean', default: false },
-      candidates: { type: 'string' },
-      out: { type: 'string' },
-      name: { type: 'string' },
-      'max-memory-gb': { type: 'string' },
-      'dry-run': { type: 'boolean', default: false },
-      'reset-derived': { type: 'boolean', default: false },
-      all: { type: 'boolean', default: false },
-      except: { type: 'string', multiple: true },
-      seed: { type: 'string' },
-      apply: { type: 'boolean', default: false },
-      refresh: { type: 'boolean', default: false },
-      json: { type: 'boolean', default: false },
-      'hash-version': { type: 'string' },
-      list: { type: 'boolean', default: false },
-      'no-open': { type: 'boolean', default: false },
-      'min-emotion': { type: 'string' },
-      id: { type: 'string', multiple: true },
-      idle: { type: 'string' },
-      rhythm: { type: 'string' },
-    },
-  });
-}
-
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
-  let parsed: ReturnType<typeof parseCli>;
-  try {
-    parsed = parseCli(rest);
-  } catch (e) {
-    console.error((e as Error).message);
-    usage();
+  if (command === '--version') {
+    printVersion(REPO_ROOT, rest);
+    return;
   }
-  const { values, positionals } = parsed;
+  if (!command) usage();
+  // Each command takes only its own flags (S3 plan 4); check them before anything runs.
+  const found = commandOf(command, rest);
+  if (!found) usage();
+  parseFor(found.key, rest);
+  const { positionals } = found;
   const file = positionals[0];
   // --rhythm changes the timing: only commands that build a timeline take it (5d plan 2).
-  let rhythm: boolean | undefined;
-  if (values.rhythm !== undefined) {
-    if (!['render', 'snapshot', 'timeline', 'direct'].includes(command ?? ''))
-      throw new Error(`--rhythm is for render, snapshot, timeline and direct, not ${command}`);
-    if (values.rhythm !== 'on' && values.rhythm !== 'off')
-      throw new Error(`--rhythm must be on or off, not "${values.rhythm}"`);
-    rhythm = values.rhythm === 'on';
-  }
-  const rhythmOpts = rhythm === undefined ? {} : { rhythm };
-  if (command === 'tts-server' && file === 'start') {
+  const rhythmOf = (value: string | undefined) => {
+    const rhythm = onOff('rhythm', value);
+    return rhythm === undefined ? {} : { rhythm };
+  };
+  if (command === 'tts-server') {
     await runResident(REPO_ROOT, (m) => console.error(m));
     return;
   }
   if (command === 'dev') {
+    const { values } = parseFor('dev', rest);
     const file = positionals[0];
     if (!file) usage();
     await dev(resolve(file), {
-      output: values.output!,
+      output: values.output,
       video: values.video === true,
       asr: !values['no-asr'],
       cliPath: fileURLToPath(import.meta.url),
@@ -285,6 +212,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'new') {
+    const { values } = parseFor('new', rest);
     const dir = positionals[0];
     if (!dir) usage();
     const lang = (values.lang ?? 'ko') as Lang;
@@ -305,6 +233,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'import-recording') {
+    const { values } = parseFor('import-recording', rest);
     const [scriptFile, recording] = positionals;
     if (!scriptFile || !recording) usage();
     const scriptPath = resolve(scriptFile);
@@ -319,6 +248,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'inspect') {
+    const { values } = parseFor('inspect', rest);
     const [scriptFile] = positionals;
     const hashVersion = Number(values['hash-version'] ?? 1);
     if (!scriptFile || !values.json || positionals.length !== 1) usage();
@@ -328,12 +258,6 @@ async function main(): Promise<void> {
       );
       process.exit(2);
     }
-    // only --json and --hash-version: any other flag (even at its default value) is a mistake
-    const flags = process.argv
-      .slice(3)
-      .filter((a) => a.startsWith('--'))
-      .map((a) => a.slice(2).split('=')[0]!);
-    if (flags.some((f) => f !== 'json' && f !== 'hash-version')) usage();
     if (values['hash-version'] !== undefined && !/^\d+$/.test(values['hash-version'])) usage();
     const scriptPath = resolve(scriptFile);
     if (!existsSync(scriptPath) || !statSync(scriptPath).isFile()) {
@@ -365,6 +289,8 @@ async function main(): Promise<void> {
     // `s2v takes pick|unpick <script> …` or `s2v takes <script> --list` (not `s2v pick <image>`)
     const [first, ...more] = positionals;
     const sub = first === 'pick' || first === 'unpick' ? first : null;
+    // pick and unpick take no flags (checked above); the page and --list read these
+    const { values } = parseFor('takes', sub ? [] : rest);
     const scriptFile = sub ? more[0] : first;
     if (!scriptFile) usage();
     const scriptPath = resolve(scriptFile);
@@ -393,36 +319,51 @@ async function main(): Promise<void> {
   }
   if (command === 'voice') {
     const [sub, yamlPath, n] = positionals;
-    const lang = (values.lang ?? 'ko') as Lang;
-    if (!yamlPath || !['ko', 'ja', 'en'].includes(lang)) usage();
+    if (!yamlPath) usage();
+    const langOf = (value: string | undefined) => {
+      const lang = (value ?? 'ko') as Lang;
+      if (!['ko', 'ja', 'en'].includes(lang)) usage();
+      return lang;
+    };
     const log = (m: string) => console.error(m);
     if (sub === 'refs') {
+      const { values } = parseFor('voice refs', rest);
       const scriptPath = resolve(yamlPath);
       await voiceRefs(scriptPath, load(scriptPath), REPO_ROOT, {
-        refresh: values.refresh === true,
+        refresh: values.refresh,
         log,
       });
       return;
     }
     if (sub === 'check') {
+      const lang = langOf(parseFor('voice check', rest).values.lang);
       const fails = await checkVoice(resolve(yamlPath), lang, REPO_ROOT, log);
       if (fails.length) process.exitCode = 1;
       return;
     }
     if (sub === 'create') {
+      const { values } = parseFor('voice create', rest);
+      const lang = langOf(values.lang);
       await createVoice(resolve(yamlPath), REPO_ROOT, {
         lang,
         candidates: Math.max(1, Number(values.candidates ?? 3)),
-        play: values.play === true,
+        play: values.play,
         log,
       });
       return;
     }
     if (sub === 'pick' && n) {
-      pickVoice(resolve(yamlPath), Number(n), lang, log);
+      pickVoice(
+        resolve(yamlPath),
+        Number(n),
+        langOf(parseFor('voice pick', rest).values.lang),
+        log,
+      );
       return;
     }
     if (sub === 'train') {
+      const { values } = parseFor('voice train', rest);
+      const lang = langOf(values.lang);
       // acting stage 4: Korean first (ja and en after their sentence sets are tried, E6)
       if (lang !== 'ko') throw new Error('voice train supports --lang ko for now');
       const raw = values['min-emotion'] ?? '150';
@@ -435,7 +376,9 @@ async function main(): Promise<void> {
   }
   if (command === 'character') {
     const [sub, src] = positionals;
+    const log = (m: string) => console.error(m);
     if (sub === 'setup' && !src) {
+      const { values } = parseFor('character setup', rest);
       await setupImagegen(REPO_ROOT, {
         maxGb: memoryLimit(values['max-memory-gb']),
         explicit: values['max-memory-gb'] !== undefined,
@@ -443,53 +386,56 @@ async function main(): Promise<void> {
       });
       return;
     }
-    const gen = {
-      repoRoot: REPO_ROOT,
-      maxGb: memoryLimit(values['max-memory-gb']),
-      log: (m: string) => console.error(m),
-    };
+    // --max-memory-gb watches the image model: only create and build load it
+    const gen = (maxGb?: string) => ({ repoRoot: REPO_ROOT, maxGb: memoryLimit(maxGb), log });
     const items = positionals.slice(2);
     if (sub === 'create' && src) {
+      const { values } = parseFor('character create', rest);
       const n = Number(values.candidates ?? 4);
       if (!Number.isInteger(n) || n < 1 || n > 16) usage();
-      await createCharacter(resolve(src), { ...gen, candidates: n });
+      await createCharacter(resolve(src), { ...gen(values['max-memory-gb']), candidates: n });
       return;
     }
     if (sub === 'pick' && src && items.length === 1) {
-      pickCandidate(resolve(src), items[0]!, gen.log);
+      pickCandidate(resolve(src), items[0]!, log);
       return;
     }
     if (sub === 'build' && src) {
+      const { values } = parseFor('character build', rest);
       await buildCharacter(resolve(src), {
-        ...gen,
-        dryRun: values['dry-run'] === true,
-        resetDerived: values['reset-derived'] === true,
+        ...gen(values['max-memory-gb']),
+        dryRun: values['dry-run'],
+        resetDerived: values['reset-derived'],
       });
       return;
     }
     if (sub === 'review' && src) {
-      await reviewCharacter(resolve(src), gen);
+      await reviewCharacter(resolve(src), gen());
       return;
     }
-    if (sub === 'approve' && src && (items.length > 0 || values.all)) {
+    const approve = sub === 'approve' ? parseFor('character approve', rest).values : null;
+    if (approve && src && (items.length > 0 || approve.all)) {
+      const values = approve;
       // `--all --except a b`: names after --except are exceptions too; with --all and no
       // --except, names are ambiguous and refused.
       if (values.all && items.length > 0 && !values.except) usage();
       await approveItems(resolve(src), values.all ? [] : items, {
-        ...gen,
-        all: values.all === true,
+        ...gen(),
+        all: values.all,
         except: [...(values.except ?? []), ...(values.all ? items : [])],
-        resetDerived: values['reset-derived'] === true,
+        resetDerived: values['reset-derived'],
       });
       return;
     }
     if (sub === 'redo' && src && items.length > 0) {
+      const { values } = parseFor('character redo', rest);
       const seed = values.seed === undefined ? undefined : Number(values.seed);
       if (seed !== undefined && !(Number.isInteger(seed) && seed >= 0 && seed < 2 ** 32)) usage();
-      redoItems(resolve(src), items, seed, gen.log);
+      redoItems(resolve(src), items, seed, log);
       return;
     }
     if (sub === 'missing' && src) {
+      const { values } = parseFor('character missing', rest);
       const scriptPath = resolve(src);
       // Parse only: the lint errors (a face missing from a set) are what this command explains.
       const parsed = parseScript(readFileSync(scriptPath, 'utf8'));
@@ -506,13 +452,15 @@ async function main(): Promise<void> {
         }
       const n = printMissing(
         values.apply ? findMissing(script, dirname(scriptPath)) : reports,
-        gen.log,
+        log,
       );
       if (n > 0) process.exitCode = 1;
       return;
     }
-    if (sub === 'import' && src && values.out) {
-      const r = importCharacter(resolve(src), resolve(values.out), {
+    const imp = sub === 'import' ? parseFor('character import', rest).values : null;
+    if (imp && src && imp.out) {
+      const values = imp;
+      const r = importCharacter(resolve(src), resolve(values.out!), {
         ...(values.name ? { name: values.name } : {}),
         log: (m) => console.error(m),
       });
@@ -529,13 +477,15 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'snapshot': {
+      const { values } = parseFor('snapshot', rest);
+      const rhythmOpts = rhythmOf(values.rhythm);
       const script = load(path);
       const log = (m: string) => console.error(m);
-      const outputName = values.output!;
+      const outputName = values.output;
       const profile = script.meta.outputs[outputName];
       if (!profile) throw new Error(`unknown output "${outputName}"`);
       const videoId = basename(dirname(path));
-      const draft = values.draft === true;
+      const draft = values.draft;
       const lockDir = draft
         ? join(REPO_ROOT, '.s2v-cache', 'draft-audio', videoId, script.meta.lang)
         : undefined;
@@ -592,6 +542,7 @@ async function main(): Promise<void> {
       break;
     }
     case 'say': {
+      const { values } = parseFor('say', rest);
       const script = values.script ? load(resolve(values.script)) : null;
       const firstCast = script ? Object.values(script.meta.cast)[0] : undefined;
       await say(file, REPO_ROOT, {
@@ -666,6 +617,7 @@ async function main(): Promise<void> {
       break;
     }
     case 'tts': {
+      const { values } = parseFor('tts', rest);
       const script = load(path);
       const started = Date.now();
       const result = await synthesizeScript(path, script, REPO_ROOT, {
@@ -681,8 +633,10 @@ async function main(): Promise<void> {
       break;
     }
     case 'direct': {
+      const { values } = parseFor('direct', rest);
+      const rhythmOpts = rhythmOf(values.rhythm);
       const { script, diagnostics } = loadWithDiagnostics(path);
-      const outputName = values.output!;
+      const outputName = values.output;
       if (!script.meta.outputs[outputName])
         throw new Error(
           `unknown output "${outputName}" (have: ${Object.keys(script.meta.outputs).join(', ')})`,
@@ -709,10 +663,12 @@ async function main(): Promise<void> {
       break;
     }
     case 'timeline': {
+      const { values } = parseFor('timeline', rest);
+      const rhythmOpts = rhythmOf(values.rhythm);
       const script = load(path);
       const { timeline, issues, gaps } = buildTimeline(
         script,
-        values.output!,
+        values.output,
         loadAudioManifest(path, script.meta.lang),
         Number(values.fps),
         rhythmOpts,
@@ -729,17 +685,17 @@ async function main(): Promise<void> {
       break;
     }
     case 'render': {
+      const { values } = parseFor('render', rest);
+      const rhythmOpts = rhythmOf(values.rhythm);
+      const idleFlag = onOff('idle', values.idle);
       const script = load(path);
       const log = (m: string) => console.error(m);
       const started = Date.now();
-      const outputName = values.output!;
+      const outputName = values.output;
       const profile = script.meta.outputs[outputName];
       if (!profile) throw new Error(`unknown output "${outputName}"`);
-      const draft = values.draft === true;
-      if (values.idle !== undefined && values.idle !== 'on' && values.idle !== 'off')
-        throw new Error(`--idle must be on or off, not "${values.idle}"`);
-      const idle =
-        values.idle !== undefined ? values.idle === 'on' : script.meta.acting?.idle !== false;
+      const draft = values.draft;
+      const idle = idleFlag ?? script.meta.acting?.idle !== false;
       const videoId = basename(dirname(path));
       const lockDir = draft
         ? join(REPO_ROOT, '.s2v-cache', 'draft-audio', videoId, script.meta.lang)
@@ -896,5 +852,5 @@ async function main(): Promise<void> {
 
 main().catch((e: unknown) => {
   console.error(e instanceof Error ? e.message : e);
-  process.exit(e instanceof ExitError ? e.exitCode : 1);
+  process.exit(e instanceof UsageError ? 2 : e instanceof ExitError ? e.exitCode : 1);
 });

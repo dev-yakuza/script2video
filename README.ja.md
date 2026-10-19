@@ -54,6 +54,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | コマンド                                                                                         | 内容                                                                                                                                            |
 | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `doctor`                                                                                         | Node、ffmpeg、uv、Python 環境、モデル、フォントをチェック                                                                                       |
+| `--version [--json]`                                                                             | 固定するバージョン: semver とコードのハッシュ（ツールは `--json`）                                                                              |
 | `new <dir> [--lang ko]`                                                                          | 最初の台本が入った新しい動画フォルダを作る                                                                                                      |
 | `lint <script>`                                                                                  | 静的チェック: 文法、素材、読み、字幕の分量、長さ                                                                                                |
 | `check <script>`                                                                                 | すべての字幕を実際のレンダラーで配置し、はみ出しを確認                                                                                          |
@@ -81,6 +82,12 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 
 `node packages/cli/dist/main.js <command> …` の形で実行します。`S2V_TTS=mock` を付けると、モデルなしで
 合成した仮の音声で全体を動かせるので、レイアウト作業や CI に便利です。
+
+各コマンドは自分のフラグだけを受け取り、知らないフラグはエラーです（exit 2）。`say` の文が `-` で
+始まるときは `--` の後に書きます。`--version --json` は `id`（semver + s2v が実行するコードと固定データの
+ハッシュ、未コミットの変更を含む）を出します。ツールは `id` を固定し、変わったら止まります。`stale_build` は
+どれかのパッケージの `dist` がソースより古いという意味です（`yarn build`）。`inspect` の `s2v_version` も
+同じ `id` です。
 
 `inspect --json` は動画を検収するツール向けです。出力、シーン、画面の文字、声、ファイルの一覧と、変更の
 種類ごとのハッシュ（`content`、`voice`、`audio`、出力ごとの `presentation`、`engine` の構成要素）を出すので、

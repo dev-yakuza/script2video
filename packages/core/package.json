@@ -1,6 +1,6 @@
 {
   "name": "@script2video/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Script parser, schema and timeline for script2video (renderer independent)",
   "license": "MIT",
@@ -12,7 +12,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node ../../scripts/build-stamp.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

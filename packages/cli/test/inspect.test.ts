@@ -557,6 +557,10 @@ describe('inspect: committed samples', () => {
     const a = runCli();
     expect(runCli().equals(a)).toBe(true);
     expect(JSON.parse(a.toString()).script).toBe('videos/sample-ko/script.ko.md');
+    // the version a tool pins (S3), and whether this checkout's build is current
+    const r = JSON.parse(a.toString()) as InspectResult;
+    expect(r.s2v_version).toMatch(/^\d+\.\d+\.\d+\+[0-9a-f]{12}$/);
+    expect(typeof r.stale_build).toBe('boolean');
   });
 
   // Golden values: a change here means the hash formula, the parser or the schema output changed.

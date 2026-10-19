@@ -1,6 +1,6 @@
 {
   "name": "@script2video/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "s2v command line for script2video",
   "license": "MIT",
@@ -9,7 +9,7 @@
     "s2v": "./dist/main.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node ../../scripts/build-stamp.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

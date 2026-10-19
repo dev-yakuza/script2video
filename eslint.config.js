@@ -15,6 +15,11 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // plain Node scripts (the build stamp)
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: { process: 'readonly', console: 'readonly', Buffer: 'readonly' } },
+  },
+  {
     rules: {
       '@typescript-eslint/no-unused-vars': [
         'error',

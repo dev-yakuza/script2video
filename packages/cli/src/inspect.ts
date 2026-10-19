@@ -56,6 +56,7 @@ import {
   type LockManifest,
 } from './tts.js';
 import { readPicks } from './picks.js';
+import { versionInfo } from './version.js';
 
 const sha256 = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 const hashOf = (value: unknown) => sha256(canonical(value));
@@ -68,6 +69,8 @@ export interface InspectFile {
 
 export interface InspectResult {
   s2v_version: string;
+  /** a package's dist is older than its source (S3) */
+  stale_build: boolean;
   hash_version: number;
   script: string;
   lang: string;
@@ -510,17 +513,15 @@ export function inspectScript(
     engine: engineOf(m),
     lang: meta.lang,
   }));
-  const version = (
-    JSON.parse(readFileSync(join(repoRoot, 'packages', 'cli', 'package.json'), 'utf8')) as {
-      version: string;
-    }
-  ).version;
+  // the version a tool pins (S3): semver + code hash
+  const v = versionInfo(repoRoot, { git: false });
   const engineHashes = Object.fromEntries(
     Object.entries(engine).map(([k, v]) => [k, hashOf({ v })]),
   );
   return {
     result: {
-      s2v_version: version,
+      s2v_version: v.id,
+      stale_build: v.stale_build,
       hash_version: 1,
       script: shownPath,
       lang: meta.lang,

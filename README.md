@@ -55,6 +55,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | command                                                                                          | what it does                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `doctor`                                                                                         | checks Node, ffmpeg, uv, Python environments, models, fonts                                                                                                    |
+| `--version [--json]`                                                                             | the version to pin: semver plus a hash of the code (`--json` for tools)                                                                                        |
 | `new <dir> [--lang ko]`                                                                          | a new video folder with a starter script                                                                                                                       |
 | `lint <script>`                                                                                  | static checks: syntax, assets, pronunciation, subtitle budget, length                                                                                          |
 | `check <script>`                                                                                 | lays every subtitle out in the real renderer and reports overflow                                                                                              |
@@ -82,6 +83,12 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 
 Run them as `node packages/cli/dist/main.js <command> …`. `S2V_TTS=mock` runs everything with
 synthetic audio (no models), useful for layout work and CI.
+
+Each command takes only its own flags; an unknown one is an error (exit 2). A sentence for `say`
+that starts with `-` goes after `--`. `--version --json` gives `id` (semver + a hash of the code
+and fixed data s2v runs, uncommitted changes included): tools pin `id` and stop when it changes.
+`stale_build` says a package's `dist` is older than its source (run `yarn build`). `inspect`'s
+`s2v_version` is the same `id`.
 
 `inspect --json` is for tools that review videos: it lists outputs, scenes, screen text, voices
 and files, and gives one hash per kind of change (`content`, `voice`, `audio`, one
