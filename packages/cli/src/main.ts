@@ -15,6 +15,7 @@
  *   s2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]
  *   s2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>] [--frozen-audio] [--frames]
  *   s2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>] [--watermark proxy]
+ *   s2v capture <url> --out <png> [--text <json>] [--assets-dir <dir>] [--width 1280] [--height 800] [--selector <css>] [--allow-host <host>]... [--timeout 30]   (a web page: its picture and what it says)
  *   s2v audio prune <script.md>   (drop locked audio the script no longer uses)
  *   s2v export-script <script.md>   (reading script for a recording session)
  *   s2v import-recording <script.md> <take.wav> [--write]
@@ -63,7 +64,7 @@ import {
   type AudioManifest,
   type Lang,
 } from '@script2video/core';
-import { renderScenes, type Aspect } from '@script2video/renderer-remotion';
+import { headlessBrowserPath, renderScenes, type Aspect } from '@script2video/renderer-remotion';
 import { renderedLengthWarning } from './length.js';
 import { enrichCast } from './cast-faces.js';
 import { castOptions } from './cast.js';
@@ -111,6 +112,7 @@ import { printVersion, versionInfo } from './version.js';
 import { sentencesReport } from './sentences.js';
 import { proxyPlacement, writeProxyPng } from './watermark.js';
 import { cacheDirOf, checkOutDir, outDirOf } from './paths.js';
+import { runCapture } from './capture/index.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -495,6 +497,12 @@ async function main(): Promise<void> {
       return;
     }
     usage();
+  }
+  if (command === 'capture') {
+    const { values } = parseFor('capture', rest);
+    const code = await runCapture(file, values, headlessBrowserPath, (m) => console.error(m));
+    if (code !== 0) process.exit(code);
+    return;
   }
   if (!command || !file) usage();
   const path = resolve(file);

@@ -4,7 +4,13 @@
  */
 
 import { bundle } from '@remotion/bundler';
-import { openBrowser, renderMedia, renderStill, selectComposition } from '@remotion/renderer';
+import {
+  ensureBrowser,
+  openBrowser,
+  renderMedia,
+  renderStill,
+  selectComposition,
+} from '@remotion/renderer';
 import type { Timeline, TimelineScene } from '@script2video/core';
 import { createHash } from 'node:crypto';
 import {
@@ -202,6 +208,24 @@ export function rendererSourceHash(): string {
 
 function sha256File(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+/**
+ * The headless browser Remotion downloads (about 100 MB, once), for tools that drive it
+ * themselves (`s2v capture`, S5 plan 2.1). Any other browser is refused: the capture's
+ * protections are tested against this build.
+ */
+export async function headlessBrowserPath(): Promise<string> {
+  const status = await ensureBrowser({ logLevel: 'warn' });
+  if (status.type !== 'local-puppeteer-browser')
+    throw new Error(
+      status.type === 'version-mismatch'
+        ? `the downloaded browser is not the version this renderer expects (${status.actualVersion ?? 'unknown'})`
+        : status.type === 'user-defined-path'
+          ? 'capture uses only the browser Remotion downloads, not a browser set by path'
+          : 'no headless browser could be downloaded',
+    );
+  return status.path;
 }
 
 /** Read width/height from a PNG or JPEG header. */

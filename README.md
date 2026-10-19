@@ -64,6 +64,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `tts <script> [--retry id]`                                                                                                            | synthesize into the audio lock (only what changed)                                                                                                             |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>] [--watermark proxy]` | video + `.srt` `.vtt` chapters, description draft, thumbnail                                                                                                   |
 | `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>] [--frozen-audio] [--frames]`                                   | one still per scene, tiled, in seconds; `--frames`: every change of picture as its own still, with an `index.json`                                             |
+| `capture <url> --out <png> [--text <json>] [--assets-dir <dir>] [--selector <css>] [--allow-host <host>]…`                             | a web page's picture (1280×800, or one element) and, with `--text`, what it says as JSON                                                                       |
 | `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>]`                                                   | direction plan and director notes as a page (`out/<video>/direct/`); no audio needed                                                                           |
 | `dev <script> [--video]`                                                                                                               | edit loop: lint → tts → snapshot on every save                                                                                                                 |
 | `takes <script> [--all] [--id id] [--no-open] [--out-dir <dir>]`                                                                       | a listening page (`out/<video>/takes/<lang>/`): every take of each line, alone or between its neighbours; the radios write the `takes pick` / `unpick` command |
@@ -115,6 +116,23 @@ subtitles are on top). It re-encodes the video once more (minutes for a long 108
 scene cache is shared with unmarked renders, so run one of the two at a time. The text files are
 the same as the unmarked ones. With characters and subtitles on top, the band in the bottom corner
 may cover a character's feet.
+
+`capture` opens a web page in the headless browser render uses (downloaded once, about 100 MB)
+and reaches public hosts only: the URL's host and each `--allow-host` (exact names), which must
+resolve to public addresses only. Every other host, every IP address and other schemes are blocked;
+what the page itself asked for is listed in the JSON's `blocked` (WebSockets in `websockets`;
+workers' own requests may not show). It cannot keep out an intranet that sits on a public address
+and lets this machine in, so give it public pages. A fresh profile each run (no saved cookies), no popups, no downloads,
+WebRTC off.
+`--text` writes the page's title, language, visible text in blocks (headings, paragraphs, list
+items…; ruby as pairs), its pictures with their place and the sha256 of their bytes
+(`--assets-dir` keeps the bytes), what cannot be read (other-site frames, canvases), and
+`contentHash`, a hash of what the page says (not where things are). `contentHash` is `null` with
+`--selector`, another size, or when the page did not settle within `--timeout` (seconds for the
+whole run, 30 by default, plus a few seconds' grace for each step after it: the page is then captured as it was, exit 0 with a warning). A page that
+does not load or answers other than 2xx is exit 1: no picture, and the JSON says what is known. On
+Linux the browser needs its sandbox (user namespaces); in a container that cannot give it,
+`S2V_CAPTURE_NO_SANDBOX=1` runs without.
 
 `snapshot --frames` writes `<output>.<lang>.frames/` beside the sheet: a full-size still at every
 point the picture changes (the first visual settled, each visual and cue, a character's face and

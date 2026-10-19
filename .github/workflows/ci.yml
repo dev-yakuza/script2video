@@ -72,6 +72,13 @@ jobs:
             libxcomposite1 libxdamage1 libpango-1.0-0 libcairo2 libcups2t64 libasound2t64
       - run: corepack enable
       - run: yarn install --immutable
+      - id: remotion
+        run: echo "version=$(node -p "require('@remotion/renderer/package.json').version")" >> "$GITHUB_OUTPUT"
+      # the headless browser Remotion downloads (render and capture), one per renderer version
+      - uses: actions/cache@v4
+        with:
+          path: node_modules/.remotion
+          key: remotion-browser-${{ runner.os }}-${{ steps.remotion.outputs.version }}
       - run: yarn build
       - run: node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output youtube --frozen-audio
       - run: node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output shorts --frozen-audio
@@ -89,6 +96,11 @@ jobs:
           node packages/cli/dist/main.js snapshot videos/sample-ko/script.ko.md --output youtube --frozen-audio --frames --out-dir "$RUNNER_TEMP/stills"
           test -s "$RUNNER_TEMP/stills/youtube.ko.snapshot.png"
           node scripts/check-frames.mjs "$RUNNER_TEMP/stills/youtube.ko.frames" 2
+      - name: capture in a real browser (S5)
+        run: |
+          # capture keeps the browser sandbox on: let it make its user namespace
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          CAPTURE_E2E=1 yarn vitest run packages/cli/test/capture-e2e.test.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:

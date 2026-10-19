@@ -63,6 +63,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `tts <script> [--retry id]`                                                                                                            | 오디오 잠금에 합성(바뀐 부분만)                                                                                                        |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>] [--watermark proxy]` | 영상 + `.srt` `.vtt` 챕터, 설명문 초안, 썸네일                                                                                         |
 | `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>] [--frozen-audio] [--frames]`                                   | 장면마다 정지 화면 한 장을 모아 몇 초 만에 확인. `--frames`: 화면이 바뀌는 시점마다 낱장과 `index.json`                                |
+| `capture <url> --out <png> [--text <json>] [--assets-dir <dir>] [--selector <css>] [--allow-host <host>]…`                             | 웹페이지의 화면(1280×800 또는 요소 하나)과, `--text`로 그 내용을 JSON으로                                                              |
 | `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>]`                                                   | 연출 계획과 감독 노트 페이지(`out/<video>/direct/`), 음성 없이도 됨                                                                    |
 | `dev <script> [--video]`                                                                                                               | 편집 루프: 저장할 때마다 lint → tts → snapshot                                                                                         |
 | `takes <script> [--all] [--id id] [--no-open] [--out-dir <dir>]`                                                                       | 청취 페이지(`out/<영상>/takes/<lang>/`): 문장별 모든 테이크를 단독·앞뒤 문장과 이어 듣고, 라디오로 `takes pick` / `unpick` 명령을 만듦 |
@@ -98,6 +99,20 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 음성 lock의 각 문장은 ASR이 들었는지(`asr`)를 기록하고, 듣지 않았으면(`--no-asr`, mock 음성, 녹음) `cer`는 `null`입니다. ASR을 켠 `tts`는 아직 듣지 않은 lock 문장을 그 자리에서 듣습니다. 음성은 그대로이고, 떨어지면 다시 고릅니다(고른 테이크는 경고만 하고 둡니다). 이때는 정렬 서버만 띄웁니다(다시 고를 문장이 있으면 TTS 서버도).
 
 `render --watermark proxy`는 영상과 썸네일에 빨간 PROXY 띠를 넣고 결과물 이름을 `<output>.<lang>[.draft].proxy.*`로 해서 표시 없는 결과물을 덮지 않습니다(도구가 사람이 승인하지 않은 렌더를 표시할 때). 띠는 로고 반대쪽 위 모서리에 놓입니다(자막이 위에 있으면 아래). 영상을 한 번 더 인코딩하므로(긴 1080p 영상은 몇 분) 시간이 더 걸리고, 장면 캐시는 표시 없는 렌더와 함께 쓰므로 둘을 동시에 돌리지 마세요. 글 파일은 표시 없는 것과 같습니다. 캐릭터가 있고 자막이 위에 있으면 아래 모서리의 띠가 캐릭터의 발을 가릴 수 있습니다.
+
+`capture`는 render가 쓰는 헤드리스 브라우저(처음 한 번 약 100MB를 받습니다)로 웹페이지를 열고,
+공개 호스트에만 닿습니다. URL의 호스트와 `--allow-host`(정확한 이름)마다 공개 주소로만 해석되어야
+합니다. 그 밖의 호스트, 모든 IP 주소, 다른 스킴은 막습니다. 페이지가 직접 요청한 것은 JSON의
+`blocked`에 적습니다(WebSocket은 `websockets`에; 워커 자신의 요청은 빠질 수 있습니다). 공인 주소에
+있으면서 이 기기에만 열리는 사내망은 막지 못하므로 공개 페이지만 주세요. 실행마다 새 프로필(저장된 쿠키 없음)이고 팝업·다운로드는
+없으며 WebRTC는 꺼져 있습니다. `--text`는 페이지의 제목, 언어, 보이는 글을 블록 단위로(제목, 문단,
+목록 항목…; 루비는 쌍으로), 그림과 그 위치·바이트의 sha256(`--assets-dir`이 바이트를 보관),
+읽을 수 없는 것(다른 사이트의 프레임, 캔버스), 그리고 페이지가 말하는 내용의 해시
+`contentHash`(위치는 넣지 않음)를 씁니다. `--selector`, 다른 크기, 또는 `--timeout`(실행 전체의
+초, 기본 30. 그 뒤 단계마다 몇 초의 유예가 붙습니다) 안에 페이지가 잠잠해지지 않으면 `contentHash`는 `null`입니다(그때 페이지는 그
+상태로 찍고 경고와 함께 exit 0). 열리지 않거나 2xx가 아닌 페이지는 exit 1: 그림은 없고 JSON에
+아는 것만 적습니다. Linux에서는 브라우저에 샌드박스(사용자 네임스페이스)가 필요합니다. 그것을 줄
+수 없는 컨테이너에서는 `S2V_CAPTURE_NO_SANDBOX=1`로 샌드박스 없이 돌립니다.
 
 `snapshot --frames`는 모아 찍은 한 장 옆에 `<output>.<lang>.frames/`를 씁니다. 화면이 바뀌는 시점(첫 그림이 자리 잡은 뒤, 그림과 cue마다, 캐릭터의 얼굴과 기본 얼굴로 돌아갈 때, 무대 교체, 유지되는 동작)마다 원래 크기의 낱장을 장면당 최대 12장, 영상 전체 번호로, 그리고 낱장마다 장면·프레임·초·이유와 s2v id, 대본 sha256을 적은 `index.json`을 씁니다. 정지 화면의 캐릭터는 쉬는 자세입니다(숨쉬기·깜빡임·끄덕임 없음). 실행은 지난 정지 화면과 낱장을 먼저 지웁니다. `--frames` 없이 돌리면 낱장 폴더는 그대로입니다. `--frozen-audio`는 음성 lock을 그대로 쓰고, 음성이 없는 문장이 있으면 실패합니다. `script_sha256`은 대본만 보며 에셋과 캐릭터 그림은 보지 않습니다. 중단된 실행은 `<…>.frames.tmp/`를 남길 수 있습니다.
 

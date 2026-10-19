@@ -1,6 +1,6 @@
 {
   "name": "script2video",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "Markdown script to narrated explainer video (KO/EN/JA) with local open-source TTS",
   "license": "MIT",

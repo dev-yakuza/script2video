@@ -63,6 +63,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `tts <script> [--retry id]`                                                                                                            | オーディオロックに合成（変わった部分だけ）                                                                                                      |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>] [--watermark proxy]` | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル                                                                                     |
 | `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>] [--frozen-audio] [--frames]`                                   | シーンごとの静止画を並べて数秒で確認。`--frames`: 画面が変わるたびの静止画と `index.json`                                                       |
+| `capture <url> --out <png> [--text <json>] [--assets-dir <dir>] [--selector <css>] [--allow-host <host>]…`                             | Web ページの画面（1280×800 または要素ひとつ）と、`--text` でその内容を JSON に                                                                  |
 | `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>]`                                                   | 演出計画と演出ノートのページ（`out/<video>/direct/`）、音声なしでも可                                                                           |
 | `dev <script> [--video]`                                                                                                               | 編集ループ: 保存のたびに lint → tts → snapshot                                                                                                  |
 | `takes <script> [--all] [--id id] [--no-open] [--out-dir <dir>]`                                                                       | 試聴ページ（`out/<動画>/takes/<lang>/`）: 文ごとのすべてのテイクを単独・前後の文とつなげて聞き、ラジオで `takes pick` / `unpick` コマンドを作る |
@@ -100,6 +101,20 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 音声 lock の各文は ASR が聞いたか（`asr`）を記録し、聞いていなければ（`--no-asr`、mock 音声、録音）`cer` は `null` です。ASR を有効にした `tts` は、まだ聞いていない lock の文をその場で聞きます。音声はそのままで、落ちたら選び直します（選んだテイクは警告だけで残します）。このときは整列サーバーだけを起動します（選び直す文があれば TTS サーバーも）。
 
 `render --watermark proxy` は動画とサムネイルに赤い PROXY の帯を入れ、成果物の名前を `<output>.<lang>[.draft].proxy.*` にして、印のない成果物を上書きしません（人が承認していないレンダーにツールが印を付けるとき）。帯はロゴと反対側の上の隅に置きます（字幕が上にあるときは下）。動画をもう一度エンコードするので（長い 1080p 動画では数分）時間が延び、シーンのキャッシュは印のないレンダーと共有するので同時に実行しないでください。テキストファイルは印のないものと同じです。キャラクターがいて字幕が上にあるときは、下の隅の帯がキャラクターの足元を隠すことがあります。
+
+`capture` は render が使うヘッドレスブラウザ（初回に約 100MB をダウンロード）で Web ページを開き、
+公開ホストにだけ接続します。URL のホストと `--allow-host`（正確な名前）はそれぞれ公開アドレスにだけ
+解決されなければなりません。それ以外のホスト、すべての IP アドレス、ほかのスキームはブロックします。ページ自身が要求したものは
+JSON の `blocked` に記します（WebSocket は `websockets` に。ワーカー自身の要求は漏れることがあります）。公開アドレスにありこの端末にだけ開いている社内ネットワークは防げない
+ので、公開ページだけを渡してください。実行ごとに新しいプロファイル（保存された Cookie なし）で、ポップアップ・ダウンロードはなく、WebRTC はオフです。
+`--text` はページのタイトル、言語、見えている文をブロック単位で（見出し、段落、リスト項目…；ルビは
+組で）、画像とその位置・バイトの sha256（`--assets-dir` がバイトを保存）、読めないもの（ほかのサイトの
+フレーム、canvas）、そしてページが述べる内容のハッシュ `contentHash`（位置は含めない）を書きます。
+`--selector`、ほかのサイズ、または `--timeout`（実行全体の秒数、既定 30。その後の段階ごとに数秒の猶予が付きます）内にページが落ち着かないと
+`contentHash` は `null` です（そのときページはその状態で撮り、警告付きで exit 0）。開けない、または
+2xx 以外を返すページは exit 1：画像はなく、JSON には分かっていることだけを記します。Linux では
+ブラウザにサンドボックス（ユーザー名前空間）が必要です。それを用意できないコンテナでは
+`S2V_CAPTURE_NO_SANDBOX=1` でサンドボックスなしで実行します。
 
 `snapshot --frames` は並べた一枚の隣に `<output>.<lang>.frames/` を書きます。画面が変わる時点（最初の画が落ち着いた後、画と cue ごと、キャラクターの表情と既定の表情に戻るとき、舞台の入れ替え、保たれる動き）ごとに原寸の静止画をシーンあたり最大 12 枚、動画全体の通し番号で、そして静止画ごとのシーン・フレーム・秒・理由と s2v id、台本の sha256 を記した `index.json` を書きます。静止画のキャラクターは休んだ姿勢です（呼吸・まばたき・うなずきなし）。実行は前回の並べた一枚と静止画を先に消します。`--frames` なしで実行すると静止画フォルダはそのままです。`--frozen-audio` は音声 lock をそのまま使い、音声のない文があれば失敗します。`script_sha256` は台本だけを見て、素材とキャラクターの絵は見ません。中断した実行は `<…>.frames.tmp/` を残すことがあります。
 

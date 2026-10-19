@@ -45,6 +45,13 @@ export const OPTIONS = {
   'out-dir': { type: 'string' },
   frames: { type: 'boolean', default: false },
   watermark: { type: 'string' },
+  text: { type: 'string' },
+  'assets-dir': { type: 'string' },
+  width: { type: 'string' },
+  height: { type: 'string' },
+  selector: { type: 'string' },
+  'allow-host': { type: 'string', multiple: true },
+  timeout: { type: 'string' },
 } as const satisfies Record<string, ParseArgsOptionDescriptor>;
 
 type Option = keyof typeof OPTIONS;
@@ -99,6 +106,7 @@ export const FLAGS = {
     'out-dir',
     'watermark',
   ],
+  capture: ['out', 'text', 'assets-dir', 'width', 'height', 'selector', 'allow-host', 'timeout'],
 } as const satisfies Record<string, readonly Option[]>;
 
 export type CommandKey = keyof typeof FLAGS;
@@ -210,6 +218,7 @@ export const USAGE = [
   's2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]',
   's2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>] [--frozen-audio] [--frames]',
   's2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>] [--watermark proxy]',
+  's2v capture <url> --out <png> [--text <json>] [--assets-dir <dir>] [--width 1280] [--height 800] [--selector <css>] [--allow-host <host>]... [--timeout 30]   (a web page: its picture and what it says)',
   's2v audio prune <script.md>   (drop locked audio the script no longer uses)',
   's2v export-script <script.md>   (reading script for a recording session)',
   's2v import-recording <script.md> <take.wav> [--write]',
