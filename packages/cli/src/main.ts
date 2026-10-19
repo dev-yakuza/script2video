@@ -14,7 +14,7 @@
  *   s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open] [--out-dir <dir>]   (direction plan and notes)
  *   s2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]
  *   s2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>] [--frozen-audio] [--frames]
- *   s2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>] [--watermark proxy]
+ *   s2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>] [--watermark proxy] [--scenes <id,…>]
  *   s2v capture <url> --out <png> [--text <json>] [--assets-dir <dir>] [--width 1280] [--height 800] [--selector <css>] [--allow-host <host>]... [--timeout 30]   (a web page: its picture and what it says)
  *   s2v audio prune <script.md>   (drop locked audio the script no longer uses)
  *   s2v export-script <script.md>   (reading script for a recording session)
@@ -61,6 +61,9 @@ import {
   lintSubtitleBudget,
   lintUnreadWords,
   parseScript,
+  pickDrift,
+  driftMessage,
+  pickScenes,
   type AudioManifest,
   type Lang,
 } from '@script2video/core';
@@ -69,7 +72,7 @@ import { renderedLengthWarning } from './length.js';
 import { enrichCast } from './cast-faces.js';
 import { castOptions } from './cast.js';
 import { buildSfxTrack, mixSoundtrack } from './soundtrack.js';
-import { dropThumbnail, writePublishFiles, writeThumbnail } from './publish.js';
+import { dropThumbnail, writePublishFiles, writeSubtitleFiles, writeThumbnail } from './publish.js';
 import { timelineMouths } from './mouth.js';
 import { checkSubtitles } from './check.js';
 import { importCharacter } from './character-import.js';
@@ -83,7 +86,7 @@ import {
   reviewCharacter,
 } from './character-gen/commands.js';
 import { applyMissing, findMissing, printMissing } from './character-gen/missing.js';
-import { dev } from './dev.js';
+import { checkDevOutput, dev } from './dev.js';
 import { importRecording } from './import-recording.js';
 import { doctor } from './doctor.js';
 import { scaffold } from './scaffold.js';
@@ -107,11 +110,20 @@ import { trainVoice } from './voice-train.js';
 import { voiceRefs } from './voice-refs.js';
 import { inspectScript } from './inspect.js';
 import { directDiagnostics, directHtml, directManifest } from './direct.js';
-import { commandOf, onOff, parseFor, USAGE, UsageError } from './args.js';
+import {
+  commandOf,
+  onOff,
+  parseFor,
+  parseScenesFlag,
+  profileOf,
+  USAGE,
+  UsageError,
+} from './args.js';
 import { printVersion, versionInfo } from './version.js';
 import { sentencesReport } from './sentences.js';
 import { proxyPlacement, writeProxyPng } from './watermark.js';
-import { cacheDirOf, checkOutDir, outDirOf } from './paths.js';
+import { cacheDirOf, checkOutDir, outDirOf, renderBase, renderWorkDir } from './paths.js';
+import { scenesLint, spokenIn } from './scenes.js';
 import { runCapture } from './capture/index.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -219,6 +231,7 @@ async function main(): Promise<void> {
     const { values } = parseFor('dev', rest);
     const file = positionals[0];
     if (!file) usage();
+    checkDevOutput(resolve(file), values.output);
     await dev(resolve(file), {
       output: values.output,
       video: values.video === true,
@@ -515,8 +528,7 @@ async function main(): Promise<void> {
       const script = load(path);
       const log = (m: string) => console.error(m);
       const outputName = values.output;
-      const profile = script.meta.outputs[outputName];
-      if (!profile) throw new Error(`unknown output "${outputName}"`);
+      const profile = profileOf(script, outputName);
       const draft = values.draft;
       const lockDir = draft
         ? join(cacheDirOf(REPO_ROOT, 'draft-audio', path), script.meta.lang)
@@ -700,10 +712,7 @@ async function main(): Promise<void> {
       const resultsDir = checkOutDir(outDirOf(path, REPO_ROOT, values['out-dir']), path, REPO_ROOT);
       const { script, diagnostics } = loadWithDiagnostics(path);
       const outputName = values.output;
-      if (!script.meta.outputs[outputName])
-        throw new Error(
-          `unknown output "${outputName}" (have: ${Object.keys(script.meta.outputs).join(', ')})`,
-        );
+      profileOf(script, outputName);
       const dm = directManifest(path, script, REPO_ROOT);
       const plan = directPlan(script, outputName, dm.manifest, {
         ...rhythmOpts,
@@ -729,6 +738,7 @@ async function main(): Promise<void> {
       const { values } = parseFor('timeline', rest);
       const rhythmOpts = rhythmOf(values.rhythm);
       const script = load(path);
+      profileOf(script, values.output);
       const { timeline, issues, gaps } = buildTimeline(
         script,
         values.output,
@@ -754,19 +764,48 @@ async function main(): Promise<void> {
       if (values.watermark !== undefined && values.watermark !== 'proxy')
         throw new UsageError(`--watermark takes only proxy, not "${values.watermark}"`);
       const proxy = values.watermark === 'proxy';
+      const sceneIds = parseScenesFlag(values.scenes);
       const outDir = checkOutDir(outDirOf(path, REPO_ROOT, values['out-dir']), path, REPO_ROOT);
-      const script = load(path);
+      const { script: full, diagnostics: fullDiags } = loadWithDiagnostics(path);
       const log = (m: string) => console.error(m);
       const started = Date.now();
       const outputName = values.output;
-      const profile = script.meta.outputs[outputName];
-      if (!profile) throw new Error(`unknown output "${outputName}"`);
+      const profile = profileOf(full, outputName);
+      // --scenes (S11): the output as if its frontmatter named these scenes; synthesis keeps the
+      // whole script (the lock stays whole), everything after the audio takes the picked copy
+      let script = full;
+      let picked: string[] | undefined;
+      if (sceneIds) {
+        const r = pickScenes(full, outputName, sceneIds);
+        if (!r.ok) throw new UsageError(r.message);
+        script = r.script;
+        picked = r.ids;
+        const fresh = scenesLint(script, dirname(path), fullDiags);
+        for (const d of fresh) log(`${formatDiagnostic(d, path)} (--scenes)`);
+        if (fresh.some((d) => d.severity === 'error')) process.exit(1);
+        for (const d of pickDrift(full, script, outputName))
+          log(`warning: ${driftMessage(d, outputName)}`);
+        if (spokenIn(script, outputName) === 0)
+          log(
+            `warning: --scenes: the picked scenes have no speech in "${outputName}" (a silent clip)`,
+          );
+        if (!values['frozen-audio']) {
+          const n = full.scenes
+            .flatMap((s) => s.blocks)
+            .reduce((k, b) => k + (b.kind === 'paragraph' ? b.sentences.length : 0), 0);
+          log(
+            `warning: --scenes does not narrow synthesis: all ${n} sentences of the script are synthesized (use --frozen-audio after tts)`,
+          );
+        }
+      }
       const draft = values.draft;
       const idle = idleFlag ?? script.meta.acting?.idle !== false;
       const lockDir = draft
         ? join(cacheDirOf(REPO_ROOT, 'draft-audio', path), script.meta.lang)
         : undefined;
-      const tts = await synthesizeScript(path, script, REPO_ROOT, {
+      // the whole script, not the pick: the lock keeps every sentence (S11 plan 3.3; CI checks
+      // that a frozen --scenes render leaves the lock's bytes as they were)
+      const tts = await synthesizeScript(path, full, REPO_ROOT, {
         asr: !values['no-asr'],
         recheck: values.recheck,
         frozen: values['frozen-audio'],
@@ -784,18 +823,21 @@ async function main(): Promise<void> {
         rhythmOpts,
       );
       for (const i of issues) log(`warning: ${i.sentenceId}: ${i.message}`);
-      const long = renderedLengthWarning(
-        outputName,
-        timeline.totalFrames / timeline.fps,
-        profile.maxDuration,
-        estimatedOver.has(outputName),
-      );
+      // maxDuration is the whole output's rule, not a clip's
+      const long = picked
+        ? null
+        : renderedLengthWarning(
+            outputName,
+            timeline.totalFrames / timeline.fps,
+            profile.maxDuration,
+            estimatedOver.has(outputName),
+          );
       if (long) log(`warning: ${long}`);
-      const suffix = draft ? '.draft' : '';
-      const workDir = join(
-        cacheDirOf(REPO_ROOT, 'render', path),
-        `${outputName}.${script.meta.lang}${suffix}`,
-      );
+      // a scene pick has its own work folder: it may run beside the full render (S11)
+      const workDir = renderWorkDir(REPO_ROOT, path, outputName, script.meta.lang, {
+        draft,
+        scenes: picked,
+      });
       mkdirSync(workDir, { recursive: true });
       mkdirSync(outDir, { recursive: true });
       const fonts = await ensureFonts(REPO_ROOT, log);
@@ -861,11 +903,8 @@ async function main(): Promise<void> {
       log(
         `audio: ${m.lufs.toFixed(1)} LUFS, true peak ${m.truePeak.toFixed(1)} dBFS (${m.passes} pass)`,
       );
-      // a marked render is named apart, so it never replaces an unmarked one (S13)
-      const out = join(
-        outDir,
-        `${outputName}.${script.meta.lang}${suffix}${proxy ? '.proxy' : ''}.mp4`,
-      );
+      // a marked render or a scene pick is named apart: it never replaces the plain one (S13, S11)
+      const out = `${renderBase(outDir, outputName, script.meta.lang, { draft, scenes: picked, proxy })}.mp4`;
       const logo = logoOf(script.meta);
       const corner = logo?.position ?? null;
       const mark = (width: number, height: number, subtitlesTop: boolean) => ({
@@ -893,16 +932,21 @@ async function main(): Promise<void> {
         `${ok ? 'ok' : 'CHECK FAILED'}: ${p.frames}/${timeline.totalFrames} frames, video ${p.videoSec.toFixed(3)}s, audio ${p.audioSec.toFixed(3)}s`,
       );
       log(`→ ${out} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
-      for (const f of writePublishFiles(
-        script,
-        timeline,
-        out.replace(/\.mp4$/, ''),
-        draft,
-        log,
-        profile.aspect === '16:9',
-      ))
+      // a clip is no upload: subtitles only, no chapters, description or thumbnail (S11 plan 3.6)
+      for (const f of picked
+        ? writeSubtitleFiles(script, timeline, out.replace(/\.mp4$/, ''))
+        : writePublishFiles(
+            script,
+            timeline,
+            out.replace(/\.mp4$/, ''),
+            draft,
+            log,
+            profile.aspect === '16:9',
+          ))
         log(`→ ${f}`);
-      if (profile.aspect === '16:9' && !draft)
+      if (picked) {
+        // the thumbnail without the suffix is the full render's: leave it be
+      } else if (profile.aspect === '16:9' && !draft)
         log(
           `→ ${await writeThumbnail(
             script,

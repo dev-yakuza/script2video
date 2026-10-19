@@ -4,6 +4,7 @@
  * missing from the table does not compile.
  */
 import { parseArgs, type ParseArgsOptionDescriptor } from 'node:util';
+import { SCENE_ID, type OutputProfile, type Script } from '@script2video/core';
 
 export const OPTIONS = {
   'no-asr': { type: 'boolean', default: false },
@@ -45,6 +46,7 @@ export const OPTIONS = {
   'out-dir': { type: 'string' },
   frames: { type: 'boolean', default: false },
   watermark: { type: 'string' },
+  scenes: { type: 'string', multiple: true },
   text: { type: 'string' },
   'assets-dir': { type: 'string' },
   width: { type: 'string' },
@@ -105,6 +107,7 @@ export const FLAGS = {
     'fps',
     'out-dir',
     'watermark',
+    'scenes',
   ],
   capture: ['out', 'text', 'assets-dir', 'width', 'height', 'selector', 'allow-host', 'timeout'],
 } as const satisfies Record<string, readonly Option[]>;
@@ -203,6 +206,35 @@ export function onOff(flag: string, value: string | undefined): boolean | undefi
   return value === 'on';
 }
 
+/** An output of the script, or a usage error naming the ones it has (S11 plan 3.9: exit 2). */
+export function profileOf(script: Script, name: string): OutputProfile {
+  const profile = script.meta.outputs[name];
+  if (!profile)
+    throw new UsageError(
+      `unknown output "${name}" (have: ${Object.keys(script.meta.outputs).join(', ')})`,
+    );
+  return profile;
+}
+
+/**
+ * `--scenes a,b` (S11 plan 3.2), also given more than once: scene ids, before the script is read.
+ * Empty items, characters a scene id cannot have and repeats are usage errors.
+ */
+export function parseScenesFlag(values: readonly string[] | undefined): string[] | undefined {
+  if (values === undefined) return undefined;
+  const ids: string[] = [];
+  for (const value of values)
+    for (const raw of value.split(',')) {
+      const id = raw.trim();
+      if (id === '') throw new UsageError('--scenes: an empty scene id');
+      if (!SCENE_ID.test(id))
+        throw new UsageError(`--scenes: "${id}" is not a scene id (letters, digits, _ and -)`);
+      if (ids.includes(id)) throw new UsageError(`--scenes: "${id}" is given twice`);
+      ids.push(id);
+    }
+  return ids;
+}
+
 /** One line per command with every flag it takes (S3 plan 4.3; a test holds it to FLAGS). */
 export const USAGE = [
   's2v --version [--json]   (the version a tool pins)',
@@ -217,7 +249,7 @@ export const USAGE = [
   's2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open] [--out-dir <dir>]   (direction plan and notes)',
   's2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]',
   's2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>] [--frozen-audio] [--frames]',
-  's2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>] [--watermark proxy]',
+  's2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>] [--watermark proxy] [--scenes <id,…>]',
   's2v capture <url> --out <png> [--text <json>] [--assets-dir <dir>] [--width 1280] [--height 800] [--selector <css>] [--allow-host <host>]... [--timeout 30]   (a web page: its picture and what it says)',
   's2v audio prune <script.md>   (drop locked audio the script no longer uses)',
   's2v export-script <script.md>   (reading script for a recording session)',

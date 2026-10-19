@@ -12,6 +12,7 @@ import { Diagnostics } from './diagnostics.js';
 import {
   FRAMINGS,
   frontmatterSchema,
+  SCENE_ID_CHARS,
   MOTIONS,
   type Framing,
   type MdBlock,
@@ -95,7 +96,7 @@ export const PREFIX_KEYS = ['emo', 'power', 'say', 'volume', 'speed', 'face', 'm
 /** Attributes of an inline `:emo{…}`. */
 export const EMO_KEYS = ['emo', 'power', 'say', 'volume', 'speed'];
 const NUMBER = /^-?\d+(\.\d+)?$/;
-const HEADING_ID = /\s*\{#([A-Za-z0-9_-]+)\}\s*$/;
+const HEADING_ID = new RegExp(`\\s*\\{#(${SCENE_ID_CHARS})\\}\\s*$`);
 
 export interface ParseResult {
   script: Script | null;

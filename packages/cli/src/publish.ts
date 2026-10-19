@@ -17,6 +17,14 @@ import {
   type Timeline,
 } from '@script2video/core';
 
+/** `<base>.srt` and `.vtt` (a `--scenes` clip writes these only, S11). */
+export function writeSubtitleFiles(script: Script, timeline: Timeline, base: string): string[] {
+  const cues = subtitleCues(script, timeline);
+  writeFileSync(`${base}.srt`, toSrt(cues));
+  writeFileSync(`${base}.vtt`, toVtt(cues));
+  return [`${base}.srt`, `${base}.vtt`];
+}
+
 /** `<base>.srt`, `.vtt`, `.chapters.txt` (when YouTube's rules allow), `.description.md`. */
 export function writePublishFiles(
   script: Script,
@@ -27,10 +35,7 @@ export function writePublishFiles(
   /** Chapters only for 16:9 outputs (Shorts have none). */
   withChapters = true,
 ): string[] {
-  const cues = subtitleCues(script, timeline);
-  const written = [`${base}.srt`, `${base}.vtt`];
-  writeFileSync(`${base}.srt`, toSrt(cues));
-  writeFileSync(`${base}.vtt`, toVtt(cues));
+  const written = writeSubtitleFiles(script, timeline, base);
   const ch = withChapters ? chapters(timeline) : { chapters: [], diagnostics: [] };
   for (const d of ch.diagnostics) log(formatDiagnostic(d, base));
   if (ch.chapters.length > 0) {

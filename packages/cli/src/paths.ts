@@ -113,3 +113,53 @@ export function cacheDirOf(
 ): string {
   return join(repoRoot, '.s2v-cache', kind, cacheKeyOf(scriptPath));
 }
+
+/** The longest `+`-joined scene list a result name spells out (S11 plan 3.5). */
+const SCENES_NAME_MAX = 64;
+
+/** sha256 of the picked ids (script order) joined by commas, first 8 hex digits. */
+function scenesHash(ids: readonly string[]): string {
+  return createHash('sha256').update(ids.join(',')).digest('hex').slice(0, 8);
+}
+
+/**
+ * A render's result path without extension (S13, S11):
+ * `<out-dir>/<output>.<lang>[.draft][.scenes-<a+b> | .scenes@<n>-<sha8>][.proxy]`.
+ * `scenes` are in script order; any pick, even every scene, is named apart from the full video.
+ */
+export function renderBase(
+  outDir: string,
+  output: string,
+  lang: string,
+  opts: { draft?: boolean; scenes?: readonly string[] | undefined; proxy?: boolean } = {},
+): string {
+  let picked = '';
+  if (opts.scenes) {
+    const spelled = opts.scenes.join('+');
+    picked =
+      spelled.length <= SCENES_NAME_MAX
+        ? `.scenes-${spelled}`
+        : `.scenes@${opts.scenes.length}-${scenesHash(opts.scenes)}`;
+  }
+  return join(
+    outDir,
+    `${output}.${lang}${opts.draft ? '.draft' : ''}${picked}${opts.proxy ? '.proxy' : ''}`,
+  );
+}
+
+/**
+ * A render's work folder (S11 plan 3.7): one per output, language and draft as before, and one
+ * per scene pick (always hashed: case-only differences stay apart on case-blind disks).
+ */
+export function renderWorkDir(
+  repoRoot: string,
+  scriptPath: string,
+  output: string,
+  lang: string,
+  opts: { draft?: boolean; scenes?: readonly string[] | undefined } = {},
+): string {
+  return join(
+    cacheDirOf(repoRoot, 'render', scriptPath),
+    `${output}.${lang}${opts.draft ? '.draft' : ''}${opts.scenes ? `.scenes-${scenesHash(opts.scenes)}` : ''}`,
+  );
+}

@@ -64,6 +64,9 @@ export const castMemberSchema = z.object({
 });
 export type CastMember = z.infer<typeof castMemberSchema>;
 
+/** Characters a scene id (`# Title {#id}`) is made of: also safe in file names and comma lists. */
+export const SCENE_ID_CHARS = '[A-Za-z0-9_-]+';
+
 /** Character framings (shot sizes) a parts character can be drawn in; chosen per scene by `::shot`. */
 export const FRAMINGS = ['full', 'upper', 'head'] as const;
 export type Framing = (typeof FRAMINGS)[number];

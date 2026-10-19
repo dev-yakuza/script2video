@@ -272,7 +272,8 @@ describe('inspect: closed world', () => {
   });
 });
 
-describe('inspect: hashes', () => {
+// each case runs the CLI several times: slow when the whole suite runs side by side
+describe('inspect: hashes', { timeout: 30_000 }, () => {
   const base = ok(FM() + BODY, { 'a.png': 'A' });
   const h = base.hashes;
 

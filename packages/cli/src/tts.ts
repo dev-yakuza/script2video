@@ -20,7 +20,6 @@ import {
   renameSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -103,6 +102,7 @@ import {
   type RefServices,
   type RefVoice,
 } from './voice-refs.js';
+import { atomicWrite } from './atomic.js';
 
 const run = promisify(execFile);
 export const POSTPROCESS_VERSION = 'pp3-48k-mono-trim50db-pausecap-edgecut';
@@ -204,13 +204,6 @@ export function takeMadeOf(takesDir: string, tk: string): TakeMade | null {
   if (!made || !existsSync(wav) || made.wavSha !== sha16(wav)) return null;
   if (typeof made.removed !== 'number' || typeof made.info?.model !== 'string') return null;
   return made;
-}
-
-/** Write a cache file whole: other s2v processes share the cache (stage 3 plan 2). */
-function atomicWrite(path: string, data: string | Buffer): void {
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, data);
-  renameSync(tmp, path);
 }
 
 /** A cached JSON file, or null when it is missing or unreadable. */
@@ -716,6 +709,20 @@ export function planSentences(
   return plan;
 }
 
+/**
+ * Whether a frozen run writes the lock manifest (S11 plan 3.7): only when its text would change
+ * and the file is still what this run read (another run may have written it meanwhile).
+ */
+export function frozenSaveDecision(
+  readAtStart: string | null,
+  current: string | null,
+  next: string,
+): 'write' | 'same' | 'changed' {
+  if (current === next) return 'same';
+  if (current !== readAtStart) return 'changed';
+  return 'write';
+}
+
 export async function synthesizeScript(
   scriptPath: string,
   script: Script,
@@ -727,8 +734,10 @@ export async function synthesizeScript(
   if (opts.draft) opts = { ...opts, asr: false };
   mkdirSync(lockDir, { recursive: true });
   const manifestPath = join(lockDir, 'manifest.json');
-  const previous: LockManifest | null = existsSync(manifestPath)
-    ? (JSON.parse(readFileSync(manifestPath, 'utf8')) as LockManifest)
+  // the text read now: a frozen run rewrites the lock only when nobody else did meanwhile (S11)
+  const previousText = existsSync(manifestPath) ? readFileSync(manifestPath, 'utf8') : null;
+  const previous: LockManifest | null = previousText
+    ? (JSON.parse(previousText) as LockManifest)
     : null;
   const models = (
     JSON.parse(readFileSync(join(repoRoot, 'models.lock.json'), 'utf8')) as {
@@ -781,7 +790,7 @@ export async function synthesizeScript(
     manifest.env = { ...manifest.env, aligner: await aligner.ensure() };
     alignerStarted = true;
   };
-  const save = () => writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  const save = () => atomicWrite(manifestPath, JSON.stringify(manifest, null, 2));
   // E7 (stage 3 plan 6): make all six takes of emotion lines; the choice stays the budget's
   const takesAll = process.env.S2V_TAKES_ALL === '6';
   /** Tell how long synthesis will take (stage 3 plan 9). */
@@ -1602,7 +1611,12 @@ export async function synthesizeScript(
             .map((u) => u.message)
             .join('; ')}${unapplied.length > 5 ? '; …' : ''}`,
         );
-      save();
+      const next = JSON.stringify(manifest, null, 2);
+      const current = existsSync(manifestPath) ? readFileSync(manifestPath, 'utf8') : null;
+      const decision = frozenSaveDecision(previousText, current, next);
+      if (decision === 'write') atomicWrite(manifestPath, next);
+      else if (decision === 'changed')
+        pushOnce('the audio lock changed during this run; not rewritten');
       return { manifestPath, synthesized: 0, reused: jobs.length, warnings };
     }
     // ---------- recordings: align each paragraph once, cut it into sentences ----------
@@ -2134,7 +2148,7 @@ export function pruneAudio(
     unlinkSync(join(lockDir, f));
     files++;
   }
-  writeFileSync(manifestPath, JSON.stringify(m, null, 2));
+  atomicWrite(manifestPath, JSON.stringify(m, null, 2));
   return { entries, files, bytes, picks: prunePicks(scriptPath, script, lockDir, repoRoot) };
 }
 

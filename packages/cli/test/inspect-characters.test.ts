@@ -107,7 +107,8 @@ const GOLDEN = {
   shorts: '6f2a0e06b0146ec47c5579e1b9ee7de67e5110d75f067a1ba20ba1088566e62f',
 };
 
-describe('inspect: characters (S4b)', () => {
+// each case runs the CLI and composes pictures: slow when the whole suite runs side by side
+describe('inspect: characters (S4b)', { timeout: 30_000 }, () => {
   it('hashes character outputs, lists the art and the sides', () => {
     const r = ok(FM(PAIR) + BODY);
     expect(pres(r).youtube).toMatch(/^[0-9a-f]{64}$/);

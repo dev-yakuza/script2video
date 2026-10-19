@@ -6,8 +6,10 @@
  */
 
 import { spawn } from 'node:child_process';
-import { watch } from 'node:fs';
+import { readFileSync, watch } from 'node:fs';
 import { basename, dirname } from 'node:path';
+import { parseScript, type Script } from '@script2video/core';
+import { profileOf } from './args.js';
 import { ALIGNER, Service, TTS_SERVER } from './services.js';
 
 export interface DevOptions {
@@ -24,6 +26,20 @@ function step(cli: string, args: string[]): Promise<number> {
     const child = spawn(process.execPath, [cli, ...args], { stdio: 'inherit' });
     child.on('exit', (code) => resolve(code ?? 1));
   });
+}
+
+/**
+ * Before any server starts (S11 plan 3.9): the output must exist (exit 2). Lint errors do not stop
+ * dev (it reruns on every save), and a script that does not parse is dev's own to report.
+ */
+export function checkDevOutput(path: string, output: string): void {
+  let script: Script | null;
+  try {
+    script = parseScript(readFileSync(path, 'utf8')).script;
+  } catch {
+    return;
+  }
+  if (script) profileOf(script, output);
 }
 
 export async function dev(path: string, opts: DevOptions): Promise<void> {

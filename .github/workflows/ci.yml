@@ -91,6 +91,26 @@ jobs:
           (cd out/sample-ko && sha256sum -c "$RUNNER_TEMP/plain.sha")
           node scripts/check-band.mjs out/sample-ko/youtube.ko.proxy.mp4 out/sample-ko/youtube.ko.mp4 461:115:38:38 461:115:1459:927
           node scripts/check-band.mjs out/sample-ko/youtube.ko.proxy.thumbnail.png out/sample-ko/youtube.ko.thumbnail.png 307:77:26:26 307:77:973:643
+      - name: scene pick (S11)
+        run: |
+          plain="youtube.ko.mp4 youtube.ko.srt youtube.ko.vtt youtube.ko.description.md youtube.ko.thumbnail.png"
+          (cd out/sample-ko && sha256sum $plain > "$RUNNER_TEMP/plain-s11.sha")
+          lock=videos/sample-ko/audio/ko/manifest.json
+          sha256sum "$lock" > "$RUNNER_TEMP/lock.sha"
+          before=$(stat -c %Y "$lock")
+          clip="$RUNNER_TEMP/clip"
+          node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output youtube --frozen-audio --scenes settings --out-dir "$clip"
+          for f in mp4 srt vtt; do test -s "$clip/youtube.ko.scenes-settings.$f"; done
+          for f in chapters.txt description.md thumbnail.png; do test ! -e "$clip/youtube.ko.scenes-settings.$f"; done
+          test -z "$(ls out/sample-ko | grep scenes || true)"
+          len() { ffprobe -v error -show_entries format=duration -of csv=p=0 "$1"; }
+          awk -v a="$(len "$clip/youtube.ko.scenes-settings.mp4")" -v b="$(len out/sample-ko/youtube.ko.mp4)" 'BEGIN { exit !(a < b) }'
+          (cd out/sample-ko && sha256sum -c "$RUNNER_TEMP/plain-s11.sha")
+          sha256sum -c "$RUNNER_TEMP/lock.sha"
+          test "$(stat -c %Y "$lock")" = "$before"
+          # the full render, in its own work folder, is untouched by the pick
+          node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output youtube --frozen-audio 2>&1 | tee "$RUNNER_TEMP/full.log"
+          grep -q 'all scene chunks cached' "$RUNNER_TEMP/full.log"
       - name: snapshot stills (S6)
         run: |
           node packages/cli/dist/main.js snapshot videos/sample-ko/script.ko.md --output youtube --frozen-audio --frames --out-dir "$RUNNER_TEMP/stills"

@@ -11,7 +11,7 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -41,6 +41,7 @@ import { ALIGNER, Service, TTS_SERVER } from './services.js';
 import { measureTrainClip, TRAIN_MEASURE_VERSION } from './train-data.js';
 import { ALIGN_VERSION } from './tts.js';
 import { createReference, embed, synthesisBody, type RefVoice } from './voice-refs.js';
+import { atomicWrite } from './atomic.js';
 
 const run = promisify(execFile);
 
@@ -56,12 +57,6 @@ export interface TrainOptions {
 }
 
 const sha256 = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
-
-function atomicWrite(path: string, data: string | Buffer): void {
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, data);
-  renameSync(tmp, path);
-}
 
 /** Python processes of image generation (A6: never alongside TTS). */
 export async function imagegenRunning(): Promise<string | null> {

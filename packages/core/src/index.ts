@@ -234,3 +234,11 @@ export {
   type DirectScene,
   type DirectSentence,
 } from './direct.js';
+export {
+  driftMessage,
+  pickDrift,
+  pickScenes,
+  SCENE_ID,
+  type Drift,
+  type PickResult,
+} from './pick.js';

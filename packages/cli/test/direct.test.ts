@@ -178,7 +178,7 @@ describe('s2v direct (command line)', () => {
 
   it('names the outputs when one is unknown (and writes nothing)', () => {
     const r = run(['direct', 'videos/sample-ko/script.ko.md', '--output', 'nope', '--no-open']);
-    expect(r.status).toBe(1);
+    expect(r.status).toBe(2);
     expect(r.err).toMatch(/unknown output "nope" \(have: youtube, shorts\)/);
     expect(existsSync(join(REPO, 'out', 'sample-ko', 'direct', 'nope.ko.html'))).toBe(false);
   });
