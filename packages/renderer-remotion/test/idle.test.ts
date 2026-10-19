@@ -314,6 +314,32 @@ describe('listenerNods', () => {
     );
   });
 
+  it('skips a listener sliding in (an entrance takes STAGE_SLIDE frames, not STAGE_LEAD)', () => {
+    const n = nods[0]!;
+    const side = n.cast === 'a' ? 'left' : 'right';
+    const at = n.frame - 12; // past STAGE_LEAD, inside STAGE_SLIDE
+    const rising = { ...stage, [side]: [sw([]), sw([n.cast], at)] };
+    expect(run(many, { stage: rising })).toContainEqual(n);
+    const sliding = {
+      ...stage,
+      [side]: [sw([]), { ...sw([n.cast], at), move: { key: n.cast, kind: 'enter' as const } }],
+    };
+    expect(run(many, { stage: sliding })).not.toContainEqual(n);
+  });
+
+  it('skips a nod that would still run when its listener slides out', () => {
+    const n = nods[0]!;
+    const side = n.cast === 'a' ? 'left' : 'right';
+    const leaving = {
+      ...stage,
+      [side]: [
+        sw([n.cast]),
+        { ...sw([], n.frame + 5), move: { key: n.cast, kind: 'exit' as const } },
+      ],
+    };
+    expect(run(many, { stage: leaving })).not.toContainEqual(n);
+  });
+
   it('uses the head nod (24 frames) when the listener has a head layer', () => {
     const h = run(many, { hasHead: () => true });
     expect(h.map((x) => x.frame)).toEqual(nods.map((x) => x.frame));

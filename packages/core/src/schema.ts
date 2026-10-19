@@ -325,6 +325,8 @@ export interface Scene {
   line: number;
   /** `::shot{mina=head}` at the start of the scene: framings set here (others are inherited). */
   shot?: Record<string, Framing>;
+  /** `::enter{mina}` / `::exit{mina}` before the scene's first paragraph (acting stage 5c). */
+  stage?: { kind: 'enter' | 'exit'; cast: string; line: number }[];
   blocks: Block[];
 }
 

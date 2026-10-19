@@ -20,12 +20,21 @@ import {
   type Lang,
   type LookValue,
   type OutputProfile,
-  type Paragraph,
   type Script,
   type Sentence,
   type Visual,
 } from './schema.js';
 import { gainFor, lookFace, paragraphActing } from './acting.js';
+import {
+  FACE_HOLD_S,
+  FADE_S,
+  HELD_MOTIONS,
+  HOLD_END_S,
+  includesParagraph,
+  selectScenes,
+  STAGE_SLIDE_S,
+  stageEvents,
+} from './stage.js';
 import { toAlignText, ttsRangeToDisplay } from './tts-text.js';
 
 export interface AlignedWord {
@@ -167,6 +176,11 @@ export interface TimelineScene {
   /** Listener looks (acting stage 5b); absent in timelines built before it. */
   looks?: TimelineLook[];
   /**
+   * Entrances and exits (acting stage 5c): an entrance slides in from frame 0, an exit slides
+   * out from its frame (after everything in the scene and its face hold). Absent when none.
+   */
+  stage?: { cast: string; kind: 'enter' | 'exit'; frame: number }[];
+  /**
    * Framing of every cast member in this scene: the scene's `::shot`, else inherited from the
    * previous scene of this output (the first starts full). All full when the output sets `shot: full`.
    */
@@ -292,15 +306,6 @@ function cueFrame(cue: Cue, spans: WordSpan[]): number | null {
   return hit ? hit.t0 : null;
 }
 
-function selectScenes(script: Script, outputName: string, profile: OutputProfile) {
-  const wanted = profile.scenes ? new Set(profile.scenes) : null;
-  return script.scenes.filter((s) => !wanted || wanted.has(s.id));
-}
-
-function includesParagraph(p: Paragraph, outputName: string): boolean {
-  return !p.only || p.only.includes(outputName);
-}
-
 /**
  * Motion for a face change: the explicit one (`none` = no motion), else the face's own motion
  * when the cast member allows automatic motions. A paragraph without a face change has none.
@@ -418,8 +423,10 @@ export function buildTimeline(
 
   const scenes: TimelineScene[] = [];
   const seen = new Map<string, number>();
-  const selected = selectScenes(script, outputName, profile);
+  const selected = selectScenes(script, profile);
   const framings = sceneFramings(meta, selected, profile);
+  const stage = stageEvents(script, outputName).events;
+  const fade = (profile.transition ?? meta.transition) === 'fade';
   let sceneStart = 0;
 
   selected.forEach((scene, sceneIndex) => {
@@ -428,6 +435,9 @@ export function buildTimeline(
     let t = isFirst ? pacing.lead : 0; // scene-local seconds
     let pendingGap = 0;
     let started = false;
+    let anyAudio = false;
+    const events = stage.get(scene.id) ?? [];
+    const entering = new Set(events.filter((e) => e.kind === 'enter').map((e) => e.cast));
     const out: TimelineScene = {
       id: scene.id,
       title: scene.title,
@@ -466,6 +476,9 @@ export function buildTimeline(
           return;
         }
         if (si > 0) t += pacing.sentenceGap;
+        // The scene's first line waits for its speaker to slide in (5c plan 4).
+        if (!anyAudio && entering.has(block.cast)) t = Math.max(t, STAGE_SLIDE_S);
+        anyAudio = true;
         const startFrame = toFrame(t);
         blockStart ??= startFrame;
         for (const v of pendingVisuals.splice(0)) out.visuals.push({ startFrame, visual: v });
@@ -574,8 +587,34 @@ export function buildTimeline(
     // Visuals after the last narration (rare) still show from where narration ended.
     for (const v of pendingVisuals.splice(0))
       out.visuals.push({ startFrame: toFrame(t), visual: v });
+    const contentEnd = started ? toFrame(t) : 0;
     t += isLast ? pacing.tail : pacing.sceneGap;
     out.durationFrames = Math.max(1, toFrame(t));
+    if (events.length > 0) {
+      // An exit slides out after everything in the scene and its face hold (5c plan 4).
+      const hold = toFrame(FACE_HOLD_S);
+      const slide = toFrame(STAGE_SLIDE_S);
+      const end = Math.max(
+        contentEnd,
+        ...out.audio.map((a) => a.startFrame + a.durationFrames),
+        ...out.reactions.map((r) => r.endFrame),
+        ...out.looks!.map((l) => l.endFrame),
+        ...out.motions.map(
+          (m) => m.endFrame + (HELD_MOTIONS.has(m.motion) ? toFrame(HOLD_END_S) : 0),
+        ),
+      );
+      const exitAt = Math.max(end + hold, entering.size > 0 ? slide : 0);
+      out.stage = events.map((e) => ({
+        cast: e.cast,
+        kind: e.kind,
+        frame: e.kind === 'enter' ? 0 : exitAt,
+      }));
+      if (events.some((e) => e.kind === 'exit'))
+        out.durationFrames = Math.max(
+          out.durationFrames,
+          exitAt + slide + 1 + (fade ? toFrame(FADE_S) : 0),
+        );
+    }
 
     // One subtitle group at a time: close each group when the next starts; hold the last briefly.
     out.subtitles.sort((a, b) => a.startFrame - b.startFrame);

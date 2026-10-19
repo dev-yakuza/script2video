@@ -224,6 +224,21 @@ work in the head close-up too: a generated character's `partner` and `glance` ar
 there (the head turned toward the partner, no body shows) and `viewer` faces the audience; a classic
 folder uses its `front-<face>.png` and `glance-<face>.png` as in the full framing.
 
+A character can walk on and off: `::enter{joon}` before a scene's first paragraph slides joon in
+from its side as the scene starts (when joon has the scene's first line, the line waits for the
+slide), and `::exit{joon}` slides joon out once everything in the scene and its face hold are over
+(the scene is lengthened to show it); that side then stays empty until its next speaker. Several
+names go in one directive (`::enter{joon yuna}`). The entering character must be the first of its
+side to speak in that scene, otherwise the entrance is ignored. Only characters that speak or
+react in the output can enter or exit, and only with character images. An output that leaves scenes
+out may break the order (an exited character speaks again): lint warns and the character steps in
+as usual.
+
+```md
+::enter{joon}
+joon: Sorry I'm late.
+```
+
 Characters also move a little on their own: they breathe, blink every 2–6 seconds (and when their
 face changes), and a listener sometimes nods at the end of the other side's sentence (not after a
 question, nor right before answering). Set `acting: { idle: false }` in the frontmatter to turn this

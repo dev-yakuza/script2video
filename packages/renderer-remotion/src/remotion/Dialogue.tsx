@@ -35,6 +35,7 @@ import {
   IDLE,
   listenerNods,
   STAGE_LEAD,
+  STAGE_SLIDE,
   type DialogueGeometry,
   type Nod,
   type StageSwitch,
@@ -371,6 +372,8 @@ const Character: React.FC<{
   parts: PartsSet | null;
   /** Breathing: vertical scale − 1. */
   breathe: number;
+  /** Entrance / exit (acting stage 5c): 1 = just outside the side's frame edge, 0 = in place. */
+  slide: number;
 }> = ({
   c,
   side,
@@ -385,6 +388,7 @@ const Character: React.FC<{
   headMotion,
   parts,
   breathe,
+  slide,
 }) => {
   const ch = c.character!;
   // Mirror art that looks toward the frame edge so every character faces the center.
@@ -395,6 +399,8 @@ const Character: React.FC<{
   // Motions are designed for a 580 px tall character; scale them with the box.
   const k = (geometry.boxH * scale) / 580;
   const mx = motion.x * k * (side === 'left' ? 1 : -1);
+  // Out through the side's own edge: the whole box past the frame.
+  const sx = -slide * (x + geometry.boxW * scale) * (side === 'left' ? 1 : -1);
   return (
     <div
       style={{
@@ -408,7 +414,7 @@ const Character: React.FC<{
         alignItems: 'flex-end',
         justifyContent: 'center',
         opacity: presence,
-        transform: `translate(${mx}px, ${drop + motion.y * k}px) rotate(${motion.rot}deg) scale(${0.94 + 0.06 * a})${breathe ? ` scaleY(${1 + breathe})` : ''}`,
+        transform: `translate(${mx + sx}px, ${drop + motion.y * k}px) rotate(${motion.rot}deg) scale(${0.94 + 0.06 * a})${breathe ? ` scaleY(${1 + breathe})` : ''}`,
         transformOrigin: 'bottom center',
         filter: `brightness(${0.62 + 0.38 * a}) saturate(${0.7 + 0.3 * a})`,
       }}
@@ -678,7 +684,20 @@ export const CharacterStage: React.FC<{
       if (!c) return null;
       const pi = prev.indexOf(key);
       const ci = cur.keys.indexOf(key);
-      const presence = pi >= 0 && ci >= 0 ? 1 : ci >= 0 ? p : 1 - p;
+      // An entrance or exit slides sideways instead of rising or sinking (acting stage 5c).
+      let slide: number | null = null;
+      for (let j = i; j >= 0; j--) {
+        const sw = list[j]!;
+        if (frame >= sw.frame + STAGE_SLIDE) break;
+        if (sw.move?.key !== key) continue;
+        const q = interpolate(frame, [sw.frame, sw.frame + STAGE_SLIDE], [0, 1], clamp);
+        slide =
+          sw.move.kind === 'enter'
+            ? 1 - Easing.out(Easing.back(1.2))(q)
+            : Easing.in(Easing.cubic)(q);
+        break;
+      }
+      const presence = slide !== null ? 1 : pi >= 0 && ci >= 0 ? 1 : ci >= 0 ? p : 1 - p;
       if (presence <= 0) return null;
       const from = { x: slot(Math.max(pi, 0), prev.length), s: crowdScale(prev.length) };
       const to = { x: slot(Math.max(ci, 0), cur.keys.length), s: crowdScale(cur.keys.length) };
@@ -724,6 +743,7 @@ export const CharacterStage: React.FC<{
           motion={add(channels.body, nodOffset(plan.nods, key, frame, toCenter, false))}
           headMotion={add(channels.head, nodOffset(plan.nods, key, frame, toCenter, true))}
           parts={parts}
+          slide={slide ?? 0}
           breathe={
             idle
               ? breath({

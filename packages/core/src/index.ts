@@ -169,6 +169,16 @@ export {
 } from './acting.js';
 export { lintActing, sidesOf } from './lint-acting.js';
 export {
+  FACE_HOLD_S,
+  FADE_S,
+  HELD_MOTIONS,
+  HOLD_END_S,
+  STAGE_SLIDE_S,
+  stageEvents,
+  type StageEvent,
+  type StageResult,
+} from './stage.js';
+export {
   FIRST_TAKES,
   MAX_TAKES,
   NEIGHBOR_RATE_WEIGHT,

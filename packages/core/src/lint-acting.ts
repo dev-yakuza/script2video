@@ -18,7 +18,10 @@ import {
 } from './acting.js';
 import type { Diagnostic } from './diagnostics.js';
 import type { Script } from './schema.js';
+import { sidesOf, stageEvents } from './stage.js';
 import { sceneFramings } from './timeline.js';
+
+export { sidesOf };
 
 export function lintActing(script: Script): Diagnostic[] {
   const { meta } = script;
@@ -126,6 +129,9 @@ export function lintActing(script: Script): Diagnostic[] {
 function lintLooks(script: Script, push: (d: Diagnostic) => void): void {
   const { meta } = script;
   for (const [name, profile] of Object.entries(meta.outputs)) {
+    // entrances and exits (acting stage 5c plan 6)
+    const stage = stageEvents(script, name);
+    for (const d of stage.diagnostics) push(d);
     const scenes = script.scenes.filter((s) => !profile.scenes || profile.scenes.includes(s.id));
     const paragraphs = scenes.flatMap((s, i) =>
       s.blocks.flatMap((b) =>
@@ -143,8 +149,22 @@ function lintLooks(script: Script, push: (d: Diagnostic) => void): void {
     if (cast.length === 0 || !cast.every((k) => meta.cast[k]!.character)) continue;
     const side = sidesOf(cast.map((key) => ({ key, side: meta.cast[key]!.side })));
     const framings = sceneFramings(meta, scenes, profile);
+    const facingEmpty = new Set<string>();
     for (const { b, i } of paragraphs) {
       const framing = (k: string) => framings[i]![k] ?? 'full';
+      const away = stage.absent.get(b) ?? new Set<string>();
+      const across = side[b.cast] === 'left' ? 'right' : 'left';
+      const sceneKey = `${scenes[i]!.id}|${b.cast}`;
+      const faces = b.sentences.some((x) => x.looks?.some((l) => l.looks[b.cast] === 'viewer'));
+      if (stage.empty.get(b)?.has(across) && !faces && !facingEmpty.has(sceneKey)) {
+        facingEmpty.add(sceneKey);
+        push({
+          severity: 'info',
+          code: 'look-empty-side',
+          message: `nobody stands on the ${across} side while ${b.cast} speaks here, so its partner stance faces an empty side: :look{${b.cast}=viewer} turns it to the viewer (output "${name}")`,
+          line: b.line,
+        });
+      }
       const { mid, dropped } = speakerLooks(b);
       for (const line of mid)
         push({
@@ -170,6 +190,15 @@ function lintLooks(script: Script, push: (d: Diagnostic) => void): void {
           for (const [who, look] of Object.entries(l.looks)) {
             if (who === b.cast) continue;
             const line = l.line ?? b.line;
+            if (away.has(who)) {
+              push({
+                severity: 'info',
+                code: 'look-absent',
+                message: `${who} has exited (::exit) by this line in output "${name}", so it is not on stage: :look{${who}=…} shows nothing`,
+                line,
+              });
+              continue;
+            }
             if (!on.has(who)) {
               push({
                 severity: 'info',
@@ -209,20 +238,4 @@ function lintLooks(script: Script, push: (d: Diagnostic) => void): void {
       line,
     });
   }
-}
-
-/** Sides as the renderer assigns them (`assignSides`): `side` wins, the rest alternate in cast order. */
-export function sidesOf(
-  cast: { key: string; side?: 'left' | 'right' | undefined }[],
-): Record<string, 'left' | 'right'> {
-  let left = 0;
-  let right = 0;
-  const out: Record<string, 'left' | 'right'> = {};
-  for (const c of cast) {
-    const s = c.side ?? (left <= right ? 'left' : 'right');
-    if (s === 'left') left++;
-    else right++;
-    out[c.key] = s;
-  }
-  return out;
 }

@@ -14,6 +14,7 @@ import remarkFrontmatter from 'remark-frontmatter';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { KNOWN_DIRECTIVES, type ParseTrace } from './parse.js';
+import { castsIn, outputScenes } from './stage.js';
 import {
   bgmSchema,
   castMemberSchema,
@@ -22,11 +23,11 @@ import {
   outputProfileSchema,
   pacingSchema,
   type MdBlock,
-  type Paragraph,
-  type Scene,
   type Script,
   type Visual,
 } from './schema.js';
+
+export { castsIn, outputScenes };
 
 export const HASH_VERSIONS = [1] as const;
 
@@ -82,6 +83,8 @@ export const DIRECTIVES: Record<
   only: { placement: 'inline', attrs: 'output' },
   audio: { placement: 'inline', attrs: { src: 'voice' } },
   shot: { placement: 'leaf', attrs: 'cast' },
+  enter: { placement: 'leaf', attrs: 'cast' },
+  exit: { placement: 'leaf', attrs: 'cast' },
   emo: {
     placement: 'inline',
     attrs: { emo: 'voice', power: 'voice', say: 'voice', volume: 'voice', speed: 'voice' },
@@ -507,19 +510,6 @@ export interface ScreenText {
   text: string;
 }
 
-/** Cast members who speak or react anywhere in these scenes (paragraphs already filtered). */
-export function castsIn(scenes: Scene[]): Set<string> {
-  const out = new Set<string>();
-  for (const s of scenes)
-    for (const b of s.blocks)
-      if (b.kind === 'paragraph') {
-        out.add(b.cast);
-        for (const sen of b.sentences)
-          for (const r of sen.reacts ?? []) for (const k of Object.keys(r.faces)) out.add(k);
-      }
-  return out;
-}
-
 const mdOf = (md: MdBlock[] | undefined) =>
   (md ?? []).map((b) => ({
     k: b.kind,
@@ -651,23 +641,6 @@ export function contentOf(script: Script): { value: unknown; screenText: ScreenT
 }
 
 // ---------- presentation helpers ----------
-
-/** The scenes of one output with the paragraphs it leaves out (`:only`) removed. */
-export function outputScenes(script: Script, output: string): Scene[] {
-  const profile = script.meta.outputs[output];
-  const wanted = profile?.scenes ? new Set(profile.scenes) : null;
-  return script.scenes
-    .filter((s) => !wanted || wanted.has(s.id))
-    .map((s) => ({
-      ...s,
-      blocks: s.blocks.filter(
-        (b) =>
-          b.kind !== 'paragraph' ||
-          !(b as Paragraph).only ||
-          (b as Paragraph).only!.includes(output),
-      ),
-    }));
-}
 
 /** Numeric directive attributes: `Number` normalization (`2.0` = `2`). */
 const NUMERIC = new Set(['x', 'y', 'zoom', 'r', 'w', 'h', 'start', 'highlight', 'speed']);

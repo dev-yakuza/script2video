@@ -17,6 +17,7 @@ import {
   assignSides,
   dialogueGeometry,
   dialogueShape,
+  FADE_FRAMES,
   maxGroup,
   type DialogueShape,
 } from '../shared';
@@ -43,8 +44,6 @@ import {
   TableVisual,
   TitleVisual,
 } from './visuals';
-
-const FADE_FRAMES = 9;
 
 /**
  * Dip to the background color over the first and last frames of a scene. Each scene is its own

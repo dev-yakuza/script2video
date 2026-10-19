@@ -7,6 +7,10 @@
 export const MAX_AVATARS = 4;
 /** Frames before a line starts that the speaker's character steps in (when sides alternate). */
 export const STAGE_LEAD = 8;
+/** Frames an entrance or exit slides (core STAGE_SLIDE_S at 30 fps). */
+export const STAGE_SLIDE = 15;
+/** Frames a fade transition takes at each scene edge (core FADE_S at 30 fps). */
+export const FADE_FRAMES = 9;
 
 export type Side = 'left' | 'right';
 
@@ -202,6 +206,8 @@ export interface StageSwitch {
   frame: number;
   /** Characters on this side, outermost first (usually one; several while reacting together). */
   keys: string[];
+  /** An entrance or exit (acting stage 5c): this character slides STAGE_SLIDE frames from here. */
+  move?: { key: string; kind: 'enter' | 'exit' };
 }
 
 /**
@@ -211,6 +217,9 @@ export interface StageSwitch {
  * - `:react` brings the reacting characters of a side on stage until the reaction ends (+hold).
  *   If that side's speaker is talking or reacting too, they stay and the others stand beside
  *   them; otherwise the reactors take the side for that time.
+ * - `::enter` / `::exit` (acting stage 5c, the scene's `stage`): an entrance takes the side at
+ *   the scene's first frame (a cast whose first event it is is not on stage before); an exit
+ *   leaves the side empty until its next speaker, who never steps in before the next scene.
  * Returns each scene's switches, starting with whoever is on stage at its first frame.
  */
 export function stagePlan(
@@ -219,9 +228,19 @@ export function stagePlan(
     durationFrames: number;
     audio: { cast: string; startFrame: number; durationFrames: number }[];
     reactions?: { cast: string; startFrame: number; endFrame: number }[];
+    stage?: { cast: string; kind: 'enter' | 'exit'; frame: number }[];
   }[],
   sideOf: Record<string, Side>,
 ): Record<Side, StageSwitch[]>[] {
+  const moves = scenes.flatMap((s) =>
+    (s.stage ?? []).map((e) => ({
+      cast: e.cast,
+      kind: e.kind,
+      at: s.startFrame + e.frame,
+      sceneStart: s.startFrame,
+      sceneEnd: s.startFrame + s.durationFrames,
+    })),
+  );
   const lines = scenes
     .flatMap((s) =>
       s.audio.map((a) => ({
@@ -238,25 +257,61 @@ export function stagePlan(
       end: s.startFrame + r.endFrame,
     })),
   );
-  const timeline: Record<Side, { at: number; keys: string[] }[]> = { left: [], right: [] };
+  const timeline: Record<Side, { at: number; keys: string[]; move?: StageSwitch['move'] }[]> = {
+    left: [],
+    right: [],
+  };
   for (const side of ['left', 'right'] as const) {
-    const sideLines = lines.filter((l) => sideOf[l.cast] === side);
-    const sideReacts = reacts.filter((r) => sideOf[r.cast] === side);
-    const first = sideLines[0]?.cast ?? sideReacts[0]?.cast;
+    const sideMoves = moves.filter((m) => sideOf[m.cast] === side);
+    // When a line takes the side: STAGE_LEAD early, but not before its speaker's entrance in the
+    // scene, nor before the scene after an exit on this side (no stepping in while one leaves).
+    const sideLines = lines
+      .filter((l) => sideOf[l.cast] === side)
+      .map((l) => {
+        let from = l.at - STAGE_LEAD;
+        for (const m of sideMoves) {
+          if (m.kind === 'enter' && m.cast === l.cast && m.at <= l.at && l.at < m.sceneEnd)
+            from = Math.max(from, m.at);
+          if (m.kind === 'exit' && m.at < l.at) from = Math.max(from, m.sceneEnd);
+        }
+        return { ...l, from };
+      });
+    // Reactions after an exit on this side wait for the next scene too (no cutting the slide).
+    const sideReacts = reacts
+      .filter((r) => sideOf[r.cast] === side)
+      .map((r) => {
+        let from = r.at - STAGE_LEAD;
+        for (const m of sideMoves)
+          if (m.kind === 'exit' && m.at < r.at) from = Math.max(from, m.sceneEnd);
+        return { ...r, from };
+      });
+    const first =
+      sideLines[0]?.cast ?? sideReacts[0]?.cast ?? sideMoves.find((m) => m.kind === 'enter')?.cast;
     if (!first) continue;
+    // A cast whose first event is its entrance is not on stage before it.
+    const firstSeen = Math.min(
+      ...sideLines.filter((l) => l.cast === first).map((l) => l.at),
+      ...sideReacts.filter((r) => r.cast === first).map((r) => r.at),
+    );
+    const firstEnter = sideMoves.find((m) => m.kind === 'enter' && m.cast === first);
+    const initial = firstEnter && firstEnter.at <= firstSeen ? null : first;
+    const changes = [
+      ...sideLines.map((l) => ({ at: l.from, key: l.cast as string | null })),
+      ...sideMoves.map((m) => ({ at: m.at, key: m.kind === 'enter' ? m.cast : null })),
+    ].sort((a, b) => a.at - b.at);
     const base = (t: number) => {
-      let key = first;
-      for (const l of sideLines) if (l.at - STAGE_LEAD <= t) key = l.cast;
+      let key = initial;
+      for (const c of changes) if (c.at <= t) key = c.key;
       return key;
     };
     // A speaker counts as talking until their face hold ends, so a reaction to their own line
     // does not push them off right after they stop.
     const talking = (key: string, t: number) =>
-      sideLines.some((l) => l.cast === key && l.at - STAGE_LEAD <= t && t < l.end + FACE_HOLD);
+      sideLines.some((l) => l.cast === key && l.from <= t && t < l.end + FACE_HOLD);
     const reactors = (t: number) => [
       ...new Set(
         sideReacts
-          .filter((r) => r.at - STAGE_LEAD <= t && t < r.end + FACE_HOLD)
+          .filter((r) => r.from <= t && t < r.end + FACE_HOLD)
           .sort((a, b) => a.at - b.at)
           .map((r) => r.cast),
       ),
@@ -264,35 +319,52 @@ export function stagePlan(
     const groupAt = (t: number): string[] => {
       const b = base(t);
       const r = reactors(t);
-      if (r.length === 0) return [b];
-      if (r.includes(b) || talking(b, t)) return [b, ...r.filter((k) => k !== b)];
+      if (r.length === 0) return b ? [b] : [];
+      // a character that entered this scene stays beside reactions of its side (it never sinks
+      // right after sliding in)
+      const sliding = sideMoves.some(
+        (m) => m.kind === 'enter' && m.cast === b && m.at <= t && t < m.sceneEnd,
+      );
+      if (b && (r.includes(b) || talking(b, t) || sliding)) return [b, ...r.filter((k) => k !== b)];
       return r;
     };
     const points = [
       ...new Set([
-        ...sideLines.map((l) => l.at - STAGE_LEAD),
+        ...sideLines.map((l) => l.from),
         ...sideLines.map((l) => l.end + FACE_HOLD),
-        ...sideReacts.flatMap((r) => [r.at - STAGE_LEAD, r.end + FACE_HOLD]),
+        ...sideReacts.flatMap((r) => [r.from, r.end + FACE_HOLD]),
+        ...sideMoves.map((m) => m.at),
       ]),
     ].sort((a, b) => a - b);
     const list = timeline[side];
     list.push({ at: -Infinity, keys: groupAt(-Infinity) });
     for (const t of points) {
       const keys = groupAt(t);
-      if (keys.join() !== list[list.length - 1]!.keys.join()) list.push({ at: t, keys });
+      const m = sideMoves.find((x) => x.at === t);
+      const move = m ? { key: m.cast, kind: m.kind } : undefined;
+      if (move || keys.join() !== list[list.length - 1]!.keys.join())
+        list.push({ at: t, keys, ...(move ? { move } : {}) });
     }
   }
   return scenes.map((s) => {
+    // An entrance at the scene's first frame is drawn in the scene (it slides from frame 0);
+    // any other switch at that frame is already on stage, as before.
+    const inScene = (x: { at: number; move?: unknown }) =>
+      x.at > s.startFrame || (x.at === s.startFrame && !!x.move);
     const per = (side: Side): StageSwitch[] => {
       const list = timeline[side];
       const out: StageSwitch[] = [];
       for (let i = 0; i < list.length; i++) {
         const sw = list[i]!;
         const next = list[i + 1];
-        if (sw.at <= s.startFrame && (!next || next.at > s.startFrame))
+        if (!inScene(sw) && sw.at <= s.startFrame && (!next || inScene(next)))
           out.push({ frame: -1000, keys: sw.keys });
-        else if (sw.at > s.startFrame && sw.at < s.startFrame + s.durationFrames)
-          out.push({ frame: sw.at - s.startFrame, keys: sw.keys });
+        else if (inScene(sw) && sw.at < s.startFrame + s.durationFrames)
+          out.push({
+            frame: sw.at - s.startFrame,
+            keys: sw.keys,
+            ...(sw.move ? { move: sw.move } : {}),
+          });
       }
       return out;
     };
@@ -591,12 +663,15 @@ export function listenerNods(input: {
     for (const key of sw.keys) {
       if (key === a.cast) continue;
       if (a.question) continue;
-      const entering = !(list[i - 1]?.keys.includes(key) ?? true) && E < sw.frame + STAGE_LEAD;
+      const lead = sw.move?.key === key ? STAGE_SLIDE : STAGE_LEAD;
+      const entering = !(list[i - 1]?.keys.includes(key) ?? true) && E < sw.frame + lead;
       if (entering) continue;
       const head = hasHead(key, E);
       const length = head ? c.head : c.body;
       if (E + length > dur) continue;
       if (list.some((s) => s.frame >= E && s.frame < E + length && !s.keys.includes(key))) continue;
+      if (list.some((s) => s.move?.key === key && s.move.kind === 'exit' && E + length > s.frame))
+        continue;
       // Reacting now, or starting to within the nod (its face may move the head's pivot).
       if (
         reactions.some(

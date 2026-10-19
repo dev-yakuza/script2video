@@ -52,6 +52,8 @@ export const KNOWN_DIRECTIVES = [
   'only',
   'audio',
   'shot',
+  'enter',
+  'exit',
   'emo',
   'look',
 ] as const;
@@ -78,6 +80,8 @@ export const IMPLEMENTED_DIRECTIVES = new Set<string>([
   'only',
   'audio',
   'shot',
+  'enter',
+  'exit',
   'emo',
   'look',
 ]);
@@ -534,6 +538,12 @@ function paragraphFrom(
           "shot is a block directive: put ::shot{cast=framing} on its own line before the scene's first paragraph",
           dLine,
         );
+      } else if (d.name === 'enter' || d.name === 'exit') {
+        diags.error(
+          'stage-placement',
+          `${d.name} is a block directive: put ::${d.name}{cast} on its own line before the scene's first paragraph`,
+          dLine,
+        );
       }
       continue;
     }
@@ -854,6 +864,73 @@ function shotFrom(
   }
 }
 
+/**
+ * `::enter{mina}` / `::exit{mina}` (acting stage 5c): who comes on stage as the scene starts, or
+ * leaves after it. Scene attributes like `::shot`: before the scene's first paragraph.
+ */
+function stageFrom(
+  node: LeafDirective | ContainerDirective,
+  kind: 'enter' | 'exit',
+  source: string,
+  scene: Scene,
+  meta: Frontmatter,
+  diags: Diagnostics,
+): void {
+  const line = lineOf(node);
+  if (node.type !== 'leafDirective') {
+    diags.error('stage-placement', `${kind} is a leaf directive: ::${kind}{cast}`, line);
+    return;
+  }
+  if (scene.blocks.some((b) => b.kind === 'paragraph')) {
+    diags.error(
+      'stage-placement',
+      `::${kind} must come before the scene's first paragraph (it is a scene attribute)`,
+      line,
+    );
+    return;
+  }
+  const attrs = attrsOf(node);
+  const s0 = node.position?.start.offset;
+  const e0 = node.position?.end.offset;
+  // Every name written, so a cast named twice in one directive is caught (attributes keep one).
+  const written =
+    s0 !== undefined && e0 !== undefined
+      ? stageKeys(source.slice(s0, e0))
+      : Object.entries(attrs).map(([name, v]) => ({ name, valued: v !== '' }));
+  if (written.length === 0) {
+    diags.error('stage-empty', `::${kind} needs a cast name, e.g. ::${kind}{mina}`, line);
+    return;
+  }
+  const list = (scene.stage ??= []);
+  for (const { name: who, valued } of written) {
+    if (!(who in meta.cast)) {
+      diags.error('stage-cast', `::${kind} names "${who}", which is not in cast`, line);
+      continue;
+    }
+    if (valued) {
+      diags.error('stage-value', `::${kind}{${who}} takes no value: "${who}=${attrs[who]}"`, line);
+      continue;
+    }
+    if (list.some((x) => x.kind === kind && x.cast === who)) {
+      diags.error('stage-duplicate', `${who} is named twice in ::${kind} of this scene`, line);
+      continue;
+    }
+    list.push({ kind, cast: who, line: line ?? scene.line });
+  }
+}
+
+/** Attribute names written in a directive's braces, and whether each has `=` (`{a b=1}`). */
+function stageKeys(rawDirective: string): { name: string; valued: boolean }[] {
+  const open = rawDirective.indexOf('{');
+  const close = rawDirective.lastIndexOf('}');
+  if (open < 0 || close < open) return [];
+  const inner = rawDirective.slice(open + 1, close).replace(/"[^"]*"|'[^']*'/g, '""');
+  return [...inner.matchAll(/(?:^|\s)([A-Za-z_][\w-]*)(\s*=)?/g)].map((m) => ({
+    name: m[1]!,
+    valued: m[2] !== undefined,
+  }));
+}
+
 function headingTitle(h: Heading): { title: string; id?: string } {
   const raw = plainText(h.children);
   const m = HEADING_ID.exec(raw);
@@ -1023,6 +1100,10 @@ export function parseScript(source: string): ParseResult {
         track.consumed.push(offsetOf(node));
         if (node.name === 'shot') {
           shotFrom(node, ensureScene(line), meta, diags);
+          break;
+        }
+        if (node.name === 'enter' || node.name === 'exit') {
+          stageFrom(node, node.name, source, ensureScene(line), meta, diags);
           break;
         }
         const v = visualFrom(node, source, diags);

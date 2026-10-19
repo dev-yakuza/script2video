@@ -395,6 +395,7 @@ export function inspectScript(
       scenes: scenes.map((scene, i) => ({
         id: scene.id,
         framing: framings[i],
+        stage: scene.stage?.map(({ kind, cast }) => ({ kind, cast })),
         blocks: scene.blocks.flatMap((b): unknown[] => {
           if (b.kind === 'visual') {
             if (b.type === 'thumbnail') return [];
