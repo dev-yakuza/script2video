@@ -42,6 +42,7 @@ export const OPTIONS = {
   id: { type: 'string', multiple: true },
   idle: { type: 'string' },
   rhythm: { type: 'string' },
+  'out-dir': { type: 'string' },
 } as const satisfies Record<string, ParseArgsOptionDescriptor>;
 
 type Option = keyof typeof OPTIONS;
@@ -60,7 +61,7 @@ export const FLAGS = {
   new: ['lang'],
   'import-recording': ['write'],
   inspect: ['json', 'hash-version'],
-  takes: ['all', 'id', 'no-open', 'list'],
+  takes: ['all', 'id', 'no-open', 'list', 'out-dir'],
   'takes pick': [],
   'takes unpick': [],
   'voice create': ['lang', 'candidates', 'play'],
@@ -77,10 +78,10 @@ export const FLAGS = {
   'character redo': ['seed'],
   'character missing': ['apply'],
   'character import': ['out', 'name'],
-  snapshot: ['output', 'draft', 'fps', 'rhythm'],
+  snapshot: ['output', 'draft', 'fps', 'rhythm', 'out-dir'],
   say: ['voice', 'lang', 'style', 'script', 'no-play'],
   tts: ['no-asr', 'recheck', 'retry'],
-  direct: ['output', 'fps', 'rhythm', 'no-open'],
+  direct: ['output', 'fps', 'rhythm', 'no-open', 'out-dir'],
   timeline: ['output', 'fps', 'rhythm'],
   render: [
     'output',
@@ -93,6 +94,7 @@ export const FLAGS = {
     'idle',
     'rhythm',
     'fps',
+    'out-dir',
   ],
 } as const satisfies Record<string, readonly Option[]>;
 
@@ -197,14 +199,14 @@ export const USAGE = [
   's2v check <script.md>   (subtitles fit their boxes)',
   's2v sentences <script.md>   (sentence ids to retry)',
   's2v tts <script.md> [--no-asr] [--recheck] [--retry <scene[:paragraph[:sentence]]>]...',
-  's2v takes <script.md> [--all] [--id <id>]... [--no-open] | --list [--id <id>]...   (listening page | takes of each line)',
+  's2v takes <script.md> [--all] [--id <id>]... [--no-open] [--out-dir <dir>] | --list [--id <id>]...   (listening page | takes of each line)',
   's2v takes pick <script.md> <id>=<take> ...   (choose a take)',
   's2v takes unpick <script.md> <id> ...',
   's2v inspect <script.md> --json [--hash-version 1]   (what the script is made of, hashed by kind)',
-  's2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open]   (direction plan and notes)',
+  's2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open] [--out-dir <dir>]   (direction plan and notes)',
   's2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]',
-  's2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off]',
-  's2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30]',
+  's2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>]',
+  's2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>]',
   's2v audio prune <script.md>   (drop locked audio the script no longer uses)',
   's2v export-script <script.md>   (reading script for a recording session)',
   's2v import-recording <script.md> <take.wav> [--write]',

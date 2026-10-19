@@ -506,6 +506,22 @@ describe('stage 3b picks (mock)', () => {
     expect(t.lock().entries.orphan!.select).toMatchObject({ retry: false });
   });
 
+  it('the page goes under --out-dir when given (S2)', async () => {
+    const t = setup(SAD);
+    await t.run();
+    copyFileSync(join(REPO, 'models.lock.json'), join(t.dir, 'models.lock.json'));
+    const away = join(t.dir, 'results');
+    const r = await buildTakesPage(t.path, t.script(), t.dir, {
+      all: false,
+      ids: [],
+      log: () => {},
+      outDir: away,
+    });
+    expect(r.html).toBe(join(away, 'takes', 'ko', 'index.html'));
+    expect(existsSync(r.html)).toBe(true);
+    expect(existsSync(join(t.dir, 'out'))).toBe(false); // not the default place as well
+  });
+
   it('the page shows emotion lines and picked lines, or all, or the ids asked', async () => {
     const t = setup(`${SAD}\n\nhost: 평범한 첫 문장이에요. 평범한 둘째 문장이에요.`);
     await t.run();

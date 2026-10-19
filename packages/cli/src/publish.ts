@@ -1,7 +1,7 @@
 /** Writes the publishing files next to a rendered video (PLAN 5.11). */
 
 import { execFile } from 'node:child_process';
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { renderStills, type RenderOptions } from '@script2video/renderer-remotion';
@@ -36,10 +36,18 @@ export function writePublishFiles(
   if (ch.chapters.length > 0) {
     writeFileSync(`${base}.chapters.txt`, chaptersText(ch.chapters));
     written.push(`${base}.chapters.txt`);
-  }
+  } else rmSync(`${base}.chapters.txt`, { force: true }); // not last run's (S2: the exact set)
   writeFileSync(`${base}.description.md`, descriptionDraft(script, ch.chapters, { draft }));
   written.push(`${base}.description.md`);
   return written;
+}
+
+/**
+ * A render that makes no thumbnail (vertical output, draft) leaves none from an earlier run under
+ * its name (S2: a render's results are exactly this run's).
+ */
+export function dropThumbnail(path: string): void {
+  rmSync(path, { force: true });
 }
 
 const run = promisify(execFile);
@@ -55,6 +63,7 @@ export async function writeThumbnail(
   opts: RenderOptions,
   out: string,
 ): Promise<string> {
+  rmSync(out, { force: true }); // a failed thumbnail does not leave last run's (S2)
   const thumb = script.scenes
     .flatMap((s) => s.blocks)
     .find((b) => b.kind === 'visual' && b.type === 'thumbnail');

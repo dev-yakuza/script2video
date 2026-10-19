@@ -4,7 +4,15 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -244,6 +252,19 @@ export async function concatAndMux(
 ): Promise<void> {
   const list = join(workDir, 'concat.txt');
   writeFileSync(list, chunks.map((c) => `file '${c.replace(/'/g, "'\\''")}'`).join('\n') + '\n');
+  // written beside and moved in place: a failed mux leaves the last video, not half of one
+  // (the name still ends in .mp4 for ffmpeg to pick the muxer)
+  const tmp = output.replace(/\.mp4$/, '') + '.tmp.mp4';
+  try {
+    await muxTo(list, audio, tmp);
+    renameSync(tmp, output);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+}
+
+async function muxTo(list: string, audio: string, output: string): Promise<void> {
   await run('ffmpeg', [
     '-v',
     'error',

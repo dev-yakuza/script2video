@@ -51,34 +51,34 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 
 ## コマンド
 
-| コマンド                                                                                         | 内容                                                                                                                                            |
-| ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `doctor`                                                                                         | Node、ffmpeg、uv、Python 環境、モデル、フォントをチェック                                                                                       |
-| `--version [--json]`                                                                             | 固定するバージョン: semver とコードのハッシュ（ツールは `--json`）                                                                              |
-| `new <dir> [--lang ko]`                                                                          | 最初の台本が入った新しい動画フォルダを作る                                                                                                      |
-| `lint <script>`                                                                                  | 静的チェック: 文法、素材、読み、字幕の分量、長さ                                                                                                |
-| `check <script>`                                                                                 | すべての字幕を実際のレンダラーで配置し、はみ出しを確認                                                                                          |
-| `sentences <script>`                                                                             | 文の id 一覧（`tts --retry` 用）                                                                                                                |
-| `say "<text>" --script <script>`                                                                 | 1 文を合成して再生（読みの確認）                                                                                                                |
-| `tts <script> [--retry id]`                                                                      | オーディオロックに合成（変わった部分だけ）                                                                                                      |
-| `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off]` | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル                                                                                     |
-| `snapshot <script> --output <name> [--rhythm on\|off]`                                           | シーンごとの静止画を並べて数秒で確認                                                                                                            |
-| `direct <script> [--output <name>] [--rhythm on\|off] [--no-open]`                               | 演出計画と演出ノートのページ（`out/<video>/direct/`）、音声なしでも可                                                                           |
-| `dev <script> [--video]`                                                                         | 編集ループ: 保存のたびに lint → tts → snapshot                                                                                                  |
-| `takes <script> [--all] [--id id] [--no-open]`                                                   | 試聴ページ（`out/<動画>/takes/<lang>/`）: 文ごとのすべてのテイクを単独・前後の文とつなげて聞き、ラジオで `takes pick` / `unpick` コマンドを作る |
-| `takes <script> --list [--id id]`                                                                | 文ごとのテイク: wav のパス、合否、音の高さ、速さ                                                                                                |
-| `takes pick <script> <id>=<n> …` / `takes unpick <script> <id> …`                                | テイクを自分で選ぶ（`pick <image>` とは別）                                                                                                     |
-| `pick <image>`                                                                                   | スクリーンショットをクリック / ドラッグして cue の座標を得る                                                                                    |
-| `voice create / pick`                                                                            | ペルソナ音声を設計し、候補から選ぶ                                                                                                              |
-| `voice check <voices/id.yaml>`                                                                   | ペルソナの参照音声を判定（雑音・間・語尾の途切れ・音の高さ）                                                                                    |
-| `voice train <voices/id.yaml> [--lang ko] [--min-emotion N]`                                     | ペルソナの話者を学習して感情を演じさせる（約 3 時間、再開できる）                                                                               |
-| `voice refs <script> [--refresh]`                                                                | 文を比べる基準音声                                                                                                                              |
-| `audio prune <script>`                                                                           | 台本で使わなくなった音声を削除                                                                                                                  |
-| `inspect <script> --json`                                                                        | 台本の構成と、変更の種類ごとのハッシュ（ツール向け）                                                                                            |
-| `export-script <script>`                                                                         | ナレーションを自分で録音するための読み原稿を作る                                                                                                |
-| `import-recording <script> <take.wav> [--write]`                                                 | 通しで録音したファイルを段落ごとに分ける（`:audio`）                                                                                            |
-| `tts-server start`                                                                               | コマンドの間も TTS サーバーを起動したままにする                                                                                                 |
-| `character import / setup / create / pick / build / review / approve / redo / missing`           | キャラクターの絵: YMM4 の取り込みと生成（下記）                                                                                                 |
+| コマンド                                                                                                           | 内容                                                                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `doctor`                                                                                                           | Node、ffmpeg、uv、Python 環境、モデル、フォントをチェック                                                                                       |
+| `--version [--json]`                                                                                               | 固定するバージョン: semver とコードのハッシュ（ツールは `--json`）                                                                              |
+| `new <dir> [--lang ko]`                                                                                            | 最初の台本が入った新しい動画フォルダを作る                                                                                                      |
+| `lint <script>`                                                                                                    | 静的チェック: 文法、素材、読み、字幕の分量、長さ                                                                                                |
+| `check <script>`                                                                                                   | すべての字幕を実際のレンダラーで配置し、はみ出しを確認                                                                                          |
+| `sentences <script>`                                                                                               | 文の id 一覧（`tts --retry` 用）                                                                                                                |
+| `say "<text>" --script <script>`                                                                                   | 1 文を合成して再生（読みの確認）                                                                                                                |
+| `tts <script> [--retry id]`                                                                                        | オーディオロックに合成（変わった部分だけ）                                                                                                      |
+| `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>]` | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル                                                                                     |
+| `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>]`                                           | シーンごとの静止画を並べて数秒で確認                                                                                                            |
+| `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>]`                               | 演出計画と演出ノートのページ（`out/<video>/direct/`）、音声なしでも可                                                                           |
+| `dev <script> [--video]`                                                                                           | 編集ループ: 保存のたびに lint → tts → snapshot                                                                                                  |
+| `takes <script> [--all] [--id id] [--no-open] [--out-dir <dir>]`                                                   | 試聴ページ（`out/<動画>/takes/<lang>/`）: 文ごとのすべてのテイクを単独・前後の文とつなげて聞き、ラジオで `takes pick` / `unpick` コマンドを作る |
+| `takes <script> --list [--id id]`                                                                                  | 文ごとのテイク: wav のパス、合否、音の高さ、速さ                                                                                                |
+| `takes pick <script> <id>=<n> …` / `takes unpick <script> <id> …`                                                  | テイクを自分で選ぶ（`pick <image>` とは別）                                                                                                     |
+| `pick <image>`                                                                                                     | スクリーンショットをクリック / ドラッグして cue の座標を得る                                                                                    |
+| `voice create / pick`                                                                                              | ペルソナ音声を設計し、候補から選ぶ                                                                                                              |
+| `voice check <voices/id.yaml>`                                                                                     | ペルソナの参照音声を判定（雑音・間・語尾の途切れ・音の高さ）                                                                                    |
+| `voice train <voices/id.yaml> [--lang ko] [--min-emotion N]`                                                       | ペルソナの話者を学習して感情を演じさせる（約 3 時間、再開できる）                                                                               |
+| `voice refs <script> [--refresh]`                                                                                  | 文を比べる基準音声                                                                                                                              |
+| `audio prune <script>`                                                                                             | 台本で使わなくなった音声を削除                                                                                                                  |
+| `inspect <script> --json`                                                                                          | 台本の構成と、変更の種類ごとのハッシュ（ツール向け）                                                                                            |
+| `export-script <script>`                                                                                           | ナレーションを自分で録音するための読み原稿を作る                                                                                                |
+| `import-recording <script> <take.wav> [--write]`                                                                   | 通しで録音したファイルを段落ごとに分ける（`:audio`）                                                                                            |
+| `tts-server start`                                                                                                 | コマンドの間も TTS サーバーを起動したままにする                                                                                                 |
+| `character import / setup / create / pick / build / review / approve / redo / missing`                             | キャラクターの絵: YMM4 の取り込みと生成（下記）                                                                                                 |
 
 `node packages/cli/dist/main.js <command> …` の形で実行します。`S2V_TTS=mock` を付けると、モデルなしで
 合成した仮の音声で全体を動かせるので、レイアウト作業や CI に便利です。
@@ -88,6 +88,14 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 ハッシュ、未コミットの変更を含む）を出します。ツールは `id` を固定し、変わったら止まります。`stale_build` は
 どれかのパッケージの `dist` がソースより古いという意味です（`yarn build`）。`inspect` の `s2v_version` も
 同じ `id` です。
+
+成果物は `out/<台本フォルダ>/` にできます（render、snapshot、`direct`・`takes` のページ）。`--out-dir <dir>` を
+指定すると同じ名前で `<dir>` の下に書きます。render は `<output>.<lang>[.draft].{mp4,srt,vtt,description.md}` と、作ったときだけ `.chapters.txt`・`.thumbnail.png` を書き、作らなかったほうは前回のファイルを消します（ほかの出力、draft とそうでないほう、snapshot のファイルには触れません）。0 以外のコードで終わった
+ときは成果物の組は保証されません。名前が同じ台本フォルダ二つは、それぞれ `--out-dir` を指定しなければ
+`out/<名前>/` を共有します。同じ台本・出力・言語の render と snapshot は作業フォルダを共有するので、一つずつ
+実行してください。`.s2v-cache/` はいつ消してもかまいません。その中の `render/`・`draft-audio/`・`check/` は
+`<台本フォルダ>-<ハッシュ>` で分かれ、ハッシュのないフォルダは以前のバージョンのものです。成果物フォルダの
+`*.tmp.*` は中断した実行が残したものです。`dev` は台本フォルダを監視するので、`--out-dir` はその外に置いてください。
 
 `inspect --json` は動画を検収するツール向けです。出力、シーン、画面の文字、声、ファイルの一覧と、変更の
 種類ごとのハッシュ（`content`、`voice`、`audio`、出力ごとの `presentation`、`engine` の構成要素）を出すので、

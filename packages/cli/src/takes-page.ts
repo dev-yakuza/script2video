@@ -16,7 +16,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { gainFor, type Script } from '@script2video/core';
 import { clampGain, integratedLoudness, medianOf, SPEECH_LUFS } from './media.js';
 import { readPcm16, writePcm16 } from './pauses.js';
@@ -31,6 +31,7 @@ import {
   type LockEntry,
   type SentenceJob,
 } from './tts.js';
+import { outDirOf } from './paths.js';
 
 // ---------- page data ----------
 
@@ -159,13 +160,13 @@ export async function buildTakesPage(
   scriptPath: string,
   script: Script,
   repoRoot: string,
-  opts: { all: boolean; ids: string[]; log: (m: string) => void },
+  opts: { all: boolean; ids: string[]; log: (m: string) => void; outDir?: string },
 ): Promise<TakesPageResult> {
   const c = context(scriptPath, script, repoRoot);
   const picks = readPicks(c.lockDir);
   const { meta } = script;
-  const videoId = basename(dirname(resolve(scriptPath)));
-  const outDir = join(repoRoot, 'out', videoId, 'takes', meta.lang);
+  // under --out-dir when given (checked by the caller), else out/<video> (S2)
+  const outDir = join(opts.outDir ?? outDirOf(scriptPath, repoRoot), 'takes', meta.lang);
   const wavDir = join(outDir, 'wav');
   const srcDir = join(outDir, 'src');
   rmSync(wavDir, { recursive: true, force: true });

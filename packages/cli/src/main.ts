@@ -7,14 +7,14 @@
  *   s2v check <script.md>   (subtitles fit their boxes)
  *   s2v sentences <script.md>   (sentence ids to retry)
  *   s2v tts <script.md> [--no-asr] [--recheck] [--retry <scene[:paragraph[:sentence]]>]...
- *   s2v takes <script.md> [--all] [--id <id>]... [--no-open] | --list [--id <id>]...   (listening page | takes of each line)
+ *   s2v takes <script.md> [--all] [--id <id>]... [--no-open] [--out-dir <dir>] | --list [--id <id>]...   (listening page | takes of each line)
  *   s2v takes pick <script.md> <id>=<take> ...   (choose a take)
  *   s2v takes unpick <script.md> <id> ...
  *   s2v inspect <script.md> --json [--hash-version 1]   (what the script is made of, hashed by kind)
- *   s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open]   (direction plan and notes)
+ *   s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open] [--out-dir <dir>]   (direction plan and notes)
  *   s2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]
- *   s2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off]
- *   s2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30]
+ *   s2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>]
+ *   s2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>]
  *   s2v audio prune <script.md>   (drop locked audio the script no longer uses)
  *   s2v export-script <script.md>   (reading script for a recording session)
  *   s2v import-recording <script.md> <take.wav> [--write]
@@ -67,7 +67,7 @@ import { renderedLengthWarning } from './length.js';
 import { enrichCast } from './cast-faces.js';
 import { castOptions } from './cast.js';
 import { buildSfxTrack, mixSoundtrack } from './soundtrack.js';
-import { writePublishFiles, writeThumbnail } from './publish.js';
+import { dropThumbnail, writePublishFiles, writeThumbnail } from './publish.js';
 import { timelineMouths } from './mouth.js';
 import { checkSubtitles } from './check.js';
 import { importCharacter } from './character-import.js';
@@ -106,6 +106,7 @@ import { inspectScript } from './inspect.js';
 import { directDiagnostics, directHtml, directManifest } from './direct.js';
 import { commandOf, onOff, parseFor, USAGE, UsageError } from './args.js';
 import { printVersion } from './version.js';
+import { cacheDirOf, checkOutDir, outDirOf } from './paths.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -294,6 +295,13 @@ async function main(): Promise<void> {
     const scriptFile = sub ? more[0] : first;
     if (!scriptFile) usage();
     const scriptPath = resolve(scriptFile);
+    if (values.list && values['out-dir'] !== undefined)
+      throw new UsageError('s2v takes: --out-dir is for the page, not --list');
+    // the results folder is checked before anything runs (S2)
+    const pageDir =
+      sub || values.list
+        ? undefined
+        : checkOutDir(outDirOf(scriptPath, REPO_ROOT, values['out-dir']), scriptPath, REPO_ROOT);
     const script = load(scriptPath);
     try {
       let lines: string[];
@@ -305,6 +313,7 @@ async function main(): Promise<void> {
           all: values.all,
           ids: values.id ?? [],
           log: (m) => console.error(m),
+          ...(pageDir ? { outDir: pageDir } : {}),
         });
         for (const n of r.notes) console.error(n);
         lines = [`${r.lines} line(s) → ${r.html}`];
@@ -479,15 +488,15 @@ async function main(): Promise<void> {
     case 'snapshot': {
       const { values } = parseFor('snapshot', rest);
       const rhythmOpts = rhythmOf(values.rhythm);
+      const outDir = checkOutDir(outDirOf(path, REPO_ROOT, values['out-dir']), path, REPO_ROOT);
       const script = load(path);
       const log = (m: string) => console.error(m);
       const outputName = values.output;
       const profile = script.meta.outputs[outputName];
       if (!profile) throw new Error(`unknown output "${outputName}"`);
-      const videoId = basename(dirname(path));
       const draft = values.draft;
       const lockDir = draft
-        ? join(REPO_ROOT, '.s2v-cache', 'draft-audio', videoId, script.meta.lang)
+        ? join(cacheDirOf(REPO_ROOT, 'draft-audio', path), script.meta.lang)
         : undefined;
       // Snapshot needs the timeline (audio durations + word timings); synthesize what is missing.
       const tts = await synthesizeScript(path, script, REPO_ROOT, {
@@ -505,13 +514,9 @@ async function main(): Promise<void> {
         rhythmOpts,
       );
       const workDir = join(
-        REPO_ROOT,
-        '.s2v-cache',
-        'render',
-        videoId,
+        cacheDirOf(REPO_ROOT, 'render', path),
         `${outputName}.${script.meta.lang}`,
       );
-      const outDir = join(REPO_ROOT, 'out', videoId);
       mkdirSync(outDir, { recursive: true });
       const sheet = await snapshot(
         {
@@ -566,10 +571,9 @@ async function main(): Promise<void> {
         // No audio yet: subtitle groups come from the text.
       }
       const fonts = await ensureFonts(REPO_ROOT, log);
-      const videoId = basename(dirname(path));
       const result = await checkSubtitles(script, manifest, {
         fontsDir: fonts,
-        workDir: join(REPO_ROOT, '.s2v-cache', 'check', videoId, script.meta.lang),
+        workDir: join(cacheDirOf(REPO_ROOT, 'check', path), script.meta.lang),
         assetsRoot: dirname(path),
         log,
       });
@@ -635,6 +639,7 @@ async function main(): Promise<void> {
     case 'direct': {
       const { values } = parseFor('direct', rest);
       const rhythmOpts = rhythmOf(values.rhythm);
+      const resultsDir = checkOutDir(outDirOf(path, REPO_ROOT, values['out-dir']), path, REPO_ROOT);
       const { script, diagnostics } = loadWithDiagnostics(path);
       const outputName = values.output;
       if (!script.meta.outputs[outputName])
@@ -651,7 +656,7 @@ async function main(): Promise<void> {
         diagnostics: directDiagnostics(diagnostics, script, plan, dm.current),
         notes: dm.notes,
       });
-      const outDir = join(REPO_ROOT, 'out', basename(dirname(path)), 'direct');
+      const outDir = join(resultsDir, 'direct');
       mkdirSync(outDir, { recursive: true });
       const page = join(outDir, `${outputName}.${script.meta.lang}.html`);
       writeFileSync(page, html);
@@ -688,6 +693,7 @@ async function main(): Promise<void> {
       const { values } = parseFor('render', rest);
       const rhythmOpts = rhythmOf(values.rhythm);
       const idleFlag = onOff('idle', values.idle);
+      const outDir = checkOutDir(outDirOf(path, REPO_ROOT, values['out-dir']), path, REPO_ROOT);
       const script = load(path);
       const log = (m: string) => console.error(m);
       const started = Date.now();
@@ -696,9 +702,8 @@ async function main(): Promise<void> {
       if (!profile) throw new Error(`unknown output "${outputName}"`);
       const draft = values.draft;
       const idle = idleFlag ?? script.meta.acting?.idle !== false;
-      const videoId = basename(dirname(path));
       const lockDir = draft
-        ? join(REPO_ROOT, '.s2v-cache', 'draft-audio', videoId, script.meta.lang)
+        ? join(cacheDirOf(REPO_ROOT, 'draft-audio', path), script.meta.lang)
         : undefined;
       const tts = await synthesizeScript(path, script, REPO_ROOT, {
         asr: !values['no-asr'],
@@ -727,13 +732,9 @@ async function main(): Promise<void> {
       if (long) log(`warning: ${long}`);
       const suffix = draft ? '.draft' : '';
       const workDir = join(
-        REPO_ROOT,
-        '.s2v-cache',
-        'render',
-        videoId,
+        cacheDirOf(REPO_ROOT, 'render', path),
         `${outputName}.${script.meta.lang}${suffix}`,
       );
-      const outDir = join(REPO_ROOT, 'out', videoId);
       mkdirSync(workDir, { recursive: true });
       mkdirSync(outDir, { recursive: true });
       const fonts = await ensureFonts(REPO_ROOT, log);
@@ -842,6 +843,7 @@ async function main(): Promise<void> {
             out.replace(/\.mp4$/, '.thumbnail.png'),
           )}`,
         );
+      else if (!draft) dropThumbnail(out.replace(/\.mp4$/, '.thumbnail.png')); // not last run's (S2)
       if (!ok) process.exit(1);
       break;
     }
