@@ -2,6 +2,7 @@
 
 ## Frontmatter
 
+<!-- s2v:frontmatter -->
 ```yaml
 ---
 title: Google Web Font 로드 최적화        # video title (description draft)
@@ -40,6 +41,12 @@ transition: fade                          # dip to background between scenes (or
 theme: dark                               # light | dark | { base: dark, accent: "#22d3ee", background: …, text: … }
 logo: { src: assets/logo.png, position: top-right, size: 0.08 }   # corner logo
 translationOf: script.ko.md               # translations only
+acting:                                   # optional; both default to on
+  idle: true                              # breathing, blinks, listener nods (false: off)
+  rhythm: { answer: 0.6, emotion: 1.3, linger: 1.4, jitter: 0.12 }   # or false (even gaps)
+  # rhythm factors: answer 0.2–1.5, emotion 0.5–3, linger 0.5–3, jitter 0–0.5; any of them
+  emotions:                               # your own emotions next to the 12 standard ones
+    sleepy: { voice: "Sound drowsy and slow.", face: calm, speed: 0.8 }
 ---
 ```
 
@@ -174,7 +181,17 @@ surprised moved serious`.
   - `:emo{emo=sad}` between two sentences changes them from the next sentence to the paragraph
     end (it replaces all of emo/power/say/volume/speed). Not inside a sentence.
   - Only on lines whose words carry the emotion: an instruction does not make a plain sentence
-    happy (it can sound wrong). Persona and Supertonic voices do not act emotions.
+    happy (it can sound wrong). Cloned persona and Supertonic voices do not act emotions (the face
+    and motion still change); a trained persona (`personaModel: trained`) does.
+  - Trained personas: happy can sound flat — try `power=strong` and compare in `takes`; excited
+    can sound angry — listen in `takes`, and if it does, use happy with `power=strong` or drop emo.
+
+<!-- s2v:example -->
+```md
+minsu{emo=surprised}: 진짜요? 그게 그렇게 간단해요?
+
+jiwoo{emo=calm}: 네, 생각보다 쉬워요. :emo{emo=happy}한번 해 보면 금방 익숙해져요.
+```
   - Keep the prefix on one line: `key{…}: text`.
   - No sighs, breaths or gasps: do not write them as text ("하아…", "ah…"); the voice misreads
     the line. Show the feeling with `emo` and the words instead.
@@ -184,6 +201,49 @@ surprised moved serious`.
   it is aligned to the text and cut into sentences, so cues and subtitles work the same.
 - `:react{minsu=surprised jiwoo=happy}` — listeners' faces from the next word to the paragraph
   end (characters only). `minsu=surprised+shake` picks the motion, `+none` turns it off.
+- `:look{minsu=viewer}` — where a character looks (characters only): `partner` (default, turned to
+  the other speaker), `viewer` (to the audience; the character needs `front-<face>` images) or
+  `glance` (head toward the partner; pairs with `viewer`). The speaker's own look at a sentence's
+  start changes that sentence; a listener's lasts from that word to the end of the paragraph.
+  Use `viewer` when a speaker addresses the audience (greetings, summaries).
+- `::enter{minsu}` / `::exit{minsu}` — on their own line before a scene's first paragraph: minsu
+  slides in as the scene starts / slides out after the scene's last line. Several names:
+  `::enter{minsu jiwoo}`. Only characters that speak or react in that output; the entering one
+  must be the first of its side to speak in the scene.
+- `::shot{minsu=head jiwoo=upper}` — framing from this scene on (layered characters: `full`,
+  `upper`, `head`); before the scene's first paragraph.
+
+<!-- s2v:example -->
+```md
+::shot{minsu=head}
+
+minsu{emo=serious power=strong volume=loud}: 이건 꼭 기억해 주세요.
+
+jiwoo{emo=puzzled speed=0.9 gap=0.3}: 음, 왜 그런 거예요?
+```
+
+<!-- s2v:example -->
+```md
+::enter{jiwoo}
+
+jiwoo: 늦어서 죄송해요.
+
+minsu: :react{jiwoo=happy}괜찮아요, 어서 오세요. :look{minsu=viewer}오늘은 지우 씨와 함께해요.
+```
+
+<!-- s2v:example -->
+```md
+::exit{jiwoo}
+
+jiwoo{emo=moved}: 오늘 정말 즐거웠어요.
+
+minsu: 저도요. 조심히 가세요.
+```
+
+- Rhythm (on by default): gaps between paragraphs follow the content — an answer to another
+  speaker's question comes sooner, a change of emotion takes a breath, sad / moved / serious
+  lines linger. End every question with `?` (ko/ja too, `？` works): a question without it is
+  not seen as one.
 - Motions (characters): a face change brings one automatically — surprised → jump, happy →
   bounce, angry → shake, sad → sink. Pick another with `key{face=… motion=nod}:` (jump, shake,
   nod, bounce, shiver, sink, lean) or `motion=none`; `motion: off` on a cast member turns the
@@ -197,6 +257,7 @@ surprised moved serious`.
 ```sh
 node packages/cli/dist/main.js lint   <script>          # static checks (also length estimate)
 node packages/cli/dist/main.js check  <script>          # subtitle overflow, real layout
+node packages/cli/dist/main.js direct <script> --no-open # direction plan + director notes (HTML)
 node packages/cli/dist/main.js say    "문장" --script <script>    # hear one sentence (its voice + dictionary)
 node packages/cli/dist/main.js pick   <image>           # click/drag → cue attributes
 node packages/cli/dist/main.js render <script> --output youtube [--draft]

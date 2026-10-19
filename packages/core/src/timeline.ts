@@ -280,7 +280,7 @@ function cueFrame(cue: Cue, spans: WordSpan[]): number | null {
  * Motion for a face change: the explicit one (`none` = no motion), else the face's own motion
  * when the cast member allows automatic motions. A paragraph without a face change has none.
  */
-function motionFor(
+export function motionFor(
   meta: Script['meta'],
   cast: string,
   face: string | undefined,

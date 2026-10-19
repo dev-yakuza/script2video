@@ -77,6 +77,7 @@ export {
   type TextSubtitle,
   lintLength,
   estimateLengths,
+  filledManifest,
   ESTIMATE_RATE,
   TARGET_TOLERANCE,
   type LengthEstimate,
@@ -222,3 +223,13 @@ export {
   type NeutralJudged,
   type TrainMeasure,
 } from './train-gates.js';
+export {
+  DIRECT,
+  directPlan,
+  type DirectListener,
+  type DirectNote,
+  type DirectPlan,
+  type DirectRow,
+  type DirectScene,
+  type DirectSentence,
+} from './direct.js';

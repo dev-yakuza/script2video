@@ -30,16 +30,23 @@ voice and character paths are relative to the script). The syntax is in
      image. Ask the user to run `s2v pick <image>` (click/drag, copies the attributes) rather
      than guessing coordinates; if you must guess, say so.
    - Code: `:cue[phrase]{line=3}` or `line=2-4`. Bullets: `:cue[phrase]{highlight=0}` (0-based).
-6. **Pronunciation**: every English term, product name or abbreviation in a ko/ja script goes
+6. **Acting** (dialogue, or a narrator with character art): put `emo=` only on lines whose words
+   carry a feeling (plain explanations stay without it), `:react` on the word a listener reacts
+   to, `:look{key=viewer}` when a speaker addresses the audience, and `::enter` / `::exit` where
+   a character arrives or leaves. End questions with `?` so the answer comes sooner (rhythm).
+7. **Pronunciation**: every English term, product name or abbreviation in a ko/ja script goes
    into `pronounce:` (lint lists the ones still missing as `unread-word`) with how it should be read (`Preload: 프리로드`, `CLI: 씨엘아이`). Numbers
    with units are fine as digits in Korean (they are read out). When unsure how a word will be
    read, suggest `s2v say "<sentence>" --script <script>` to listen.
-7. **Outputs**: `youtube` (16:9) always; add `shorts` (9:16, `scenes: [...]`, `maxDuration: 60`)
+8. **Outputs**: `youtube` (16:9) always; add `shorts` (9:16, `scenes: [...]`, `maxDuration: 60`)
    with the 1–2 scenes that stand alone (a hook or a result). Use `:only{youtube}` on paragraphs
    that make no sense in the Short.
-8. **Check**: run `node packages/cli/dist/main.js lint <script>` and fix every error; then
+9. **Check**: run `node packages/cli/dist/main.js lint <script>` and fix every error; then
    `… check <script>` (subtitle overflow). If the user gave a target length, set
    `targetDuration` (seconds): lint warns when the estimated length is off by more than 15 %.
+   Then `… direct <script> --no-open` (direction plan + director notes: flat emotion, the same
+   emotion many times in a row, long turns, missing reactions). Read the notes and act on the
+   ones that make the video better; they are advice, not errors — no need to clear them all.
 
 ## Translations
 
@@ -59,6 +66,8 @@ voice and character paths are relative to the script). The syntax is in
 - Second and later voices: Korean and Japanese have one preset speaker each, so use personas
   (`voice: "persona:<id>"`, created with `s2v voice create` / `s2v voice pick`). `style:` only
   works with `qwen:` voices.
+- Trained personas (`personaModel: trained`): for happy try `power=strong`; excited can sound
+  angry — listen in `s2v takes` and switch to happy `power=strong` or drop emo if it does.
 - With character art (`character:` folders), set faces where the emotion changes
   (`minsu{face=surprised}:`) and listener reactions at the word that triggers them
   (`:react{jiwoo=happy}`). Only use faces that exist as files in the character folder.

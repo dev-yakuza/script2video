@@ -62,6 +62,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `tts <script> [--retry id]`                                                                      | オーディオロックに合成（変わった部分だけ）                                                                                                      |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off]` | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル                                                                                     |
 | `snapshot <script> --output <name> [--rhythm on\|off]`                                           | シーンごとの静止画を並べて数秒で確認                                                                                                            |
+| `direct <script> [--output <name>] [--rhythm on\|off] [--no-open]`                               | 演出計画と演出ノートのページ（`out/<video>/direct/`）、音声なしでも可                                                                           |
 | `dev <script> [--video]`                                                                         | 編集ループ: 保存のたびに lint → tts → snapshot                                                                                                  |
 | `takes <script> [--all] [--id id] [--no-open]`                                                   | 試聴ページ（`out/<動画>/takes/<lang>/`）: 文ごとのすべてのテイクを単独・前後の文とつなげて聞き、ラジオで `takes pick` / `unpick` コマンドを作る |
 | `takes <script> --list [--id id]`                                                                | 文ごとのテイク: wav のパス、合否、音の高さ、速さ                                                                                                |
@@ -183,6 +184,14 @@ wav のパスとともにテキストで表示します。`s2v takes pick <scrip
 `tts --retry <id>` の選択も pick として保存されます。シーン全体を retry すると、自分で選んだ文は
 飛ばします。`s2v takes unpick <script> <id>` で自動の選択に戻り、`audio prune` は使われない pick を
 消します。
+
+**演出ノート。** `s2v direct <script> [--output youtube]` は出力ひとつの演出計画をページ
+（`out/<video>/direct/<output>.<lang>.html`）にします。段落ごとに時刻、話者、感情、表情とモーション、
+視線と反応、前の間（リズムの規則つき）を示します。音声がなくても使えます。今の台本で合成済みの文は実際の
+長さを、残りは推定の長さ（`~` 印）を使います。上のノートは、動画が単調に見えそうな所で試すことを
+知らせます：長い会話に感情がひとつもない、同じ感情が何段落も続く、ひとりが何段落も続けて話す、
+30 秒間聞き手の反応がない（キャラクターがあり待機動作を切ったときだけ）、学習した persona の happy・excited のセリフ。
+エラーではなく助言です。
 
 ### キャラクター
 

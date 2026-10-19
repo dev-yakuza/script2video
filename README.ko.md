@@ -62,6 +62,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `tts <script> [--retry id]`                                                                      | 오디오 잠금에 합성(바뀐 부분만)                                                                                                        |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off]` | 영상 + `.srt` `.vtt` 챕터, 설명문 초안, 썸네일                                                                                         |
 | `snapshot <script> --output <name> [--rhythm on\|off]`                                           | 장면마다 정지 화면 한 장을 모아 몇 초 만에 확인                                                                                        |
+| `direct <script> [--output <name>] [--rhythm on\|off] [--no-open]`                               | 연출 계획과 감독 노트 페이지(`out/<video>/direct/`), 음성 없이도 됨                                                                    |
 | `dev <script> [--video]`                                                                         | 편집 루프: 저장할 때마다 lint → tts → snapshot                                                                                         |
 | `takes <script> [--all] [--id id] [--no-open]`                                                   | 청취 페이지(`out/<영상>/takes/<lang>/`): 문장별 모든 테이크를 단독·앞뒤 문장과 이어 듣고, 라디오로 `takes pick` / `unpick` 명령을 만듦 |
 | `takes <script> --list [--id id]`                                                                | 문장별 테이크: wav 경로, 통과 여부, 음높이, 빠르기                                                                                     |
@@ -183,6 +184,13 @@ speed: 0.8, maxPause: 1.5 }`). 감정은 목소리(Qwen 프리셋 화자는 감�
 `power`가 바뀌면 적용되지 않습니다(`tts`가 옛 대사와 새 대사를 나란히 알려 줌). `tts --retry <id>`의
 선택도 pick으로 저장됩니다. 장면 전체를 retry하면 직접 고른 문장은 건너뜁니다. `s2v takes unpick
 <script> <id>`로 자동 선택으로 돌아가고, `audio prune`은 쓰이지 않는 pick을 지웁니다.
+
+**감독 노트.** `s2v direct <script> [--output youtube]`는 출력 하나의 연출 계획을 페이지
+(`out/<video>/direct/<output>.<lang>.html`)로 만듭니다. 문단마다 시각, 화자, 감정, 얼굴과 모션, 시선과 반응,
+앞 간격(리듬 규칙 포함)을 보여 줍니다. 음성이 없어도 됩니다. 지금 대본으로 합성된 문장은 실제 길이를,
+나머지는 추정 길이(`~` 표시)를 씁니다. 위쪽의 노트는 영상이 단조로워 보일 만한 곳에서 해 볼 것을
+알려 줍니다: 긴 대화에 감정이 하나도 없음, 같은 감정이 여러 문단 연속, 한 사람이 여러 문단 연속으로 말함,
+30초 동안 청자 반응 없음(캐릭터가 있고 대기 동작을 끈 경우만), 학습한 persona의 happy·excited 대사. 오류가 아니라 조언입니다.
 
 ### 캐릭터
 

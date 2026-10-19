@@ -17,6 +17,8 @@
  *   s2v inspect <script.md> --json [--hash-version 1]   (what the script is made of, hashed by kind)
  *   s2v export-script <script.md>   (reading script for a recording session)
  *   s2v import-recording <script.md> <take.wav> [--write]   (one take → per-paragraph files)
+ *   s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open]
+ *              (direction plan and director notes as an HTML page; no audio needed)
  *   s2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]
  *              (with rhythm on, the paragraph gaps go to stderr as a table)
  *   s2v render <script.md> [--output youtube|shorts] [--no-asr] [--recheck] [--draft] [--no-cache]
@@ -24,7 +26,7 @@
  *              [--workers N]      (browser tabs rendering in parallel)
  *              [--idle on|off]    (idle motion; overrides acting.idle)
  *              [--rhythm on|off]  (content-aware gaps; overrides acting.rhythm and the output's;
- *                                  also for snapshot and timeline)
+ *                                  also for snapshot, timeline and direct)
  *   s2v audio prune <script.md>   (drop locked audio the script no longer uses)
  *   s2v dev <script.md> [--video]  (edit loop: lint → tts → snapshot on every save)
  *   s2v doctor                    (is this machine ready?)
@@ -39,12 +41,13 @@
  *   s2v tts-server start
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
   buildTimeline,
+  directPlan,
   formatDiagnostic,
   HASH_VERSIONS,
   lintActing,
@@ -102,6 +105,7 @@ import { buildTakesPage, openPage } from './takes-page.js';
 import { trainVoice } from './voice-train.js';
 import { voiceRefs } from './voice-refs.js';
 import { inspectScript } from './inspect.js';
+import { directDiagnostics, directHtml, directManifest } from './direct.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -125,6 +129,7 @@ function usage(): never {
       '       s2v audio prune <script.md>\n' +
       '       s2v takes <script.md> [--all] [--id <id>] [--no-open] | --list [--id <id>] | takes pick <script.md> <id>=<take> ... | takes unpick <script.md> <id> ...\n' +
       '       s2v inspect <script.md> --json [--hash-version 1]\n' +
+      '       s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open]   (direction plan, notes)\n' +
       '       s2v export-script <script.md>   (reading script for recording)\n' +
       '       s2v import-recording <script.md> <take.wav> [--write]\n' +
       '       s2v dev <script.md> [--output youtube] [--video] [--no-asr]\n' +
@@ -139,6 +144,11 @@ function usage(): never {
 const estimatedOver = new Set<string>();
 
 function load(path: string) {
+  return loadWithDiagnostics(path).script;
+}
+
+/** `load`, also returning every diagnostic it printed. */
+function loadWithDiagnostics(path: string) {
   const { script, diagnostics } = parseScript(readFileSync(path, 'utf8'));
   const all = [...diagnostics.items];
   if (script) enrichCast(script, dirname(path));
@@ -177,7 +187,7 @@ function load(path: string) {
     if (over) estimatedOver.add(over[1]!);
   }
   if (!script || all.some((d) => d.severity === 'error')) process.exit(1);
-  return script;
+  return { script, diagnostics: all };
 }
 
 /** `--max-memory-gb` (default: max(24 GB, 60 % of RAM)). */
@@ -250,8 +260,8 @@ async function main(): Promise<void> {
   // --rhythm changes the timing: only commands that build a timeline take it (5d plan 2).
   let rhythm: boolean | undefined;
   if (values.rhythm !== undefined) {
-    if (!['render', 'snapshot', 'timeline'].includes(command ?? ''))
-      throw new Error(`--rhythm is for render, snapshot and timeline, not ${command}`);
+    if (!['render', 'snapshot', 'timeline', 'direct'].includes(command ?? ''))
+      throw new Error(`--rhythm is for render, snapshot, timeline and direct, not ${command}`);
     if (values.rhythm !== 'on' && values.rhythm !== 'off')
       throw new Error(`--rhythm must be on or off, not "${values.rhythm}"`);
     rhythm = values.rhythm === 'on';
@@ -668,6 +678,34 @@ async function main(): Promise<void> {
       console.error(
         `synthesized ${result.synthesized}, reused ${result.reused} in ${((Date.now() - started) / 1000).toFixed(1)}s → ${result.manifestPath}`,
       );
+      break;
+    }
+    case 'direct': {
+      const { script, diagnostics } = loadWithDiagnostics(path);
+      const outputName = values.output!;
+      if (!script.meta.outputs[outputName])
+        throw new Error(
+          `unknown output "${outputName}" (have: ${Object.keys(script.meta.outputs).join(', ')})`,
+        );
+      const dm = directManifest(path, script, REPO_ROOT);
+      const plan = directPlan(script, outputName, dm.manifest, {
+        ...rhythmOpts,
+        fps: Number(values.fps),
+      });
+      const html = directHtml(plan, script, {
+        scriptName: basename(path),
+        diagnostics: directDiagnostics(diagnostics, script, plan, dm.current),
+        notes: dm.notes,
+      });
+      const outDir = join(REPO_ROOT, 'out', basename(dirname(path)), 'direct');
+      mkdirSync(outDir, { recursive: true });
+      const page = join(outDir, `${outputName}.${script.meta.lang}.html`);
+      writeFileSync(page, html);
+      for (const n of plan.notes)
+        console.error(`note: ${n.line !== undefined ? `line ${n.line}: ` : ''}${n.message}`);
+      console.error(`direct: ${plan.noteCount} notes`);
+      console.log(page);
+      if (!values['no-open']) openPage(page);
       break;
     }
     case 'timeline': {

@@ -101,8 +101,15 @@ export interface LengthEstimate {
   total: number;
 }
 
-/** Estimated length of each output. `manifest` (optional) supplies real sentence durations. */
-export function estimateLengths(script: Script, manifest: AudioManifest = {}, fps = 30) {
+/**
+ * `manifest` with every missing sentence filled by an estimate from its text (no words), and how
+ * many sentences had real audio. The estimate uses the cast × line × emotion speed and the emotion
+ * length multiplier.
+ */
+export function filledManifest(
+  script: Script,
+  manifest: AudioManifest = {},
+): { filled: AudioManifest; measured: number; total: number } {
   const { meta } = script;
   const filled: AudioManifest = {};
   let measured = 0;
@@ -132,7 +139,13 @@ export function estimateLengths(script: Script, manifest: AudioManifest = {}, fp
         };
       });
     });
-  return Object.keys(meta.outputs).map((output): LengthEstimate => {
+  return { filled, measured, total };
+}
+
+/** Estimated length of each output. `manifest` (optional) supplies real sentence durations. */
+export function estimateLengths(script: Script, manifest: AudioManifest = {}, fps = 30) {
+  const { filled, measured, total } = filledManifest(script, manifest);
+  return Object.keys(script.meta.outputs).map((output): LengthEstimate => {
     const { timeline } = buildTimeline(script, output, filled, fps);
     return { output, seconds: timeline.totalFrames / fps, measured, total };
   });

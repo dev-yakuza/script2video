@@ -63,6 +63,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `tts <script> [--retry id]`                                                                      | synthesize into the audio lock (only what changed)                                                                                                             |
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off]` | video + `.srt` `.vtt` chapters, description draft, thumbnail                                                                                                   |
 | `snapshot <script> --output <name> [--rhythm on\|off]`                                           | one still per scene, tiled, in seconds                                                                                                                         |
+| `direct <script> [--output <name>] [--rhythm on\|off] [--no-open]`                               | direction plan and director notes as a page (`out/<video>/direct/`); no audio needed                                                                           |
 | `dev <script> [--video]`                                                                         | edit loop: lint → tts → snapshot on every save                                                                                                                 |
 | `takes <script> [--all] [--id id] [--no-open]`                                                   | a listening page (`out/<video>/takes/<lang>/`): every take of each line, alone or between its neighbours; the radios write the `takes pick` / `unpick` command |
 | `takes <script> --list [--id id]`                                                                | the takes of each line: take wav, pass/fail, pitch, pace                                                                                                       |
@@ -191,6 +192,15 @@ pauses or post-processing change, and stops applying when the line's text, voice
 changes (`tts` says which line, with the old and the new text). `tts --retry <id>` writes its choice
 as a pick too; a retry of a whole scene leaves the lines you picked alone. `s2v takes unpick
 <script> <id>` goes back to the automatic choice, and `audio prune` removes picks no line uses.
+
+**Director notes.** `s2v direct <script> [--output youtube]` writes a page
+(`out/<video>/direct/<output>.<lang>.html`) with the plan of one output: each paragraph's time,
+speaker, emotions, face and motion, looks and reactions, and the gap before it (with the rhythm
+rules). It needs no audio: lines already synthesized for the current script use their real length,
+the rest are estimated (marked `~`). Notes at the top say what to try where a video is likely to
+look flat — no emotion at all in a long dialogue, the same emotion many paragraphs in a row, one
+speaker talking for many paragraphs, half a minute without a listener reacting (only with characters and idle
+motion off), and happy or excited lines of a trained persona. They are advice, not errors.
 
 ### Characters
 
