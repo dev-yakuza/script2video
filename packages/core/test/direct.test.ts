@@ -274,6 +274,43 @@ describe('notes', () => {
     expect(joy).toHaveLength(DIRECT.perCode + 1);
     expect(joy[DIRECT.perCode]!.message).toMatch(/and 3 more/);
     expect(directPlan(s, 'youtube', {}, OFF).noteCount).toBe(9); // 8 trained-joy + 1 same-emotion-run
+    // every note for tools (S9b), in the same order: the capped list is its first notes per code
+    const plan = directPlan(s, 'youtube', {}, OFF);
+    expect(plan.allNotes).toHaveLength(9);
+    expect(plan.allNotes.every((n) => n.rowId !== undefined && n.line !== undefined)).toBe(true);
+    const shown = plan.notes.filter((n) => n.rowId !== undefined);
+    for (const n of shown) expect(plan.allNotes).toContain(n);
+    expect(plan.allNotes.filter((n) => n.code === 'trained-joy')).toHaveLength(8);
+  });
+
+  it('notes name their cast, the paragraphs they span, the listener and the emotion (S9b)', () => {
+    const turn = repeat(5, (i) => `a: 가 ${i}.`);
+    const long = directPlan(
+      script(`# T {#t}\n\n${turn}\n\nb: 나.`),
+      'youtube',
+      {},
+      OFF,
+    ).allNotes.find((n) => n.code === 'long-turn')!;
+    expect([long.cast, long.rowId, long.toRowId]).toEqual(['a', 't:0', 't:4']);
+    expect(long.toLine).toBeGreaterThan(long.line!);
+    const run = repeat(6, (i) => `a{emo=happy}: 가 나 ${i}.\n\nb: 다 라.`);
+    const same = directPlan(script(`# T {#t}\n\n${run}`), 'youtube', {}, OFF).allNotes.find(
+      (n) => n.code === 'same-emotion-run',
+    )!;
+    expect([same.cast, same.emo, same.rowId, same.toRowId]).toEqual(['a', 'happy', 't:0', 't:10']);
+    const cast = { a: '{ voice: "persona:g", personaModel: trained }', b: CAST.b };
+    const joy = directPlan(
+      script('# T {#t}\n\na{emo=excited}: 가.\n\nb: 나.', { cast }),
+      'youtube',
+      {},
+      OFF,
+    ).allNotes.find((n) => n.code === 'trained-joy')!;
+    expect([joy.cast, joy.emo, joy.listener, joy.toRowId]).toEqual([
+      'a',
+      'excited',
+      undefined,
+      undefined,
+    ]);
   });
 
   it('no-reaction names the listener opposite the speaker and the row inside the window', () => {
@@ -289,6 +326,7 @@ describe('notes', () => {
     expect(notes).toHaveLength(1);
     expect(notes[0]!.message).toMatch(/:react\{b=/);
     expect(notes[0]!.rowId).toBe('t:1');
+    expect([notes[0]!.cast, notes[0]!.listener]).toEqual(['a', 'b']);
     // the listener is opposite whoever talks most in the window, not its first speaker
     const mostly = script(`# T {#t}\n\nb: 시작.\n\n${repeat(15, (i) => `a: 가 ${i}.`)}`, {
       extra: idleOff,

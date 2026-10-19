@@ -88,6 +88,15 @@ export interface DirectNote {
   message: string;
   line?: number;
   rowId?: string;
+  /** The cast the note is about (no-reaction: the one talking). */
+  cast?: string;
+  /** The last paragraph of a run or a long turn. */
+  toRowId?: string;
+  toLine?: number;
+  /** no-reaction: the cast that does not react. */
+  listener?: string;
+  /** same-emotion-run, trained-joy: the emotion. */
+  emo?: string;
 }
 
 export interface DirectPlan {
@@ -109,6 +118,8 @@ export interface DirectPlan {
   notes: DirectNote[];
   /** Notes before the per-code cap. */
   noteCount: number;
+  /** Every note, before the per-code cap (same order; for tools, S9b). */
+  allNotes: DirectNote[];
 }
 
 export function directPlan(
@@ -251,6 +262,7 @@ export function directPlan(
     scenes,
     notes: [],
     noteCount: 0,
+    allNotes: [],
   };
   // Who stands opposite a row's speaker (no-reaction): nobody when the stage says that side is
   // empty (with entrances or exits every paragraph has an entry) or no cast of the output sits
@@ -287,6 +299,7 @@ export function directPlan(
   };
   const all = directNotes(script, plan, opposite);
   plan.noteCount = all.length;
+  plan.allNotes = all;
   plan.notes = capNotes(all);
   return plan;
 }
@@ -321,6 +334,7 @@ function directNotes(
         message: `${name(cast)} has no emo in ${lines.length} lines. Put emo= on the lines whose words carry a feeling (surprise, joy, worry); leave plain explanations without it.`,
         line: first.line,
         rowId: first.id,
+        cast,
       });
     }
 
@@ -338,6 +352,10 @@ function directNotes(
         message: `${name(cast)} is ${run.emo} in ${run.rows.length} paragraphs in a row (lines ${run.rows[0]!.line}–${last.line}). Lower the 3rd (line ${third.line}) to calm or neutral, or change it mid-paragraph with :emo.`,
         line: run.rows[0]!.line,
         rowId: run.rows[0]!.id,
+        cast,
+        toRowId: last.id,
+        toLine: last.line,
+        emo: run.emo,
       });
     };
     for (const row of scene.rows) {
@@ -368,6 +386,9 @@ function directNotes(
             message: `${name(cast)} speaks ${n} paragraphs in a row (lines ${scene.rows[i]!.line}–${scene.rows[j]!.line}). Break it with a question or a short reply from ${others.join(' or ')}.`,
             line: scene.rows[i]!.line,
             rowId: scene.rows[i]!.id,
+            cast,
+            toRowId: scene.rows[j]!.id,
+            toLine: scene.rows[j]!.line,
           });
         }
         i = j + 1;
@@ -398,6 +419,8 @@ function directNotes(
           message: `${scene.id} ${fmt(start)}–${fmt(t)}${estimated ? ' (estimated)' : ''}: ${name(listener)} does not react while ${name(main)} talks. Add :react{${listener}=surprised} at the word ${name(listener)} would react to.`,
           line: at.line,
           rowId: at.id,
+          cast: main,
+          listener,
         });
       };
       for (const row of scene.rows) {
@@ -439,6 +462,8 @@ function directNotes(
               : `${name(row.cast)} line ${row.line} (excited): trained voices can sound angry when excited. Listen in s2v takes; if it does, try happy power=strong or drop emo (tentative).`,
           line: row.line,
           rowId: row.id,
+          cast: row.cast,
+          emo,
         });
       });
     }

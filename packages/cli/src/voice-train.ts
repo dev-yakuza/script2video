@@ -54,6 +54,8 @@ export interface TrainOptions {
   /** Stop before training 2 when fewer emotion clips passed (plan 6.7; 150 for the recipe check). */
   minEmotion: number;
   log: (m: string) => void;
+  /** Finds a running image generation (default: `imagegenRunning`; tests pass their own). */
+  imagegenBusy?: () => Promise<string | null>;
 }
 
 const sha256 = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
@@ -116,7 +118,7 @@ export async function trainVoice(
   );
 
   // ---------- 1. start checks ----------
-  const busy = await imagegenRunning();
+  const busy = await (opts.imagegenBusy ?? imagegenRunning)();
   if (busy)
     throw new Error(`image generation is running (${busy}); train when it is done (A6: not both)`);
   const tts = new Service(TTS_SERVER, repoRoot);

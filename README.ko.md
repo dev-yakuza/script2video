@@ -64,7 +64,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>] [--watermark proxy] [--scenes <id,…>]` | 영상 + `.srt` `.vtt` 챕터, 설명문 초안, 썸네일                                                                                         |
 | `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>] [--frozen-audio] [--frames]`                                                     | 장면마다 정지 화면 한 장을 모아 몇 초 만에 확인. `--frames`: 화면이 바뀌는 시점마다 낱장과 `index.json`                                |
 | `capture <url> --out <png> [--text <json>] [--assets-dir <dir>] [--selector <css>] [--allow-host <host>]…`                                               | 웹페이지의 화면(1280×800 또는 요소 하나)과, `--text`로 그 내용을 JSON으로                                                              |
-| `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>]`                                                                     | 연출 계획과 감독 노트 페이지(`out/<video>/direct/`), 음성 없이도 됨                                                                    |
+| `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>] [--json]`                                                            | 연출 계획과 감독 노트 페이지(`out/<video>/direct/`), 음성 없이도 됨; `--json`: 도구용 노트 전부, 페이지 없음                           |
 | `dev <script> [--video]`                                                                                                                                 | 편집 루프: 저장할 때마다 lint → tts → snapshot                                                                                         |
 | `takes <script> [--all] [--id id] [--no-open] [--out-dir <dir>]`                                                                                         | 청취 페이지(`out/<영상>/takes/<lang>/`): 문장별 모든 테이크를 단독·앞뒤 문장과 이어 듣고, 라디오로 `takes pick` / `unpick` 명령을 만듦 |
 | `takes <script> --list [--id id]`                                                                                                                        | 문장별 테이크: wav 경로, 통과 여부, 음높이, 빠르기                                                                                     |
@@ -79,7 +79,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `export-script <script>`                                                                                                                                 | 내레이션을 직접 녹음할 때 읽을 대본 만들기                                                                                             |
 | `import-recording <script> <take.wav> [--write]`                                                                                                         | 한 번에 녹음한 파일을 문단별로 나누기(`:audio`)                                                                                        |
 | `tts-server start`                                                                                                                                       | 명령어 사이에 TTS 서버를 계속 띄워 두기                                                                                                |
-| `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | 캐릭터 그림: YMM4 가져오기와 생성(아래 참조)                                                                                           |
+| `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | 캐릭터 그림: YMM4 가져오기와 생성(아래 참조); 도구용 `--json`(`build --dry-run`, `review`, `missing`)                                  |
 
 `node packages/cli/dist/main.js <command> …` 형태로 실행합니다. `S2V_TTS=mock`을 붙이면 모델 없이
 합성 음성으로 전체를 돌려 볼 수 있어 레이아웃 작업과 CI에 편리합니다.
@@ -230,6 +230,10 @@ speed: 0.8, maxPause: 1.5 }`). 감정은 목소리(Qwen 프리셋 화자는 감�
 나머지는 추정 길이(`~` 표시)를 씁니다. 위쪽의 노트는 영상이 단조로워 보일 만한 곳에서 해 볼 것을
 알려 줍니다: 긴 대화에 감정이 하나도 없음, 같은 감정이 여러 문단 연속, 한 사람이 여러 문단 연속으로 말함,
 30초 동안 청자 반응 없음(캐릭터가 있고 대기 동작을 끈 경우만), 학습한 persona의 happy·excited 대사. 오류가 아니라 조언입니다.
+`--json`은 페이지 대신 노트 전부(종류별 5개로 자르지 않음)를 냅니다. 노트마다 `code`, `cast`,
+`paragraph`(`scene:block`, 그 문단 문장 id의 앞부분)와 `line`, 걸친 마지막 문단(`toParagraph`, `toLine`),
+반응하지 않는 `listener`, `emo`가 있고, `audio`는 실제 음성이 있는 문장 수를 알려 줍니다. 순서에는 뜻이
+없고 `message`는 사람용입니다. lint가 실패하면 JSON을 내고 exit 1로 끝납니다.
 
 ### 캐릭터
 
@@ -375,6 +379,40 @@ node packages/cli/dist/main.js character redo characters/mina front/base/happy  
 node packages/cli/dist/main.js character missing videos/demo/script.ko.md [--apply]
 # → 정의되지 않은 것, framing 세트에 없는 것(--apply가 추가), 아직 승인되지 않은 것
 ```
+
+`provenance.json`이 없는 생성 캐릭터 폴더(`character build`가 만들지 않음)는 "(c) unknown"이고
+`missing`이 실패합니다. 캐릭터 폴더가 없거나 읽을 수 없을 때도 같습니다.
+
+도구용 JSON 형식이 있습니다(stdout은 JSON, 메시지는 stderr). 읽기만 하는 것은 셋입니다:
+`build --dry-run --json`, `review --json --no-check`, `--apply` 없는 `missing --json`.
+`--no-check` 없는 `review --json`은 다시 검사하고 페이지를 쓰며, `missing --apply`는
+`character.yaml`을 고치고, `build --layers-only`는 레이어를 다시 만듭니다:
+
+```sh
+node packages/cli/dist/main.js character build characters/mina --dry-run --json   # 상태, 라운드, 다음 라운드, 추정
+node packages/cli/dist/main.js character review characters/mina --json --no-check # 항목, view, face, 레이어 파일
+node packages/cli/dist/main.js character missing videos/demo/script.ko.md --json  # cast마다 (a)–(d), unknown
+node packages/cli/dist/main.js character build characters/mina --layers-only      # 레이어만 다시, 생성 없음
+```
+
+- `build --dry-run --json`: `state`는 `pick`(front 참조 없음: `front`가 `never-picked` 또는
+  `deleted`), `generate`, `review`, `blocked`, `derive`(이미지는 모두 승인, 일부 레이어가 옛것:
+  `--layers-only`), `complete`. 그리고 `rounds`, `next`(장 수와 분), `staleParts`,
+  `remainingImages` / `remainingMinutes`(상한 추정), 쓸 `@flip` twin.
+- `review --json`: 항목마다(`status`, 생성 이미지 `sha`, `workMatches`, `approvedSha`, `srcSha`,
+  `checks`, `onPage`), view마다 레이어 부분과 실패한 합성 검사, face마다 `key`(`framing:face`; face
+  이름에는 `:`가 올 수 없음)와 `ready`, `pending`, `staleParts`, `warnings`, 레이어 파일마다 `state`
+  (`same`, `edited`, `untracked`, `gone`). `--no-check`가 없으면 대기 이미지를 다시 검사하고 페이지를
+  먼저 씁니다(`--no-open`이면 열지 않음). `--no-check`는 읽기만 합니다.
+- `missing --json`: 캐릭터가 있는 cast마다 `checked`(아니면 `reason`: `no-folder`, `invalid`,
+  `not-parts`, `not-generated`), `notDefined`, `notInSet`, `notReady`(항목과 `staleParts`),
+  `impossible`, `optional`, `--apply`가 넣은 `added`, `count` — (a)는 face 수, (b)–(d)는 항목 수이고
+  텍스트 줄 수가 아닙니다.
+- 레이어 최신 여부는 부분 단위입니다(view의 참조, 포즈 body마다, 표정 그룹마다 — 눈은 다른 그룹의
+  blink에서 올 수 있어 그 view의 승인 blink 전부를 함께 봅니다). blink를 새로 승인하거나 다시 만들면
+  같은 view의 다른 그룹도 옛것이 됩니다. 0.11.0 이전에 만든 캐릭터와 `imagegen/character.py`의
+  `DERIVE_VERSION`이 올라간 뒤에는 `character build <dir> --layers-only`를 한 번 돌립니다.
+  `build --no-open`은 라운드 페이지를 쓰되 열지 않습니다.
 
 바뀐 것만 다시 만듭니다. 이미지마다 만들 때의 정의를 기록하므로(`provenance.json`) 멈춘 라운드는
 이어서 하고, 프롬프트를 고치면 그 이미지만 다시 만듭니다. TTS 서버나 정렬 서버가 떠 있으면 생성을

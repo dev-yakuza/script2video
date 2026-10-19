@@ -142,6 +142,10 @@ jobs:
       - run: python -m py_compile tts-server/server.py tts-server/helpers.py tts-server/train_speaker.py tts-server/scripts/*.py aligner/server.py aligner/pitch_helpers.py imagegen/*.py
       - run: python -m unittest discover -s tts-server -p 'test_*.py'
       - run: python -m unittest discover -s imagegen -p 'test_*.py'
+      # the image steps with numpy / Pillow / scipy as imagegen/uv.lock pins them (uv cannot sync
+      # that project on linux: MLX); derive's golden is tied to DERIVE_VERSION (S9b)
+      - run: python scripts/check_imagegen_pins.py
+      - run: uv run --no-project --python 3.12 --with numpy==2.5.4 --with pillow==12.3.0 --with scipy==1.18.1 python -m unittest discover -s imagegen -p 'test_*.py'
       - run: python -m unittest discover -s aligner -p 'test_*.py'
       - run: uv lock --check
         working-directory: tts-server

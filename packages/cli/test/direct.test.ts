@@ -1,8 +1,8 @@
 /** `s2v direct` (acting stage 6): the audio it trusts, the page, and the command line. */
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { directPlan, parseScript, type Diagnostic } from '@script2video/core';
 import { describe, expect, it } from 'vitest';
@@ -181,6 +181,52 @@ describe('s2v direct (command line)', () => {
     expect(r.status).toBe(2);
     expect(r.err).toMatch(/unknown output "nope" \(have: youtube, shorts\)/);
     expect(existsSync(join(REPO, 'out', 'sample-ko', 'direct', 'nope.ko.html'))).toBe(false);
+  });
+
+  it('--json: every note with its cast and paragraphs, no page (S9b)', { timeout: 60_000 }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 's2v-direct-json-'));
+    // a video folder name of its own: its default results folder must not appear
+    const video = `s9b-direct-${basename(dir)}`;
+    const path = join(dir, video, 'script.ko.md');
+    mkdirSync(dirname(path));
+    // six long turns: more than the page shows of one code
+    const turns = Array.from({ length: 6 }, (_, k) =>
+      [...Array.from({ length: 4 }, (_, i) => `a: 말 ${k} ${i}.`), `b: 네 ${k}.`].join('\n\n'),
+    ).join('\n\n');
+    writeFileSync(
+      path,
+      `---\nlang: ko\ncast:\n  a: { voice: "qwen:Sohee" }\n  b: { voice: "qwen:Ryan" }\noutputs:\n  youtube: { aspect: "16:9", layout: dialogue }\n---\n\n# T {#t}\n\n${turns}\n`,
+    );
+    const json = (args: string[]) =>
+      spawnSync('node', [cli, 'direct', path, ...args], { cwd: REPO, encoding: 'utf8' });
+    const r = json(['--json']);
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toMatch(/^note:/m);
+    const out = JSON.parse(r.stdout);
+    expect([out.output, out.lang, out.audio.measured]).toEqual(['youtube', 'ko', 0]);
+    const long = out.notes.filter((n: { code: string }) => n.code === 'long-turn');
+    expect(long).toHaveLength(6);
+    expect(long[0]).toMatchObject({
+      cast: 'a',
+      paragraph: 't:0',
+      toParagraph: 't:3',
+      listener: null,
+    });
+    expect(out.notes.some((n: { message: string }) => /more/.test(n.message))).toBe(false);
+    // no page was written
+    expect(existsSync(join(REPO, 'out', video))).toBe(false);
+    expect(json(['--json']).stdout).toBe(r.stdout);
+    // the page's flags are not --json's
+    expect(json(['--json', '--no-open']).status).toBe(2);
+    expect(json(['--json', '--out-dir', dir]).status).toBe(2);
+    // lint fails: the notes still, and exit 1 (as sentences --json)
+    writeFileSync(
+      path,
+      readFileSync(path, 'utf8').replace('a: 말 0 0.', 'a: :audio{src=rec/none.wav}말 0 0.'),
+    );
+    const bad = json(['--json']);
+    expect(bad.status).toBe(1);
+    expect(JSON.parse(bad.stdout).output).toBe('youtube');
   });
 
   it('takes --rhythm on|off', () => {

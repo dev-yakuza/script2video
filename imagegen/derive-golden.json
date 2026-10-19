@@ -1,0 +1,42 @@
+{
+  "derive_version": 1,
+  "cases": {
+    "split": {
+      "layers": {
+        "body/stand.png": "3f54e8dc58321462491f482fa2b4e33151fc5354b96d928a782e39c369b07b45",
+        "body/wave.png": "85eb4a73635ade869f777d645b742cbc93234fa4079648e85a12631ea8145b42",
+        "face/base/happy/head.png": "229daf882c1f1d4d7b4cb09d2119a84267ef32a78bdf9c8f8c599e8f9cbccc30",
+        "face/base/happy/mouth.1.png": "f01857f10439c9c3f51a90d61a274518aa760b1bd540faa862c04e099b4330a1",
+        "face/base/happy/mouth.png": "17cdb77a1ebefdc7ba307483def446a2ebf3b3d082e3ba4ec1fd0007bae406b5",
+        "face/base/neutral/eyes.0.png": "566b8a7ea048777f1b9667f1b3b250b5e4451eb6f746fe6214f653d95cd1d011",
+        "face/base/neutral/head.png": "f9e2d0450258cea74d9a67e5dcf89b0ac45d2f352f822340e22f90e9cfabfee2",
+        "face/base/neutral/mouth.1.png": "d218ead658b4199584f6a9d8c95bda93b96c1b10ba5b9444567e16c9ec10526f",
+        "face/base/neutral/mouth.png": "cfe4e010518ba7d831b593c0bdb88e41363a0324dc82295398ba2cd5a28da7ac"
+      },
+      "pivot": [
+        80,
+        92
+      ],
+      "offsets": {
+        "base/happy": [
+          0,
+          -8
+        ],
+        "base/neutral": [
+          0,
+          0
+        ]
+      }
+    },
+    "bottom_open": {
+      "layers": {
+        "face/base/neutral/eyes.0.png": "b893972d1b30c9d458fbdf304566904378e3df4273b682865ef52264f63b96f7",
+        "face/base/neutral/head.png": "f18529e1659ecf25a9cff47dc08704f8cf2fd66735f6b5b2e1a60667fa3e9aa2",
+        "face/base/neutral/mouth.1.png": "48ceb0293fc5ccef422e4efc189b989ce60791ecd6e27bb7314aa1164e1c645c",
+        "face/base/neutral/mouth.png": "e6c0b323f651eb695357417a845cb5f1c579b8a3e215bea1808ac8cca1769853"
+      },
+      "pivot": null,
+      "offsets": {}
+    }
+  }
+}

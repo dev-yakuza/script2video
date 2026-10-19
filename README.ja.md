@@ -64,7 +64,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>] [--watermark proxy] [--scenes <id,…>]` | 動画 + `.srt` `.vtt` チャプター、概要欄の下書き、サムネイル                                                                                     |
 | `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>] [--frozen-audio] [--frames]`                                                     | シーンごとの静止画を並べて数秒で確認。`--frames`: 画面が変わるたびの静止画と `index.json`                                                       |
 | `capture <url> --out <png> [--text <json>] [--assets-dir <dir>] [--selector <css>] [--allow-host <host>]…`                                               | Web ページの画面（1280×800 または要素ひとつ）と、`--text` でその内容を JSON に                                                                  |
-| `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>]`                                                                     | 演出計画と演出ノートのページ（`out/<video>/direct/`）、音声なしでも可                                                                           |
+| `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>] [--json]`                                                            | 演出計画と演出ノートのページ（`out/<video>/direct/`）、音声なしでも可；`--json`: ツール向けにノートすべて、ページなし                           |
 | `dev <script> [--video]`                                                                                                                                 | 編集ループ: 保存のたびに lint → tts → snapshot                                                                                                  |
 | `takes <script> [--all] [--id id] [--no-open] [--out-dir <dir>]`                                                                                         | 試聴ページ（`out/<動画>/takes/<lang>/`）: 文ごとのすべてのテイクを単独・前後の文とつなげて聞き、ラジオで `takes pick` / `unpick` コマンドを作る |
 | `takes <script> --list [--id id]`                                                                                                                        | 文ごとのテイク: wav のパス、合否、音の高さ、速さ                                                                                                |
@@ -79,7 +79,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `export-script <script>`                                                                                                                                 | ナレーションを自分で録音するための読み原稿を作る                                                                                                |
 | `import-recording <script> <take.wav> [--write]`                                                                                                         | 通しで録音したファイルを段落ごとに分ける（`:audio`）                                                                                            |
 | `tts-server start`                                                                                                                                       | コマンドの間も TTS サーバーを起動したままにする                                                                                                 |
-| `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | キャラクターの絵: YMM4 の取り込みと生成（下記）                                                                                                 |
+| `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | キャラクターの絵: YMM4 の取り込みと生成（下記）；ツール向けの `--json`（`build --dry-run`、`review`、`missing`）                                |
 
 `node packages/cli/dist/main.js <command> …` の形で実行します。`S2V_TTS=mock` を付けると、モデルなしで
 合成した仮の音声で全体を動かせるので、レイアウト作業や CI に便利です。
@@ -233,6 +233,10 @@ wav のパスとともにテキストで表示します。`s2v takes pick <scrip
 知らせます：長い会話に感情がひとつもない、同じ感情が何段落も続く、ひとりが何段落も続けて話す、
 30 秒間聞き手の反応がない（キャラクターがあり待機動作を切ったときだけ）、学習した persona の happy・excited のセリフ。
 エラーではなく助言です。
+`--json` はページの代わりにノートすべて（種類ごとに 5 件で切らない）を出します。ノートごとに `code`、`cast`、
+`paragraph`（`scene:block`、その段落の文 id の先頭）と `line`、範囲の最後の段落（`toParagraph`、`toLine`）、
+反応しない `listener`、`emo` があり、`audio` は実際の音声がある文の数を示します。順序に意味はなく、
+`message` は人向けです。lint が失敗すると JSON を出して exit 1 で終わります。
 
 ### キャラクター
 
@@ -377,6 +381,40 @@ node packages/cli/dist/main.js character redo characters/mina front/base/happy  
 node packages/cli/dist/main.js character missing videos/demo/script.ko.md [--apply]
 # → 定義されていないもの、フレーミングのセットにないもの（--apply が追加）、まだ承認されていないもの
 ```
+
+`provenance.json` のない生成キャラクターのフォルダー（`character build` が作っていない）は「(c) unknown」で、
+`missing` は失敗します。キャラクターのフォルダーがない、または読めないときも同じです。
+
+ツール向けの JSON の形があります（stdout は JSON、メッセージは stderr）。読むだけなのは三つです:
+`build --dry-run --json`、`review --json --no-check`、`--apply` なしの `missing --json`。
+`--no-check` なしの `review --json` はもう一度チェックしてページを書き、`missing --apply` は
+`character.yaml` を直し、`build --layers-only` はレイヤーを作り直します:
+
+```sh
+node packages/cli/dist/main.js character build characters/mina --dry-run --json   # 状態、ラウンド、次のラウンド、見積もり
+node packages/cli/dist/main.js character review characters/mina --json --no-check # 項目、view、face、レイヤーファイル
+node packages/cli/dist/main.js character missing videos/demo/script.ko.md --json  # cast ごとに (a)–(d)、unknown
+node packages/cli/dist/main.js character build characters/mina --layers-only      # レイヤーだけ作り直し、生成なし
+```
+
+- `build --dry-run --json`: `state` は `pick`（front 参照なし: `front` が `never-picked` か `deleted`）、
+  `generate`、`review`、`blocked`、`derive`（画像はすべて承認済み、一部のレイヤーが古い: `--layers-only`）、
+  `complete`。ほかに `rounds`、`next`（枚数と分）、`staleParts`、`remainingImages` / `remainingMinutes`
+  （上限の見積もり）、書き込む `@flip` twin。
+- `review --json`: 項目ごと（`status`、生成画像の `sha`、`workMatches`、`approvedSha`、`srcSha`、`checks`、
+  `onPage`）、view ごとのレイヤー部分と失敗した合成チェック、face ごとの `key`（`framing:face`。face 名に
+  `:` は使えない）と `ready`、`pending`、`staleParts`、`warnings`、レイヤーファイルごとの `state`（`same`、
+  `edited`、`untracked`、`gone`）。`--no-check` がなければ待機中の画像をもう一度チェックし、先にページを
+  書きます（`--no-open` なら開かない）。`--no-check` は読むだけです。
+- `missing --json`: キャラクターのある cast ごとに `checked`（でなければ `reason`: `no-folder`、`invalid`、
+  `not-parts`、`not-generated`）、`notDefined`、`notInSet`、`notReady`（項目と `staleParts`）、`impossible`、
+  `optional`、`--apply` が加えた `added`、`count` — (a) は face の数、(b)–(d) は項目の数で、テキストの行数では
+  ありません。
+- レイヤーが最新かは部分ごとです（view の参照、ポーズの body ごと、表情グループごと — 目は別のグループの
+  blink から来ることがあるので、その view の承認済み blink すべてを合わせて見ます）。blink を新しく承認したり
+  作り直したりすると、同じ view のほかのグループも古くなります。0.11.0 より前に作ったキャラクターと、
+  `imagegen/character.py` の `DERIVE_VERSION` が上がった後は `character build <dir> --layers-only` を一度実行します。
+  `build --no-open` はラウンドのページを書きますが開きません。
 
 変わったものだけを作り直します。画像ごとに作ったときの定義を記録するので（`provenance.json`）、止まった
 ラウンドは続きから進み、プロンプトを直せばその画像だけを作り直します。TTS サーバーや整列サーバーが

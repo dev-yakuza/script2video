@@ -4,10 +4,10 @@
  * build the approve / redo command line to copy. Round 6 groups show a lip-sync preview video.
  */
 
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { ROUND_NAMES, type Item } from './items.js';
-import { WORK, workName, type Check, type Graph, type Status } from './state.js';
+import { ensureGitignore, WORK, workName, type Check, type Graph, type Status } from './state.js';
 
 const esc = (s: string) =>
   s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
@@ -132,6 +132,9 @@ document.getElementById('onlyFailed').onchange = (e) => {
 };
 document.getElementById('copy').onclick = () => navigator.clipboard.writeText(cmd.textContent);
 </script>`;
+  // a fresh clone has no .work yet (S9b plan M3)
+  mkdirSync(join(dir, WORK), { recursive: true });
+  ensureGitignore(dir);
   const file = join(dir, WORK, 'review.html');
   writeFileSync(file, page);
   return file;

@@ -1,10 +1,13 @@
 """Image-step tests on synthetic drawings (needs numpy, Pillow, scipy; no MLX):
-uv run --no-project --with numpy --with pillow --with scipy python -m unittest discover -s imagegen
+uv run --no-project --python 3.12 --with numpy==2.5.4 --with pillow==12.3.0 --with scipy==1.18.1 \\
+  python -m unittest discover -s imagegen
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -650,6 +653,110 @@ class LayerTest(unittest.TestCase):
             check = r["checks"]["eyes_closed"]
             self.assertFalse(check["ok"], r["checks"])
             self.assertIn("eyes of base/neutral", check["limit"])
+
+
+GOLDEN = HERE / "derive-golden.json"
+
+
+def golden_cases(d: Path) -> dict:
+    """derive on fixed synthetic views; what the renderer uses: layer pixels, pivot, offsets."""
+
+    def arm(img: np.ndarray) -> np.ndarray:
+        img = img.copy()
+        img[95:105, 110:140] = (120, 190, 200)  # a raised arm (a pose body)
+        return img
+
+    cases = {}
+    # a split view with a pose body, base/neutral and a happy still that borrows base's blink
+    src = Path(d, "split", "src")
+    src.mkdir(parents=True)
+    save(drawing(), src / "ref.png")
+    save(drawing(head=False), src / "headless.png")
+    save(arm(drawing()), src / "body-wave.png")
+    save(drawing(mouth=1), src / "frame-base-neutral-half.png")
+    save(drawing(mouth=3), src / "frame-base-neutral-open.png")
+    save(drawing(blink=True), src / "frame-base-neutral-blink.png")
+    save(drawing(mouth=2), src / "still-base-happy.png")
+    save(drawing(mouth=3), src / "frame-base-happy-half.png")
+    save(drawing(mouth=4), src / "frame-base-happy-open.png")
+    cases["split"] = {
+        "src": str(src),
+        "out": str(Path(d, "split", "out")),
+        "split": True,
+        "bodies": ["wave"],
+        "groups": [
+            {"head": "base", "expr": "neutral", "frames": ["half", "open", "blink"]},
+            {"head": "base", "expr": "happy", "frames": ["half", "open"]},
+        ],
+    }
+    # a close-up cut by the bottom edge, one image (not split)
+    src = Path(d, "closeup", "src")
+    src.mkdir(parents=True)
+    crop = lambda img: big_eyes(img)[:150]  # noqa: E731
+    save(crop(drawing(shadow=False)), src / "ref.png")
+    save(crop(drawing(shadow=False, mouth=1)), src / "frame-base-neutral-half.png")
+    save(crop(drawing(shadow=False, mouth=3)), src / "frame-base-neutral-open.png")
+    save(big_eyes(drawing(shadow=False), closed=True)[:150], src / "frame-base-neutral-blink.png")
+    cases["bottom_open"] = {
+        "src": str(src),
+        "out": str(Path(d, "closeup", "out")),
+        "split": False,
+        "bottom_open": True,
+        "framing": "head",
+        "bodies": [],
+        "groups": [{"head": "base", "expr": "neutral", "frames": ["half", "open", "blink"]}],
+    }
+    out = {}
+    for name, job in cases.items():
+        r = C.derive_view(job)
+        root = Path(job["out"])
+        layers = {}
+        for p in sorted(root.rglob("*.png")):
+            a = np.asarray(Image.open(p).convert("RGBA"))
+            layers[p.relative_to(root).as_posix()] = hashlib.sha256(str(a.shape).encode() + a.tobytes()).hexdigest()
+        out[name] = {
+            "layers": layers,
+            "pivot": r["pivot"],
+            "offsets": {k: g["offset"] for k, g in sorted(r["groups"].items())},
+        }
+    return out
+
+
+@unittest.skipIf(np is None, "numpy / Pillow / scipy not installed")
+class DeriveGoldenTest(unittest.TestCase):
+    """What derive builds is tied to DERIVE_VERSION (S9b plan 3.1a): a change of the layers,
+    pivots or offsets must raise it (s2v then rebuilds every character's layers)."""
+
+    def test_derive_output_matches_the_golden_of_its_version(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            now = golden_cases(Path(d))
+        if os.environ.get("S2V_WRITE_GOLDEN") == "1":
+            GOLDEN.write_text(json.dumps({"derive_version": C.DERIVE_VERSION, "cases": now}, indent=2) + "\n")
+        golden = json.loads(GOLDEN.read_text())
+        rewrite = (
+            "S2V_WRITE_GOLDEN=1 uv run --no-project --python 3.12 --with numpy==2.5.4 --with pillow==12.3.0"
+            " --with scipy==1.18.1 python -m unittest discover -s imagegen"
+        )
+        self.assertEqual(
+            golden["derive_version"],
+            C.DERIVE_VERSION,
+            f"DERIVE_VERSION is {C.DERIVE_VERSION}: rewrite the golden for it ({rewrite})",
+        )
+        self.assertEqual(
+            now,
+            golden["cases"],
+            f"derive output changed: raise DERIVE_VERSION in character.py and rewrite the golden ({rewrite})",
+        )
+        # the cases cover what they are for: a body and a borrowed blink, a view without a head split
+        self.assertIn("body/wave.png", now["split"]["layers"])
+        self.assertIn("base/happy", now["split"]["offsets"])
+        self.assertIsNone(now["bottom_open"]["pivot"])
+        self.assertEqual(now["bottom_open"]["offsets"], {})
+
+    def test_derive_version_is_a_plain_number_s2v_can_read(self) -> None:
+        text = (HERE / "character.py").read_text()
+        self.assertRegex(text, r"(?m)^DERIVE_VERSION = [1-9][0-9]*$")
+        self.assertIsInstance(C.DERIVE_VERSION, int)
 
 
 if __name__ == "__main__":

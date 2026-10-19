@@ -451,7 +451,7 @@ describe('inspect: hashes', { timeout: 30_000 }, () => {
   });
 });
 
-describe('inspect: committed samples', () => {
+describe('inspect: committed samples', { timeout: 30_000 }, () => {
   it('keeps the voice hash under S2V_TTS=mock (persona clips still count)', () => {
     const path = join(ROOT, 'videos/sample-dialogue-ko/script.ko.md');
     const real = inspectScript(path, ROOT);

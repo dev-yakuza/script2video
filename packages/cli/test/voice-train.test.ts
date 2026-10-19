@@ -173,7 +173,7 @@ describe('s2v voice train', { timeout: 300_000 }, () => {
     Object.assign(process.env, env);
   });
 
-  const train = (minEmotion: number) => {
+  const train = (minEmotion: number, busy: string | null = null) => {
     const logs: string[] = [];
     return {
       logs,
@@ -181,9 +181,17 @@ describe('s2v voice train', { timeout: 300_000 }, () => {
         lang: 'ko',
         minEmotion,
         log: (m) => logs.push(m),
+        // not the machine's processes: other tests may run a stand-in imagegen python meanwhile
+        imagegenBusy: async () => busy,
       }),
     };
   };
+
+  it('does not start while image generation runs (A6)', async () => {
+    await expect(train(0, '123 python imagegen/run.py').run).rejects.toThrow(
+      /image generation is running \(123 python imagegen\/run.py\)/,
+    );
+  });
 
   it('reports the error of the trainer', async () => {
     process.env.FAKE_TRAINER_FAIL = '1';

@@ -7,14 +7,10 @@
  */
 
 import { execFile, spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
-import {
-  CHARACTER_YAML,
-  loadCharacterSpec,
-  type LayeredSpec,
-} from '@script2video/renderer-remotion';
+import { CHARACTER_YAML, loadCharacterSpec } from '@script2video/renderer-remotion';
 import {
   EXIT_MEMORY,
   ExitError,
@@ -26,21 +22,23 @@ import {
 } from '../imagegen.js';
 import { ALIGNER, Service, TTS_SERVER } from '../services.js';
 import {
-  candidatePrompt,
-  FRONT_REF,
-  planItems,
-  ROUND_NAMES,
-  twinWrites,
-  type Item,
-} from './items.js';
+  loadGraph,
+  MIN_PER_IMAGE,
+  MIN_PER_ROUND,
+  nextRound,
+  remaining,
+  type LoadedGraph,
+} from './graph.js';
+import { candidatePrompt, FRONT_REF, ROUND_NAMES, twinWrites, type Item } from './items.js';
+import { deriveCode, deriveJobs, layerFiles, partHashes } from './layers.js';
+import { buildPlan, printBuildPlan, type ReviewRun } from './report.js';
 import { candidateEntries, previewName, sectionsOf, writeReview } from './review.js';
 import {
   currentDef,
   DEFAULT_SEED,
+  ensureGitignore,
   fileSha,
   invalidate,
-  pending,
-  readProvenance,
   seedOf,
   sha256,
   status,
@@ -53,34 +51,15 @@ import {
 } from './state.js';
 import { writeDerived, type DerivedWrite } from './yaml-write.js';
 
+export { loadGraph, nextRound, remaining, type RoundPlan } from './graph.js';
+
 const run = promisify(execFile);
-/** Minutes per 640×800 image (8 steps, measured 4–6) and per round (model load, encoding). */
-const MIN_PER_IMAGE = 5.5;
-const MIN_PER_ROUND = 1;
 const CANDIDATE_SEED = 11;
 
 export interface GenOptions {
   repoRoot: string;
   maxGb: number;
   log: (m: string) => void;
-}
-
-/** A generated character: its spec, items and provenance. */
-export function loadGraph(dir: string): Graph & { spec: LayeredSpec; errors: string[] } {
-  if (!existsSync(join(dir, CHARACTER_YAML)))
-    throw new Error(`${dir} has no ${CHARACTER_YAML}: run s2v character create ${dir} first`);
-  const spec = loadCharacterSpec(dir);
-  if (spec.source !== 'generated')
-    throw new Error(`${dir}: source is "${spec.source}"; only generated characters are built`);
-  const { items, errors } = planItems(dir, spec);
-  return {
-    spec,
-    errors,
-    items: new Map(items.map((i) => [i.id, i])),
-    prov: readProvenance(dir),
-    size: spec.size ?? [640, 800],
-    dir,
-  };
 }
 
 const TEMPLATE = `# A generated character (s2v character create / build). Describe the design in \`kind\`.
@@ -176,6 +155,9 @@ async function imageStep<T>(
   job: unknown,
   dir: string,
 ): Promise<T> {
+  // a fresh clone has no .work yet (S9b plan 3.3a)
+  mkdirSync(join(dir, WORK), { recursive: true });
+  ensureGitignore(dir);
   const file = join(dir, WORK, `${step}.json`);
   writeFileSync(file, JSON.stringify(job, null, 2));
   const { stdout } = await run(
@@ -293,11 +275,6 @@ export function pickCandidate(dir: string, n: string, log: (m: string) => void):
   if (old && old.approvedSha !== sha)
     log('the front reference changed: everything made from it will be generated again');
   log(`picked candidate ${n} as the front reference\nnext: s2v character build ${dir}`);
-}
-
-function ensureGitignore(dir: string): void {
-  const f = join(dir, '.gitignore');
-  if (!existsSync(f)) writeFileSync(f, `${WORK}/\n`);
 }
 
 function openPage(page: string): void {
@@ -427,52 +404,30 @@ export function frameContext(dir: string, g: Graph, it: Item, round: Item[]) {
   };
 }
 
-export interface RoundPlan {
-  round: number;
-  items: Item[];
-  minutes: number;
-}
-
-/** Remaining work per round (for --dry-run and the start message). */
-export function remaining(g: Graph): { round: number; todo: number; waiting: number }[] {
-  const out = new Map<number, { todo: number; waiting: number }>();
-  for (const it of g.items.values()) {
-    const s = status(g, it.id);
-    if (s === 'approved') continue;
-    const r = out.get(it.round) ?? { todo: 0, waiting: 0 };
-    if (s === 'generated' || s === 'failed') r.waiting++;
-    else r.todo++;
-    out.set(it.round, r);
-  }
-  return [...out.entries()].sort((a, b) => a[0] - b[0]).map(([round, v]) => ({ round, ...v }));
-}
-
 /**
- * The next round to generate (C21): the lowest round with work, and only once every earlier
- * round is reviewed (approval rounds stay in order even where inputs would allow more).
+ * The exit code of `character build`: `--layers-only` fails when a view's layers were not built
+ * or could not be recorded (S9b plan 3.3a); a generating build fails by throwing.
  */
-export function nextRound(g: Graph): RoundPlan | null {
-  const todo = pending(g);
-  if (todo.length === 0) return null;
-  const round = Math.min(...todo.map((i) => i.round));
-  if (waitingRound(g) < round) return null;
-  const items = todo.filter((i) => i.round === round);
-  return { round, items, minutes: Math.ceil(items.length * MIN_PER_IMAGE + MIN_PER_ROUND) };
-}
-
-/** The lowest round with images waiting for review (Infinity when none). */
-function waitingRound(g: Graph): number {
-  const w = [...g.items.values()].filter((it) =>
-    ['generated', 'failed'].includes(status(g, it.id)),
-  );
-  return w.length ? Math.min(...w.map((i) => i.round)) : Infinity;
+export function buildExitCode(opts: { layersOnly?: boolean }, r: { failed: string[] }): number {
+  return opts.layersOnly && r.failed.length > 0 ? 1 : 0;
 }
 
 export async function buildCharacter(
   dir: string,
-  opts: GenOptions & { dryRun?: boolean; resetDerived?: boolean },
-): Promise<void> {
+  opts: GenOptions & {
+    dryRun?: boolean;
+    resetDerived?: boolean;
+    /** Twin entries and layers only, no generation (S9b plan 3.3a). */
+    layersOnly?: boolean;
+    /** Open the review page after a round (default true). */
+    open?: boolean;
+  },
+): Promise<{ failed: string[] }> {
   const { log } = opts;
+  if (opts.dryRun) {
+    printBuildPlan(buildPlan(dir, opts.repoRoot, log), dir, log);
+    return { failed: [] };
+  }
   let g = loadGraph(dir);
   for (const e of g.errors) log(`warning: ${e}`);
   if (g.prov.items[FRONT_REF]?.state !== 'approved')
@@ -481,20 +436,34 @@ export async function buildCharacter(
     throw new Error(
       `views/front/_src/ref.png is gone: s2v character pick ${dir} <n> (or restore the file)`,
     );
+  if (opts.layersOnly && Object.keys(g.prov.inflight ?? {}).length)
+    log(
+      'warning: a generation round is in flight or was stopped; if it is running, its end may freeze these layers as hand edits (stop it first)',
+    );
   // Twin entries first (C10): they are derived fields, written once and then like the user's.
   const twins = twinWrites(g.spec);
-  if (twins.length && !opts.dryRun) {
+  if (twins.length) {
     const r = writeDerived(dir, twins, g.prov.derived);
     if (r.written.length) log(`added @flip twins to ${CHARACTER_YAML}: ${r.written.join(', ')}`);
     writeProvenance(dir, g.prov);
     g = loadGraph(dir);
   }
   // Layers of everything approved so far (also retries a derive that failed during approve).
-  if (!opts.dryRun && Object.values(g.prov.items).some((r) => r.state === 'approved')) {
-    await deriveLayers(dir, opts);
+  let failed: string[] = [];
+  if (Object.values(g.prov.items).some((r) => r.state === 'approved')) {
+    const d = await deriveLayers(dir, opts);
+    // --layers-only fails when a view failed or nothing could be recorded (no DERIVE_VERSION)
+    failed = d.recorded ? d.failed : [...new Set([...d.failed, ...d.jobs])];
     // derive recorded the layer hashes it wrote: saving the old graph later would put the old
     // hashes back, and the next approve would keep the new layers as hand-edited.
     g = loadGraph(dir);
+  }
+  if (opts.layersOnly) {
+    const p = buildPlan(dir, opts.repoRoot);
+    log(
+      `state: ${p.state}${p.staleParts.length ? ` (${p.staleParts.length} layer parts out of date)` : ''}`,
+    );
+    return { failed };
   }
   const rest = remaining(g);
   const plan = nextRound(g);
@@ -513,19 +482,11 @@ export async function buildCharacter(
           ? 'nothing to generate until the earlier rounds are approved'
           : 'every image is approved: the character is complete',
     );
-    return;
+    return { failed };
   }
   log(
     `next: round ${plan.round} (${ROUND_NAMES[plan.round]}): ${plan.items.length} images, about ${plan.minutes} min`,
   );
-  if (opts.dryRun) {
-    // Outputs a stopped run finished for the same definition are kept (see below).
-    const kept = (it: Item) =>
-      existsSync(workPath(dir, it.id)) && g.prov.inflight?.[it.id] === currentDef(g, it);
-    for (const it of plan.items)
-      log(`  ${it.id}  [${status(g, it.id)}]${kept(it) ? ' (done in a stopped run, kept)' : ''}`);
-    return;
-  }
   await memoryPreflight(opts.repoRoot, log);
   mkdirSync(join(dir, WORK), { recursive: true });
   ensureGitignore(dir);
@@ -589,12 +550,13 @@ export async function buildCharacter(
   if (plan.round === 6) await previews(dir, g, plan.items, log);
   invalidate(g);
   const page = writeReviewPage(dir, g, plan.round);
-  openPage(page);
-  const failed = plan.items.filter((it) => g.prov.items[it.id]!.state === 'failed');
+  if (opts.open !== false) openPage(page);
+  const failedChecks = plan.items.filter((it) => g.prov.items[it.id]!.state === 'failed');
   log(
-    `${plan.items.length} images ready for review${failed.length ? ` (${failed.length} failed checks)` : ''}: ${page}\n` +
+    `${plan.items.length} images ready for review${failedChecks.length ? ` (${failedChecks.length} failed checks)` : ''}: ${page}\n` +
       `next: s2v character approve ${dir} --all   (or pick items on the page; redo with s2v character redo)`,
   );
+  return { failed };
 }
 
 function currentDefOrThrow(g: Graph, it: Item): string {
@@ -679,9 +641,22 @@ function writeReviewPage(dir: string, g: Graph, round?: number): string {
   );
 }
 
-export async function reviewCharacter(dir: string, opts: GenOptions): Promise<void> {
+/**
+ * `character review`: check what waits again, write the page and open it. `check: false` (S9b
+ * `--no-check`) only reads: no Python, no ffmpeg, no page, nothing written. Returns the graph and
+ * what this run did, for `--json`.
+ */
+export async function reviewCharacter(
+  dir: string,
+  opts: GenOptions & { open?: boolean; check?: boolean },
+): Promise<{ graph: LoadedGraph; run: ReviewRun }> {
   const { log } = opts;
-  const g = loadGraph(dir);
+  let g: LoadedGraph = loadGraph(dir);
+  if (opts.check === false)
+    return {
+      graph: g,
+      run: { recheck: 'none', rechecked: new Set(), onPage: new Set(), page: null },
+    };
   const waiting = [...g.items.values()].filter((it) =>
     ['generated', 'failed'].includes(status(g, it.id)),
   );
@@ -692,9 +667,12 @@ export async function reviewCharacter(dir: string, opts: GenOptions): Promise<vo
     return existsSync(f) && fileSha(f) === g.prov.items[it.id]?.sha;
   });
   let post: PostResult[] | undefined;
+  let recheck: ReviewRun['recheck'] = 'none';
   try {
     post = fresh.length ? await postItems(dir, g, fresh, opts.repoRoot) : undefined;
+    if (post) recheck = 'done';
   } catch (e) {
+    recheck = 'failed';
     log(
       `warning: could not check the images again (${(e as Error).message}); showing the checks of the round`,
     );
@@ -734,8 +712,19 @@ export async function reviewCharacter(dir: string, opts: GenOptions): Promise<vo
     : writeReview(dir, [{ title: 'Round 1: candidates', entries: candidateEntries(g) }], {
         candidates: true,
       });
-  openPage(page);
+  if (opts.open !== false) openPage(page);
   log(`${waiting.length} images wait for review: ${page}`);
+  // what the page shows, as it is now (the checks may have changed the states)
+  g = loadGraph(dir);
+  return {
+    graph: g,
+    run: {
+      recheck,
+      rechecked: new Set(recheck === 'done' ? fresh.map((it) => it.id) : []),
+      onPage: new Set(waiting.map((it) => it.id)),
+      page: relative(dir, page).split(sep).join('/'),
+    },
+  };
 }
 
 // ---------- approve / redo ----------
@@ -863,24 +852,6 @@ export function redoItems(
 
 // ---------- derive: layers and derived yaml fields ----------
 
-/** Layer PNGs under views/ and sets/<f>/views/ (not the _src sources), relative to the folder. */
-function layerFiles(dir: string): string[] {
-  const out: string[] = [];
-  const walk = (rel: string) => {
-    const abs = join(dir, rel);
-    if (!existsSync(abs)) return;
-    for (const e of readdirSync(abs, { withFileTypes: true })) {
-      const r = join(rel, e.name);
-      if (e.isDirectory()) {
-        if (e.name !== '_src') walk(r);
-      } else if (e.name.endsWith('.png')) out.push(r);
-    }
-  };
-  walk('views');
-  for (const f of ['upper', 'head']) walk(join('sets', f, 'views'));
-  return out.sort();
-}
-
 interface DeriveView {
   pivot: [number, number] | null;
   groups: Record<string, { offset: [number, number]; band_error: number }>;
@@ -894,60 +865,28 @@ interface DeriveView {
 export async function deriveLayers(
   dir: string,
   opts: GenOptions & { resetDerived?: boolean },
-): Promise<void> {
+): Promise<{ views: number; failed: string[]; jobs: string[]; recorded: boolean }> {
   const g = loadGraph(dir);
-  const approved = (id: string) => status(g, id) === 'approved';
-  type ViewJob = {
-    set: Item['set'];
-    view: string;
-    bodies: string[];
-    groups: Map<string, string[]>;
-  };
-  const views = new Map<string, ViewJob>();
-  const key = (it: Item) => `${it.set}|${it.view}`;
-  for (const it of g.items.values()) {
-    if (!['ref', 'closeup', 'still', 'frame', 'body', 'headless'].includes(it.kind)) continue;
-    const v: ViewJob = views.get(key(it)) ?? {
-      set: it.set,
-      view: it.view,
-      bodies: [],
-      groups: new Map(),
+  const { jobs } = deriveJobs(g);
+  const jobViews = jobs.map((j) => {
+    const root = j.set === 'full' ? dir : join(dir, 'sets', j.set);
+    return {
+      key: j.key,
+      src: join(root, 'views', j.view, '_src'),
+      out: join(root, 'views', j.view),
+      split: j.split,
+      bottom_open: j.set !== 'full',
+      framing: j.set,
+      bodies: j.bodies,
+      groups: j.groups.map((gr) => ({
+        head: gr.head,
+        expr: gr.expr,
+        frames: gr.frames.map((f) => f.name),
+      })),
+      region_out: headRegionPath(dir, j.set, j.view),
     };
-    views.set(key(it), v);
-    if (it.kind === 'body' && approved(it.id)) v.bodies.push(it.body!);
-    if (it.kind === 'frame' || it.kind === 'still') {
-      const gk = `${it.head}/${it.expr}`;
-      if (!v.groups.has(gk)) v.groups.set(gk, []);
-      if (it.kind === 'frame' && approved(it.id)) v.groups.get(gk)!.push(it.frame!);
-    }
-  }
-  const jobViews = [];
-  for (const v of views.values()) {
-    const p = v.set === 'full' ? '' : `${v.set}:`;
-    const root = v.set === 'full' ? dir : join(dir, 'sets', v.set);
-    const refId = v.view === 'front' && v.set === 'full' ? FRONT_REF : `${p}${v.view}/ref`;
-    if (!approved(refId)) continue;
-    const split = g.items.has(`${p}${v.view}/headless`);
-    if (split && !approved(`${p}${v.view}/headless`)) continue;
-    const groups = [...v.groups.entries()]
-      .filter(([gk]) => {
-        const [h, e] = gk.split('/');
-        return h === 'base' && e === 'neutral' ? true : approved(`${p}${v.view}/${gk}`);
-      })
-      .map(([gk, frames]) => ({ head: gk.split('/')[0], expr: gk.split('/')[1], frames }));
-    jobViews.push({
-      key: `${v.set}|${v.view}`,
-      src: join(root, 'views', v.view, '_src'),
-      out: join(root, 'views', v.view),
-      split,
-      bottom_open: v.set !== 'full',
-      framing: v.set,
-      bodies: v.bodies,
-      groups,
-      region_out: headRegionPath(dir, v.set, v.view),
-    });
-  }
-  if (jobViews.length === 0) return;
+  });
+  if (jobViews.length === 0) return { views: 0, failed: [], jobs: [], recorded: true };
   // Layer files someone edited since derive wrote them are kept as they are (C16).
   const layers = g.prov.layers ?? {};
   const protect = layerFiles(dir).filter(
@@ -964,6 +903,20 @@ export async function deriveLayers(
   for (const rel of layerFiles(dir))
     fresh[rel] = protect.includes(rel) ? layers[rel]! : fileSha(join(dir, rel));
   g.prov.layers = fresh;
+  // What each view's parts were built from (S9b plan 3.1): a view derive built, all of its
+  // job's groups and bodies (a view without a headless body reports no groups but builds them);
+  // a view that failed has no record. Views no longer derived keep theirs (not judged).
+  const code = deriveCode(opts.repoRoot, opts.log);
+  const inputs = { ...(g.prov.deriveInputs ?? {}) };
+  const failed: string[] = [];
+  for (const j of jobs) {
+    const r = res[j.key];
+    if (!r || 'error' in r || code === null) {
+      delete inputs[j.key];
+      if (!r || 'error' in r) failed.push(j.key);
+    } else inputs[j.key] = partHashes(g, j, code);
+  }
+  g.prov.deriveInputs = inputs;
   const writes: DerivedWrite[] = [];
   for (const [k, r] of Object.entries(res)) {
     const [set, view] = k.split('|') as [string, string];
@@ -1006,4 +959,5 @@ export async function deriveLayers(
   opts.log(
     `layers updated for ${jobViews.length} view(s)${w.written.length ? `; wrote ${w.written.length} derived fields` : ''}`,
   );
+  return { views: jobViews.length, failed, jobs: jobs.map((j) => j.key), recorded: code !== null };
 }

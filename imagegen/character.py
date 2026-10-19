@@ -19,6 +19,12 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
+# The version of what derive builds (S9b): raise it with every change to the layers, pivots or
+# group offsets derive writes (not for checks or messages). s2v records it with the layers, so a
+# raise shows every character's layers as out of date until `s2v character build <dir>
+# --layers-only`. test_character.py holds a golden of derive's output tied to this number.
+DERIVE_VERSION = 1
+
 # Background removal (C19). Distances are RGB euclidean to the border color.
 LOW, HIGH = 18.0, 60.0  # <= LOW background, >= HIGH character, between: 2 px soft edge
 ENCLOSED_MIN = 400  # background-colored closed areas (between arm and body) at least this big

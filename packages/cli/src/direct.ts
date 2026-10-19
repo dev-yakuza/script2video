@@ -357,3 +357,34 @@ if (copy) copy.addEventListener('click', async () => {
 </html>
 `;
 }
+
+/**
+ * `s2v direct --json` (S9b plan 3.5): every director note of one output (not capped), with the
+ * cast and paragraphs it is about, and how much of the timing is real audio.
+ */
+export function directJson(plan: DirectPlan, dm: DirectManifest) {
+  return {
+    output: plan.output,
+    lang: plan.lang,
+    mode: plan.mode,
+    seconds: Math.round(plan.seconds * 1000) / 1000,
+    audio: {
+      measured: plan.measured,
+      total: plan.total,
+      stale: dm.stale,
+      current: dm.current,
+      mock: dm.mock,
+    },
+    notes: plan.allNotes.map((n) => ({
+      code: n.code,
+      cast: n.cast ?? null,
+      paragraph: n.rowId ?? null,
+      line: n.line ?? null,
+      toParagraph: n.toRowId ?? null,
+      toLine: n.toLine ?? null,
+      listener: n.listener ?? null,
+      emo: n.emo ?? null,
+      message: n.message,
+    })),
+  };
+}

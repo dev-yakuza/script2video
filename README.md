@@ -65,7 +65,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `render <script> --output <name> [--draft] [--frozen-audio] [--idle on\|off] [--rhythm on\|off] [--out-dir <dir>] [--watermark proxy] [--scenes <id,…>]` | video + `.srt` `.vtt` chapters, description draft, thumbnail                                                                                                   |
 | `snapshot <script> --output <name> [--rhythm on\|off] [--out-dir <dir>] [--frozen-audio] [--frames]`                                                     | one still per scene, tiled, in seconds; `--frames`: every change of picture as its own still, with an `index.json`                                             |
 | `capture <url> --out <png> [--text <json>] [--assets-dir <dir>] [--selector <css>] [--allow-host <host>]…`                                               | a web page's picture (1280×800, or one element) and, with `--text`, what it says as JSON                                                                       |
-| `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>]`                                                                     | direction plan and director notes as a page (`out/<video>/direct/`); no audio needed                                                                           |
+| `direct <script> [--output <name>] [--rhythm on\|off] [--no-open] [--out-dir <dir>] [--json]`                                                            | direction plan and director notes as a page (`out/<video>/direct/`); no audio needed; `--json`: every note for tools, no page                                  |
 | `dev <script> [--video]`                                                                                                                                 | edit loop: lint → tts → snapshot on every save                                                                                                                 |
 | `takes <script> [--all] [--id id] [--no-open] [--out-dir <dir>]`                                                                                         | a listening page (`out/<video>/takes/<lang>/`): every take of each line, alone or between its neighbours; the radios write the `takes pick` / `unpick` command |
 | `takes <script> --list [--id id]`                                                                                                                        | the takes of each line: take wav, pass/fail, pitch, pace                                                                                                       |
@@ -80,7 +80,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `export-script <script>`                                                                                                                                 | a reading script for recording the narration yourself                                                                                                          |
 | `import-recording <script> <take.wav> [--write]`                                                                                                         | split one recorded take into paragraphs (`:audio`)                                                                                                             |
 | `tts-server start`                                                                                                                                       | keep the TTS server running between commands                                                                                                                   |
-| `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | character art: YMM4 import and generation (see below)                                                                                                          |
+| `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | character art: YMM4 import and generation (see below); `--json` on `build --dry-run`, `review` and `missing` for tools                                         |
 
 Run them as `node packages/cli/dist/main.js <command> …`. `S2V_TTS=mock` runs everything with
 synthetic audio (no models), useful for layout work and CI.
@@ -278,6 +278,11 @@ the rest are estimated (marked `~`). Notes at the top say what to try where a vi
 look flat — no emotion at all in a long dialogue, the same emotion many paragraphs in a row, one
 speaker talking for many paragraphs, half a minute without a listener reacting (only with characters and idle
 motion off), and happy or excited lines of a trained persona. They are advice, not errors.
+`--json` prints every note instead of a page (not capped at five per kind), each with its `code`,
+`cast`, `paragraph` (`scene:block`, the start of its sentence ids) and `line`, the last paragraph
+it spans (`toParagraph`, `toLine`), the `listener` that does not react and the `emo`; `audio` says
+how many lines have real audio. Their order means nothing; `message` is for people. It exits 1 when
+lint fails (with the JSON).
 
 ### Characters
 
@@ -432,6 +437,41 @@ character is then a library. When a script needs a face the library lacks:
 node packages/cli/dist/main.js character missing videos/demo/script.ko.md [--apply]
 # → what is not defined, not in a framing's set (--apply adds it) or not approved yet
 ```
+
+A generated folder without `provenance.json` (not made by `character build`) is "(c) unknown" and
+fails `missing`, as does a character folder that is not there or cannot be read.
+
+For tools there are JSON forms (stdout is the JSON, messages go to stderr). Three only read:
+`build --dry-run --json`, `review --json --no-check` and `missing --json` without `--apply`;
+`review --json` without `--no-check` also checks again and writes the page, `missing --apply`
+edits `character.yaml`, and `build --layers-only` rebuilds the layers:
+
+```sh
+node packages/cli/dist/main.js character build characters/mina --dry-run --json   # state, rounds, next round, estimate
+node packages/cli/dist/main.js character review characters/mina --json --no-check # items, views, faces, layer files
+node packages/cli/dist/main.js character missing videos/demo/script.ko.md --json  # per cast: (a)–(d), unknown
+node packages/cli/dist/main.js character build characters/mina --layers-only      # rebuild the layers, nothing generated
+```
+
+- `build --dry-run --json`: `state` is `pick` (no front reference: `front` says `never-picked` or
+  `deleted`), `generate`, `review`, `blocked`, `derive` (every image approved, some layers out of
+  date: run `--layers-only`) or `complete`; `rounds`, `next` (images and minutes), `staleParts`,
+  `remainingImages` / `remainingMinutes` (an upper bound) and the `@flip` twins it would write.
+- `review --json`: every item (`status`, `sha` of the generated image, `workMatches`,
+  `approvedSha`, `srcSha`, `checks`, `onPage`), every view's layer parts and failed join checks,
+  every face as `key` (`framing:face`; face names cannot hold `:`) with `ready`, `pending`,
+  `staleParts` and `warnings`, and every layer file with `state` (`same`, `edited`, `untracked`,
+  `gone`). Without `--no-check` it checks the waiting images again and writes the page first
+  (`--no-open` keeps it closed); `--no-check` reads only.
+- `missing --json`: one entry per cast with a character: `checked` (else `reason`: `no-folder`,
+  `invalid`, `not-parts`, `not-generated`), `notDefined`, `notInSet`, `notReady` (items and
+  `staleParts`), `impossible`, `optional`, what `--apply` `added`, and `count` — faces for (a), entries
+  for (b)–(d), not text lines.
+- Layers count as up to date per part (a view's reference, each pose body, each expression group
+  with every approved blink of its view, since eyes may come from another group's blink): a new or
+  redone blink makes the other groups of its view out of date too. Characters made before 0.11.0 and
+  a new `DERIVE_VERSION` in `imagegen/character.py` need one `character build <dir> --layers-only`.
+  `build --no-open` writes the round's page without opening it.
 
 Only what changed is made again: images are recorded with the definition they were made for
 (`provenance.json`), so a stopped round resumes and an edited prompt remakes only its images.

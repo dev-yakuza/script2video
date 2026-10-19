@@ -11,7 +11,7 @@
  *   s2v takes pick <script.md> <id>=<take> ...   (choose a take)
  *   s2v takes unpick <script.md> <id> ...
  *   s2v inspect <script.md> --json [--hash-version 1]   (what the script is made of, hashed by kind)
- *   s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open] [--out-dir <dir>]   (direction plan and notes)
+ *   s2v direct <script.md> [--output youtube] [--fps 30] [--rhythm on|off] [--no-open] [--out-dir <dir>] [--json]   (direction plan and notes; --json: the notes, no page)
  *   s2v timeline <script.md> [--output youtube] [--fps 30] [--rhythm on|off]
  *   s2v snapshot <script.md> [--output youtube] [--draft] [--fps 30] [--rhythm on|off] [--out-dir <dir>] [--frozen-audio] [--frames]
  *   s2v render <script.md> [--output youtube] [--no-asr] [--recheck] [--draft] [--no-cache] [--frozen-audio] [--workers N] [--idle on|off] [--rhythm on|off] [--fps 30] [--out-dir <dir>] [--watermark proxy] [--scenes <id,…>]
@@ -29,11 +29,11 @@
  *   s2v character setup [--max-memory-gb N]   (optional image generation; Apple silicon)
  *   s2v character create <dir> [--candidates 4] [--max-memory-gb N]
  *   s2v character pick <dir> <n>
- *   s2v character build <dir> [--dry-run] [--reset-derived] [--max-memory-gb N]
- *   s2v character review <dir>
+ *   s2v character build <dir> [--dry-run [--json]] [--layers-only] [--reset-derived] [--max-memory-gb N] [--no-open]
+ *   s2v character review <dir> [--json [--no-check]] [--no-open]
  *   s2v character approve <dir> <item>... | --all [--except <item>...] [--reset-derived]
  *   s2v character redo <dir> <item>... [--seed N]
- *   s2v character missing <script.md> [--apply]
+ *   s2v character missing <script.md> [--apply] [--json]
  *   s2v character import <ymm4 folder|zip> --out <characters/id> [--name <character>]
  *   s2v new <dir> [--lang ko|ja|en]   (a new video folder with a starter script)
  *   s2v pick <image>   (mark a spot on an image)
@@ -80,12 +80,22 @@ import { defaultMemoryLimitGb, ExitError, setupImagegen } from './imagegen.js';
 import {
   approveItems,
   buildCharacter,
+  buildExitCode,
   createCharacter,
   pickCandidate,
   redoItems,
   reviewCharacter,
 } from './character-gen/commands.js';
-import { applyMissing, findMissing, printMissing } from './character-gen/missing.js';
+import {
+  addedText,
+  applyMissing,
+  findMissing,
+  missingFails,
+  missingJson,
+  printMissing,
+  type Added,
+} from './character-gen/missing.js';
+import { buildPlan, reviewReport } from './character-gen/report.js';
 import { checkDevOutput, dev } from './dev.js';
 import { importRecording } from './import-recording.js';
 import { doctor } from './doctor.js';
@@ -109,7 +119,7 @@ import { buildTakesPage, openPage } from './takes-page.js';
 import { trainVoice } from './voice-train.js';
 import { voiceRefs } from './voice-refs.js';
 import { inspectScript } from './inspect.js';
-import { directDiagnostics, directHtml, directManifest } from './direct.js';
+import { directDiagnostics, directHtml, directJson, directManifest } from './direct.js';
 import {
   commandOf,
   onOff,
@@ -441,15 +451,57 @@ async function main(): Promise<void> {
     }
     if (sub === 'build' && src) {
       const { values } = parseFor('character build', rest);
-      await buildCharacter(resolve(src), {
+      const dryRun = values['dry-run'];
+      // S9b: --json is the dry run's; --layers-only builds layers only (no model, no page)
+      if (values.json && !dryRun)
+        throw new UsageError('s2v character build: --json needs --dry-run');
+      if (dryRun && values.json && values['reset-derived'])
+        throw new UsageError(
+          's2v character build: --reset-derived does nothing with --dry-run --json',
+        );
+      if (dryRun && values['no-open'])
+        throw new UsageError('s2v character build: --no-open does nothing with --dry-run');
+      const layersOnly = values['layers-only'];
+      if (layersOnly) {
+        const extra = (['dry-run', 'json', 'no-open', 'max-memory-gb'] as const).find(
+          (f) => values[f] !== undefined && values[f] !== false,
+        );
+        if (extra)
+          throw new UsageError(`s2v character build: --layers-only does not take --${extra}`);
+      }
+      if (dryRun && values.json) {
+        const plan = buildPlan(resolve(src), REPO_ROOT, log);
+        process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
+        return;
+      }
+      const r = await buildCharacter(resolve(src), {
         ...gen(values['max-memory-gb']),
-        dryRun: values['dry-run'],
+        dryRun,
         resetDerived: values['reset-derived'],
+        layersOnly,
+        open: !values['no-open'],
       });
+      const code = buildExitCode({ layersOnly }, r);
+      if (code) process.exitCode = code;
       return;
     }
     if (sub === 'review' && src) {
-      await reviewCharacter(resolve(src), gen());
+      const { values } = parseFor('character review', rest);
+      // S9b: --no-check only reads (no page), so it is a --json mode
+      if (values['no-check'] && !values.json)
+        throw new UsageError('s2v character review: --no-check needs --json');
+      if (values['no-check'] && values['no-open'])
+        throw new UsageError('s2v character review: --no-open does nothing with --no-check');
+      const dir = resolve(src);
+      const r = await reviewCharacter(dir, {
+        ...gen(),
+        open: !values['no-open'],
+        check: !values['no-check'],
+      });
+      if (values.json)
+        process.stdout.write(
+          `${JSON.stringify(reviewReport(dir, r.graph, r.run, REPO_ROOT, log), null, 2)}\n`,
+        );
       return;
     }
     const approve = sub === 'approve' ? parseFor('character approve', rest).values : null;
@@ -483,17 +535,21 @@ async function main(): Promise<void> {
       if (!parsed.script) process.exit(1);
       const script = parsed.script;
       enrichCast(script, dirname(scriptPath));
-      const reports = findMissing(script, dirname(scriptPath));
+      const find = () => findMissing(script, dirname(scriptPath), { repoRoot: REPO_ROOT, log });
+      const reports = find();
+      const added = new Map<string, Added[]>();
       if (values.apply)
-        for (const r of reports) {
-          const added = applyMissing(r);
-          if (added.length) console.error(`${r.cast}: added ${added.join(', ')}`);
+        // only characters that were judged (S9b: a skipped or unreadable one has nothing to add)
+        for (const r of reports.filter((x) => x.checked)) {
+          const a = applyMissing(r);
+          added.set(r.cast, a);
+          if (a.length) console.error(`${r.cast}: added ${a.map(addedText).join(', ')}`);
         }
-      const n = printMissing(
-        values.apply ? findMissing(script, dirname(scriptPath)) : reports,
-        log,
-      );
-      if (n > 0) process.exitCode = 1;
+      const after = values.apply ? find() : reports;
+      if (values.json)
+        process.stdout.write(`${JSON.stringify(missingJson(after, added), null, 2)}\n`);
+      else printMissing(after, log);
+      if (missingFails(after)) process.exitCode = 1;
       return;
     }
     const imp = sub === 'import' ? parseFor('character import', rest).values : null;
@@ -709,8 +765,14 @@ async function main(): Promise<void> {
     case 'direct': {
       const { values } = parseFor('direct', rest);
       const rhythmOpts = rhythmOf(values.rhythm);
-      const resultsDir = checkOutDir(outDirOf(path, REPO_ROOT, values['out-dir']), path, REPO_ROOT);
-      const { script, diagnostics } = loadWithDiagnostics(path);
+      // S9b: --json writes no page, so the page's flags are not used
+      if (values.json && (values['out-dir'] !== undefined || values['no-open']))
+        throw new UsageError('s2v direct: --out-dir and --no-open are for the page, not --json');
+      const resultsDir = values.json
+        ? ''
+        : checkOutDir(outDirOf(path, REPO_ROOT, values['out-dir']), path, REPO_ROOT);
+      // --json reports even when lint fails (and exits 1), as sentences --json does
+      const { script, diagnostics } = loadWithDiagnostics(path, values.json);
       const outputName = values.output;
       profileOf(script, outputName);
       const dm = directManifest(path, script, REPO_ROOT);
@@ -718,6 +780,11 @@ async function main(): Promise<void> {
         ...rhythmOpts,
         fps: Number(values.fps),
       });
+      if (values.json) {
+        process.stdout.write(`${JSON.stringify(directJson(plan, dm), null, 2)}\n`);
+        if (diagnostics.some((d) => d.severity === 'error')) process.exitCode = 1;
+        break;
+      }
       const html = directHtml(plan, script, {
         scriptName: basename(path),
         diagnostics: directDiagnostics(diagnostics, script, plan, dm.current),

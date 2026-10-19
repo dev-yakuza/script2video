@@ -11,7 +11,7 @@ import {
 } from '@script2video/renderer-remotion';
 import { describe, expect, it } from 'vitest';
 import { enrichCast } from '../src/cast-faces.js';
-import { applyMissing, findMissing } from '../src/character-gen/missing.js';
+import { addedText, applyMissing, findMissing } from '../src/character-gen/missing.js';
 import { lintCast, usedFaces } from '../src/lint-assets.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -142,7 +142,9 @@ describe('enrichCast: emotion faces', () => {
     ).script!;
     enrichCast(again, dir);
     expect(again.meta.cast.a!.faceSets).toMatchObject({ full: ['neutral', 'happy'] });
-    expect(findMissing(again, dir).every((r) => r.emotional.length === 0)).toBe(true);
+    expect(findMissing(again, dir, { repoRoot: ROOT }).every((r) => r.emotional.length === 0)).toBe(
+      true,
+    );
   });
 });
 
@@ -158,13 +160,20 @@ describe('character missing: the head close-up (closeup-look plan)', () => {
     const script = parseScript(
       `---\nlang: ko\ncast:\n  a: { voice: "qwen:Sohee", character: c }\n---\n# s\n\n::shot{a=head}\n\na{face=wave}: 안녕.\n\na{face=glance-neutral}: 네.\n`,
     ).script!;
-    const [r] = findMissing(script, dir);
+    const [r] = findMissing(script, dir, { repoRoot: ROOT });
     expect(r!.impossible).toEqual([]);
     expect(r!.notInSet.map((x) => x.face).sort()).toEqual(['glance-neutral', 'wave']);
     const added = applyMissing(r!);
-    expect(added).toContain(
+    // the text says it as it always did; tools get the parts (S9b)
+    expect(added.map(addedText)).toContain(
       'head:heads.front/glance (turned faces in the head close-up now use this head)',
     );
+    expect(added).toContainEqual({
+      framing: 'head',
+      kind: 'head',
+      key: 'front/glance',
+      note: 'turned faces in the head close-up now use this head',
+    });
     expect(readFileSync(join(c, 'character.yaml'), 'utf8')).toMatch(
       /front\/glance: \{ facing: right \}|front\/glance:\n\s+facing: right/,
     );

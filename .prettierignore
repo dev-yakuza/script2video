@@ -11,3 +11,5 @@ out/
 **/voices/_qwen/
 **/voices/_supertonic/
 **/voices/*/*.f0.json
+# written by imagegen/test_character.py (S2V_WRITE_GOLDEN=1)
+imagegen/derive-golden.json

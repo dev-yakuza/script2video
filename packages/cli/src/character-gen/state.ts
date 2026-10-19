@@ -61,6 +61,17 @@ export interface Provenance {
   inflight?: Record<string, string>;
   /** Hashes of the layer files derive wrote: files that differ were edited by hand (C16). */
   layers?: Record<string, string>;
+  /**
+   * What the layers of each view (`set|view`) were last built from, per part (S9b plan 3.1):
+   * the approved sources and the derive version. A part whose hash differs now is out of date.
+   */
+  deriveInputs?: Record<string, DeriveInputs>;
+}
+
+export interface DeriveInputs {
+  common: string;
+  bodies: Record<string, string>;
+  groups: Record<string, string>;
 }
 
 export function readProvenance(dir: string): Provenance {
@@ -97,7 +108,7 @@ export interface Graph {
 
 const diskShas = new WeakMap<Graph, Map<string, string | null>>();
 /** Hash of an approved source as it is on disk now (null when missing). */
-function diskSha(g: Graph, id: string): string | null {
+export function diskSha(g: Graph, id: string): string | null {
   if (!g.dir) return g.prov.items[id]?.approvedSha ?? null;
   let cache = diskShas.get(g);
   if (!cache) diskShas.set(g, (cache = new Map()));
@@ -182,3 +193,9 @@ export function seedOf(g: Graph, item: Item): number {
 }
 
 export const workPath = (dir: string, id: string) => join(dir, WORK, workName(id));
+
+/** Keep the work folder out of git (the character folder is committed). */
+export function ensureGitignore(dir: string): void {
+  const f = join(dir, '.gitignore');
+  if (!existsSync(f)) writeFileSync(f, `${WORK}/\n`);
+}

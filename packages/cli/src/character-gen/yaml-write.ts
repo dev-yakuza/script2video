@@ -29,20 +29,24 @@ function getIn(doc: Document, path: string[]): unknown {
 export interface WriteResult {
   written: string[];
   kept: { path: string; yaml: unknown; estimate: unknown }[];
+  /** The same as yaml paths (keys may hold dots). */
+  writtenPaths: string[][];
+  keptPaths: string[][];
 }
 
 /**
  * Apply derived values. `last` is provenance.derived (updated in place with what was written).
+ * `write: false` only says what would be written (the yaml file is left as it is).
  */
 export function writeDerived(
   dir: string,
   writes: DerivedWrite[],
   last: Record<string, unknown>,
-  opts: { reset?: boolean } = {},
+  opts: { reset?: boolean; write?: boolean } = {},
 ): WriteResult {
   const file = join(dir, CHARACTER_YAML);
   const doc = parseDocument(readFileSync(file, 'utf8'));
-  const res: WriteResult = { written: [], kept: [] };
+  const res: WriteResult = { written: [], kept: [], writtenPaths: [], keptPaths: [] };
   for (const w of writes) {
     const k = keyOf(w.path);
     const now = getIn(doc, w.path);
@@ -54,6 +58,7 @@ export function writeDerived(
     const manual = now !== undefined && !(k in last && same(now, last[k]));
     if (manual && !opts.reset) {
       res.kept.push({ path: k, yaml: now, estimate: w.value });
+      res.keptPaths.push(w.path);
       continue;
     }
     const node = doc.createNode(w.value);
@@ -66,8 +71,9 @@ export function writeDerived(
     doc.setIn(w.path, node);
     last[k] = w.value;
     res.written.push(k);
+    res.writtenPaths.push(w.path);
   }
-  if (res.written.length > 0) {
+  if (res.written.length > 0 && opts.write !== false) {
     writeFileSync(`${file}.tmp`, doc.toString({ lineWidth: 0, flowCollectionPadding: false }));
     renameSync(`${file}.tmp`, file);
   }
