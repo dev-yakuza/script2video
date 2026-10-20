@@ -17,7 +17,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { UsageError } from '../src/args.js';
-import { cacheDirOf, cacheKeyOf, checkOutDir, outDirOf } from '../src/paths.js';
+import { cacheDirOf, cacheKeyOf, checkOutDir, outDirOf, snapshotPaths } from '../src/paths.js';
 import { dropThumbnail, writePublishFiles } from '../src/publish.js';
 import { buildTimeline, parseScript } from '@script2video/core';
 
@@ -218,5 +218,26 @@ describe('--out-dir on the command line', { timeout: 60_000 }, () => {
     expect(existsSync(lock)).toBe(false);
     expect(existsSync(join(REPO, '.s2v-cache', 'x'))).toBe(false);
     rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
+describe('snapshot results (final review 10)', () => {
+  it('a draft sheet and its frames are named apart from the real ones', () => {
+    expect(snapshotPaths('/o', 'youtube', 'ko', false)).toEqual({
+      sheet: '/o/youtube.ko.snapshot.png',
+      frames: '/o/youtube.ko.frames',
+    });
+    expect(snapshotPaths('/o', 'youtube', 'ko', true)).toEqual({
+      sheet: '/o/youtube.ko.draft.snapshot.png',
+      frames: '/o/youtube.ko.draft.frames',
+    });
+  });
+
+  it('the snapshot command uses them', () => {
+    const src = readFileSync(join(REPO, 'packages/cli/src/main.ts'), 'utf8');
+    const branch = src.slice(src.indexOf("case 'snapshot': {"));
+    const head = branch.slice(0, branch.indexOf('clearSnapshot('));
+    expect(head).toContain('snapshotPaths(outDir, outputName, script.meta.lang, draft)');
+    expect(head).not.toMatch(/\.snapshot\.png`/);
   });
 });

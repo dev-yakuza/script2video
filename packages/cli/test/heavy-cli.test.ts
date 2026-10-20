@@ -146,6 +146,41 @@ describe('busy commands', { timeout: 60_000 }, () => {
     const r = await cli(['audio', 'prune', join(dir, 'script.ko.md')], c.env);
     expect(r.status).toBe(73);
     expect(readdirSync(lockDir).sort()).toEqual([...before, 'unused.wav'].sort());
+    // the contract (README): exit 73, and the reason on the one line starting with `busy (<reason>): `
+    // — not the first line: the script's lint warnings come before it
+    const lines = r.stderr.split('\n');
+    const busy = lines.filter((l) => /^busy \([a-z]+\): /.test(l));
+    expect(busy).toHaveLength(1);
+    expect(busy[0]).toMatch(/^busy \(lock\): another heavy job holds this machine: tts/);
+    expect(lines.indexOf(busy[0]!)).toBeGreaterThan(0);
+    expect(lines[0]).toMatch(/script\.ko\.md:\d+/);
+  });
+
+  it('C13 a resident tts-server on another port: busy (resident), no second server', async () => {
+    const c = await env();
+    const p = livePid();
+    const other = await freePort();
+    writeFileSync(
+      join(c.state, 'resident.json'),
+      JSON.stringify({
+        pid: p.pid,
+        pid_start: p.start,
+        port: other,
+        server_pgid: null,
+        id: TTS_SERVER.id,
+        wrapper_version: TTS_SERVER.wrapper,
+        started: new Date().toISOString(),
+      }),
+    );
+    const r = await cli(['say', '--no-play', '--', '안녕'], c.env);
+    expect(r.status).toBe(73);
+    expect(r.stderr).toMatch(
+      new RegExp(
+        `^busy \\(resident\\): a resident tts-server runs on port ${other} .* uses port ${c.env.S2V_TTS_PORT}`,
+        'm',
+      ),
+    );
+    expect(readFileSync(c.startLog, 'utf8')).toBe('');
   });
 
   it('C12 services takes status and --json only', async () => {

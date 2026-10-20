@@ -5,7 +5,6 @@
  * only ffmpeg (loudness, and a take wav made from its raw take into the page folder).
  */
 
-import { spawn } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -394,14 +393,6 @@ async function sourceOf(
     };
   }
   return null;
-}
-
-/** Open the page in the default browser. */
-export function openPage(path: string): void {
-  const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
-  spawn(opener, [path], { stdio: 'ignore', detached: true })
-    .on('error', () => console.error(`open it yourself: ${path}`))
-    .unref();
 }
 
 // ---------- HTML ----------

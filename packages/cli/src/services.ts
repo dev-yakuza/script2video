@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { acquireHeavy } from './heavy-lock.js';
+import { acquireHeavy, BusyError, readResident, residentProcessAlive } from './heavy-lock.js';
 import { forgetGroup, onStop, trackGroup } from './shutdown.js';
 
 export interface ServiceSpec {
@@ -71,9 +71,24 @@ export class Service {
     }
   }
 
+  /**
+   * A resident tts-server on another port (S2V_TTS_PORT differs): starting one here would load a
+   * second TTS model beside it (exit 73). A dead resident.json is left to tts-server start and gen.
+   */
+  private refuseOtherResidentPort(): void {
+    if (this.spec.id !== TTS_SERVER.id) return;
+    const r = readResident();
+    if (!r || r.port === this.spec.port || !residentProcessAlive(r)) return;
+    throw new BusyError(
+      'resident',
+      `a resident tts-server runs on port ${r.port} (pid ${r.pid}) but this command uses port ${this.spec.port}: use the same S2V_TTS_PORT, or stop it (Ctrl-C the tts-server start terminal)`,
+    );
+  }
+
   async ensure(opts: EnsureOptions = {}): Promise<Health> {
     const timeoutMs = opts.timeoutMs ?? 120_000;
     if (opts.lock !== false) acquireHeavy('tts');
+    this.refuseOtherResidentPort();
     const running = await this.health();
     if (running) {
       if (running.id !== this.spec.id || running.lock_hash !== this.expectedLockHash()) {

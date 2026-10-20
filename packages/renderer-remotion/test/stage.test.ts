@@ -1,7 +1,14 @@
 /** Entrances and exits on stage (acting stage 5c plan 5): stagePlan, constants. */
 import { FACE_HOLD_S, FADE_S, HOLD_END_S, STAGE_SLIDE_S } from '@script2video/core';
 import { describe, expect, it } from 'vitest';
-import { FACE_HOLD, FADE_FRAMES, HOLD_END, maxGroup, STAGE_SLIDE, stagePlan } from '../src/shared';
+import {
+  FACE_HOLD,
+  FADE_FRAMES,
+  HOLD_END,
+  maxGroup,
+  STAGE_SLIDE,
+  stagePlan,
+} from '../src/shared.js';
 
 const sides = { a: 'left', b: 'right', c: 'right' } as const;
 

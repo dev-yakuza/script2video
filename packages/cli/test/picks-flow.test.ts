@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { parseScript } from '@script2video/core';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { inspectScript } from '../src/inspect.js';
-import type { PicksFile } from '../src/picks.js';
+import { writePicks, type PicksFile } from '../src/picks.js';
 import { listTakes, pickTakes, unpickTakes } from '../src/takes.js';
 import { buildTakesPage, type PageData } from '../src/takes-page.js';
 import { planSentences, pruneAudio, synthesizeScript, type LockManifest } from '../src/tts.js';
@@ -41,7 +41,9 @@ function setup(body: string) {
   const picksFile = join(audio, 'picks.json');
   const picks = () =>
     existsSync(picksFile) ? (JSON.parse(readFileSync(picksFile, 'utf8')) as PicksFile).picks : {};
-  const run = async (extra: { retry?: string[]; recheck?: boolean; frozen?: boolean } = {}) => {
+  const run = async (
+    extra: { retry?: string[]; recheck?: boolean; frozen?: boolean; beforeSave?: () => void } = {},
+  ) => {
     const logs: string[] = [];
     const r = await synthesizeScript(path, script, REPO, {
       asr: false,
@@ -198,6 +200,50 @@ describe('stage 3b picks (mock)', () => {
       select: { pick: take, by: 'retry' },
     });
     expect(r.synthesized).toBe(2);
+  });
+
+  it('a takes pick during a tts run is not overwritten: the run warns instead (final review 17)', async () => {
+    const t = setup(`${SAD}\n\nhost{emo=happy}: 와, 정말 잘됐네요!`);
+    await t.run();
+    mkdirSync(dirname(t.picksFile), { recursive: true });
+    const theirs = `${JSON.stringify({ version: 1, picks: { other: { take: 2, id: 'x', text: 'x', tried: 2, by: 'human' } } }, null, 2)}\n`;
+    let once = false;
+    const r = await t.run({
+      retry: ['one'],
+      // another command writes picks.json while this run works (before its first save)
+      beforeSave: () => {
+        if (once) return;
+        once = true;
+        writeFileSync(t.picksFile, theirs);
+      },
+    });
+    expect(readFileSync(t.picksFile, 'utf8')).toBe(theirs);
+    expect(r.warnings.join('\n')).toMatch(
+      /takes picks changed during this run and were not rewritten.*unapplied picks/,
+    );
+  });
+
+  it('takes pick refuses to write over picks.json someone else wrote (busy (changed), 73)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 's2v-picks-cas-'));
+    const file: PicksFile = { version: 1, picks: {} };
+    expect(writePicks(dir, file, null)).not.toBeNull();
+    const now = readFileSync(join(dir, 'picks.json'), 'utf8');
+    writeFileSync(join(dir, 'picks.json'), now.replace('{}', '{ }'));
+    // read before that write: not written, the file stays
+    expect(
+      writePicks(
+        dir,
+        { version: 1, picks: { k: { take: 1, id: 'a', text: 'a', tried: 1, by: 'human' } } },
+        now,
+      ),
+    ).toBeNull();
+    expect(readFileSync(join(dir, 'picks.json'), 'utf8')).toContain('{ }');
+    // takes pick / unpick pass what they read, and stop with busy (changed)
+    const src = readFileSync(join(REPO, 'packages/cli/src/takes.ts'), 'utf8');
+    expect(
+      src.match(/writePicks\(c\.lockDir, picks, read\) === null\) throw picksChanged\(\)/g),
+    ).toHaveLength(2);
+    expect(src).toMatch(/new BusyError\(\s*'changed'/);
   });
 
   it('a prefix retry leaves human picks alone, a named sentence replaces them', async () => {

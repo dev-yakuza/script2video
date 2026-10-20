@@ -17,13 +17,23 @@ import { pending, readProvenance, status, type Graph } from './state.js';
 export const MIN_PER_IMAGE = 5.5;
 export const MIN_PER_ROUND = 1;
 
-/** A generated character: its spec, items and provenance. */
-export function loadGraph(dir: string): Graph & { spec: LayeredSpec; errors: string[] } {
+/**
+ * `dir` is a generated character (its character.yaml says so). Checked before the work lock is
+ * taken: the lock would otherwise make the folder, `.work/` and a `.gitignore` in a wrong path or
+ * in an image character's tracked folder (final review 4).
+ */
+export function assertGenerated(dir: string): LayeredSpec {
   if (!existsSync(join(dir, CHARACTER_YAML)))
     throw new Error(`${dir} has no ${CHARACTER_YAML}: run s2v character create ${dir} first`);
   const spec = loadCharacterSpec(dir);
   if (spec.source !== 'generated')
     throw new Error(`${dir}: source is "${spec.source}"; only generated characters are built`);
+  return spec;
+}
+
+/** A generated character: its spec, items and provenance. */
+export function loadGraph(dir: string): Graph & { spec: LayeredSpec; errors: string[] } {
+  const spec = assertGenerated(dir);
   const { items, errors } = planItems(dir, spec);
   return {
     spec,

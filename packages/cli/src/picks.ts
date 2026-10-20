@@ -37,11 +37,24 @@ export const pickText = (text: string) => [...text].slice(0, 20).join('');
  * empty and writing it back would erase the choices.
  */
 export function readPicks(lockDir: string): PicksFile {
+  return readPicksAt(lockDir).file;
+}
+
+/**
+ * picks.json and the text it was read from (null: no file), for writing it back only when nobody
+ * else wrote it meanwhile (writePicks `expected`, final review 17).
+ */
+export function readPicksAt(lockDir: string): { file: PicksFile; text: string | null } {
   const path = picksPath(lockDir);
-  if (!existsSync(path)) return { version: PICKS_VERSION, picks: {} };
+  const text = existsSync(path) ? readFileSync(path, 'utf8') : null;
+  return { file: parsePicks(path, text), text };
+}
+
+function parsePicks(path: string, text: string | null): PicksFile {
+  if (text === null) return { version: PICKS_VERSION, picks: {} };
   let data: unknown;
   try {
-    data = JSON.parse(readFileSync(path, 'utf8'));
+    data = JSON.parse(text);
   } catch (e) {
     throw new Error(`${path}: cannot read (${(e as Error).message}) — fix or remove it`, {
       cause: e,
@@ -55,17 +68,33 @@ export function readPicks(lockDir: string): PicksFile {
   return { version: PICKS_VERSION, picks: f.picks };
 }
 
-/** picks.json written whole (temp file + rename), keys sorted so diffs stay small. */
-export function writePicks(lockDir: string, file: PicksFile): void {
+/**
+ * picks.json written whole (temp file + rename), keys sorted so diffs stay small. With `expected`
+ * (the text read, null for no file), nothing is written when the file is no longer that text —
+ * another command wrote it (final review 17) — and null is returned; otherwise the text written.
+ * A write between this check and the rename is still possible (milliseconds, as for the audio
+ * lock's manifest).
+ */
+export function writePicks(
+  lockDir: string,
+  file: PicksFile,
+  expected?: string | null,
+): string | null {
   const picks = Object.fromEntries(
     Object.keys(file.picks)
       .sort()
       .map((k) => [k, file.picks[k]!]),
   );
   const path = picksPath(lockDir);
+  if (expected !== undefined) {
+    const now = existsSync(path) ? readFileSync(path, 'utf8') : null;
+    if (now !== expected) return null;
+  }
+  const text = `${JSON.stringify({ version: PICKS_VERSION, picks }, null, 2)}\n`;
   const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify({ version: PICKS_VERSION, picks }, null, 2)}\n`);
+  writeFileSync(tmp, text);
   renameSync(tmp, path);
+  return text;
 }
 
 /** A sentence as the pick rules see it. */

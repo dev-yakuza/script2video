@@ -106,7 +106,6 @@ export function ownProcessStart(): string {
 
 /** This process holds the lock (itself or through its parent's token). */
 export const heldHere = (): boolean => held !== null;
-export const heldKind = (): HeavyKind | null => held?.kind ?? null;
 
 /**
  * Take the machine lock for `kind` (at once or BusyError, exit 73). A second call in the same

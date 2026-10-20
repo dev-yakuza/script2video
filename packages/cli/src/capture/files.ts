@@ -8,11 +8,16 @@ const writing = new Set<string>();
 const dropWriting = () => {
   for (const f of writing) rmSync(f, { force: true });
 };
-process.on('exit', dropWriting);
+/** Registered on the first write only: other commands get no exit listener from this module. */
+let listening = false;
 
 /** Write next to `path` under a fresh name (never through a planted link), then rename. */
 export function writeAtomic(path: string, data: Buffer | string): void {
   const tmp = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString('hex')}.tmp`);
+  if (!listening) {
+    listening = true;
+    process.on('exit', dropWriting);
+  }
   writing.add(tmp);
   try {
     const fd = openSync(tmp, 'wx', 0o644);

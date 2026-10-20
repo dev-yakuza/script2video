@@ -746,3 +746,36 @@ describe('character missing --json', { timeout: 60_000 }, () => {
     expect([after.notReady, after.count]).toEqual([[], 2]);
   });
 });
+
+describe('the work lock comes after the folder check (final review 4)', { timeout: 60_000 }, () => {
+  it('a missing folder stays missing: pick, review, approve, redo exit 1', () => {
+    const nope = join(mkdtempSync(join(tmpdir(), 's2v-nope-')), 'mina');
+    for (const args of [
+      ['pick', nope, '1'],
+      ['review', nope],
+      ['approve', nope, 'x'],
+      ['redo', nope, 'x'],
+      ['build', nope],
+    ]) {
+      const r = cli(['character', ...args]);
+      expect(r.status, args.join(' ')).toBe(1);
+      expect(r.stderr).toMatch(/has no character\.yaml/);
+      expect(existsSync(nope), args.join(' ')).toBe(false);
+    }
+  });
+
+  it('an image character folder gets no .gitignore and no .work', () => {
+    const dir = join(mkdtempSync(join(tmpdir(), 's2v-image-cast-')), 'host');
+    cpSync(join(REPO, 'videos/sample-dialogue-ko/characters/host'), dir, { recursive: true });
+    for (const args of [
+      ['review', dir],
+      ['approve', dir, 'x'],
+      ['pick', dir, '1'],
+    ]) {
+      const r = cli(['character', ...args]);
+      expect(r.status, args.join(' ')).toBe(1);
+      expect(existsSync(join(dir, '.gitignore')), args.join(' ')).toBe(false);
+      expect(existsSync(join(dir, '.work')), args.join(' ')).toBe(false);
+    }
+  });
+});

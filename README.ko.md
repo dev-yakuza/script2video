@@ -4,7 +4,7 @@
 
 Markdown 대본을 쓰면 내레이션이 들어간 설명 영상이 만들어집니다. 한국어·영어·일본어를 지원하고, 음성은 로컬에서 돌아가는 오픈소스 TTS로 합성합니다. 말하는 타이밍에 맞춰 직접 찍은 스크린샷을 확대하고 강조할 수 있습니다. 같은 대본과 같은 환경이면 같은 영상이 나옵니다. 하나의 대본에서 YouTube(16:9)와 Shorts(9:16)를 함께 만듭니다.
 
-> **상태:** 정식 공개 전(v0.1.0). 1.0 전까지 대본 형식이 바뀔 수 있습니다.
+> **상태:** 정식 공개 전(0.x). 1.0 전까지 대본 형식이 바뀔 수 있습니다.
 
 **샘플** (모든 에셋은 이 프로젝트용으로 만든 CC0): `videos/sample-ko`(한국어 진행자 + 대화 한 줄),
 `videos/sample-dialogue-ko`(캐릭터 두 명, 반응, 효과음), `videos/sample-en`(영어, 다크 테마, 차트와 비교).
@@ -83,12 +83,32 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | 캐릭터 그림: YMM4 가져오기와 생성(아래 참조); 도구용 `--json`(`build --dry-run`, `review`, `missing`)                                  |
 
 `node packages/cli/dist/main.js <command> …` 형태로 실행합니다. `S2V_TTS=mock`을 붙이면 모델 없이
-합성 음성으로 전체를 돌려 볼 수 있어 레이아웃 작업과 CI에 편리합니다.
+합성 음성으로 전체를 돌려 볼 수 있어 레이아웃 작업과 CI에 편리합니다. `S2V_NO_OPEN=1`이면 페이지를 열지
+않습니다(`takes`·`direct` 페이지, `pick`, 캐릭터 페이지; 명령마다는 `--no-open`). `S2V_TAKES_ALL=6`(개발용)은
+감정 문장마다 take 여섯 개를 모두 만듭니다(고르는 결과는 같음). `--fps`·`--workers` 같은 숫자는 정수입니다(s2v는
+정수 fps만 받습니다).
 
 각 명령은 자기 플래그만 받으며, 모르는 플래그와 모르는 `--output`은 오류입니다(exit 2). `say`의 문장이 `-`로 시작하면
 `--` 뒤에 씁니다. `--version --json`은 `id`(semver + s2v가 실행하는 코드와 고정 데이터의 해시, 커밋하지
 않은 변경 포함)를 냅니다. 도구는 `id`를 고정하고 바뀌면 멈춥니다. `stale_build`는 어떤 패키지의 `dist`가
 소스보다 오래됐다는 뜻입니다(`yarn build`). `inspect`의 `s2v_version`도 같은 `id`입니다.
+
+**종료 코드.**
+
+| 코드  | 뜻                                                                                                                                                                                                                                      |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | 완료                                                                                                                                                                                                                                    |
+| 1     | 실패: lint 오류, 실패한 검사, `character missing`이 빠진 것을 찾음, 파싱할 수 없는 대본(이때 `--json`은 아무것도 내지 않음)                                                                                                             |
+| 2     | 사용법 또는 준비: 모르는 플래그나 잘못된 값(`--fps abc`, `--lang fr`, 출력에 없는 `--scenes` id, IP 주소인 `capture` URL), `character create`가 채울 `character.yaml`을 씀, 상대 경로 `S2V_STATE_DIR`, 종류가 다른 잠금 토큰; JSON 없음 |
+| 73    | 기기가 바쁨(아래): `busy (<reason>): `로 시작하는 stderr 한 줄이 이유                                                                                                                                                                   |
+| 74    | 다른 명령이 이 캐릭터를 작업 중: `actor busy: `로 시작하는 stderr 한 줄                                                                                                                                                                 |
+| 75    | 메모리 한도(`--max-memory-gb`)에서 멈춤; 다시 실행하면 이어서 함                                                                                                                                                                        |
+| 128+n | 신호로 끝남: 130 Ctrl-C(SIGINT), 143 SIGTERM, 129 SIGHUP — 잠금을 쥐거나 서버를 띄운 명령과 `capture`; 다른 명령은 신호 자체로 끝날 수 있음(렌더링 중이면 1)                                                                            |
+
+**JSON 출력.** 명령의 `--json` 키 이름은 바꾸지 않습니다. 어떤 명령은 snake_case 키를(`inspect`,
+`services status`, `--version`, `snapshot --frames`의 `index.json`), 어떤 명령은 camelCase를(`sentences`,
+`character` 명령들, `capture --text`) 씁니다. 새 필드는 그 명령의 표기를 따르고, 새 명령은 snake_case를
+씁니다. 필드는 늘 수 있으니 모르는 키는 무시하세요. `sentences --json`은 배열입니다.
 
 결과물은 `out/<대본 폴더>/`에 생깁니다(render, snapshot, `direct`·`takes` 페이지). `--out-dir <dir>`을 주면
 같은 이름으로 `<dir>` 아래에 씁니다. render는 `<output>.<lang>[.draft].{mp4,srt,vtt,description.md}`와, 만들었을 때만 `.chapters.txt`·`.thumbnail.png`을 쓰고, 만들지 않은 쪽은 지난 파일을 지웁니다(다른 출력, draft와 draft 아닌 쪽, snapshot 파일은 건드리지 않습니다). 0이 아닌 코드로 끝나면 결과물
@@ -101,21 +121,25 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 이 기기에서 한 번에 하나만 돌립니다. 합성하는 명령(`tts`, `say`, `voice create/check/refs`,
 `import-recording`, `--frozen-audio` 없는 `render`·`snapshot`)은 서버가 처음 필요할 때 기기 잠금을
 잡고(합성할 것이 없는 `tts`는 잡지 않음), `voice train`과 `audio prune`은 시작할 때 잡으며, `character setup`·`create`·`build`의 라운드는
-이미지 생성을 위해 잡습니다. 다른 작업이 잡고 있으면 바로 exit 73으로 멈추고 stderr 첫 줄에 이유
-`busy (lock|breaking|resident|orphan|changed): …`를 냅니다. 누가 무엇을 잡았는지는
+이미지 생성을 위해 잡습니다. 다른 작업이 잡고 있으면 바로 exit 73으로 멈추고, 이유는 stderr에서
+`busy (<reason>): `로 시작하는 한 줄입니다(`lock`, `breaking`, `resident`, `orphan`, `changed` — `changed`는
+이 실행 중에 오디오 lock이나 takes pick이 바뀐 것이니 다시 실행). 그 줄은 exit가 73일 때만 읽으세요(대본
+검사나 Python 단계의 다른 줄이 앞뒤에 올 수 있음). 누가 무엇을 잡았는지는
 `s2v services status`가 알려 줍니다. `dev`는 세션 내내, `character setup`은 내려받기를 포함한 설치 내내
-잠금을 쥡니다: 그동안 TTS 명령은 끝날 때까지 기다려야 합니다. `--frozen-audio` 렌더·스냅샷은 잠그지
-않습니다(오디오 lock의 wav를 읽으므로 그동안 `audio prune`을 돌리지 마세요). `tts-server start`로 띄운
+잠금을 쥡니다: 그동안 TTS 명령은 끝날 때까지 exit 73으로 멈춥니다. `--frozen-audio` 렌더·스냅샷은 잠그지
+않습니다(오디오 lock의 wav를 읽으므로 그동안 `audio prune`을 돌리지 마세요). 합성하는 render·snapshot은 영상
+렌더링까지 끝날 때까지 잠금을 쥡니다: 기기를 빨리 비우려면 `tts` 뒤에 `--frozen-audio`로 렌더하세요. `tts-server start`로 띄운
 서버는 TTS 명령들이 하나씩 재사용합니다. 서버를 띄우는 동안만 잠금을 쥐고, 그 옆에서는 이미지 생성이
 시작되지 않으며(그 터미널에서 Ctrl-C로 끄세요), Ctrl-C 때 TTS 명령이 아직 쓰고 있으면 경고합니다(exit
-130). 생성 캐릭터를 쓰는 명령(`create`, `pick`, `build`, 검사를 다시 하는 `review`, `approve`, `redo`,
-`missing --apply`)은 그 캐릭터의 작업 잠금을 잡아 한 캐릭터를 동시에 바꾸지 않습니다(exit 74).
+130). `S2V_TTS_PORT`가 상주 서버의 포트와 다른 TTS 명령은 모델을 하나 더 띄우지 않고 `busy (resident)`로
+멈춥니다. 생성 캐릭터를 쓰는 명령(`create`, `pick`, `build`, 검사를 다시 하는 `review`, `approve`, `redo`,
+`missing --apply`)은 그 캐릭터의 작업 잠금을 잡아 한 캐릭터를 동시에 바꾸지 않습니다(exit 74, `actor busy: `로 시작하는 stderr 한 줄).
 `build --dry-run --json`, `review --json --no-check`, `missing --json`은 작업 중인 명령을 `running`에
 냅니다. 강제로 죽은 명령은 서버를 남길 수 있습니다(보통은 함께 내려감): `services status [--json]`은
 TTS·aligner 포트(지금의 `S2V_TTS_PORT` / `S2V_ALIGNER_PORT`)에 응답하는데 뒤에 명령이 없는 서버와 끄는
 방법을 보여 줍니다. s2v 밖에서 손으로 띄운 서버나 Python은 잠금이 알지 못합니다.
 
-도구용(Studio의 `lock.py`와 같은 형식): 잠금은 `~/.s2v/heavy.lock.d/`(또는 절대 경로 `$S2V_STATE_DIR`;
+도구용(같은 잠금을 잡는 래퍼는 이 알고리즘을 따라야 함): 잠금은 `~/.s2v/heavy.lock.d/`(또는 절대 경로 `$S2V_STATE_DIR`;
 s2v와 도구가 같은 곳을 봐야 함)이고 `owner.json`은 `{kind: "tts"|"gen", pid, pid_start, holder, token}`
 입니다. 비공개 `heavy.lock.d.new.<rand>/`에 `owner.json`을 쓰고 그 폴더를 `heavy.lock.d`로 rename해서
 잡습니다(빈 폴더 위로의 rename은 성공하므로 `mkdir`로 잡고 나중에 owner를 쓰는 방식과 섞지 마세요).
@@ -147,14 +171,15 @@ s2v와 도구가 같은 곳을 봐야 함)이고 `owner.json`은 `{kind: "tts"|"
 아는 것만 적습니다. Linux에서는 브라우저에 샌드박스(사용자 네임스페이스)가 필요합니다. 그것을 줄
 수 없는 컨테이너에서는 `S2V_CAPTURE_NO_SANDBOX=1`로 샌드박스 없이 돌립니다.
 
-`snapshot --frames`는 모아 찍은 한 장 옆에 `<output>.<lang>.frames/`를 씁니다. 화면이 바뀌는 시점(첫 그림이 자리 잡은 뒤, 그림과 cue마다, 캐릭터의 얼굴과 기본 얼굴로 돌아갈 때, 무대 교체, 유지되는 동작)마다 원래 크기의 낱장을 장면당 최대 12장, 영상 전체 번호로, 그리고 낱장마다 장면·프레임·초·이유와 s2v id, 대본 sha256을 적은 `index.json`을 씁니다. 정지 화면의 캐릭터는 쉬는 자세입니다(숨쉬기·깜빡임·끄덕임 없음). 실행은 지난 정지 화면과 낱장을 먼저 지웁니다. `--frames` 없이 돌리면 낱장 폴더는 그대로입니다. `--frozen-audio`는 음성 lock을 그대로 쓰고, 음성이 없는 문장이 있으면 실패합니다. `script_sha256`은 대본만 보며 에셋과 캐릭터 그림은 보지 않습니다. 중단된 실행은 `<…>.frames.tmp/`를 남길 수 있습니다.
+`snapshot`은 `<output>.<lang>[.draft].snapshot.png`를 씁니다(`--draft` snapshot은 다른 쪽을 덮지 않음).
+`--frames`는 모아 찍은 한 장 옆에 `<output>.<lang>[.draft].frames/`를 씁니다. 화면이 바뀌는 시점(첫 그림이 자리 잡은 뒤, 그림과 cue마다, 캐릭터의 얼굴과 기본 얼굴로 돌아갈 때, 무대 교체, 유지되는 동작)마다 원래 크기의 낱장을 장면당 최대 12장, 영상 전체 번호로, 그리고 낱장마다 장면·프레임·초·이유와 s2v id, 대본 sha256을 적은 `index.json`을 씁니다. 정지 화면의 캐릭터는 쉬는 자세입니다(숨쉬기·깜빡임·끄덕임 없음). 실행은 지난 정지 화면과 낱장을 먼저 지웁니다. `--frames` 없이 돌리면 낱장 폴더는 그대로입니다. `--frozen-audio`는 음성 lock을 그대로 쓰고, 음성이 없는 문장이 있으면 실패합니다. `script_sha256`은 대본만 보며 에셋과 캐릭터 그림은 보지 않습니다. 중단된 실행은 `<…>.frames.tmp/`를 남길 수 있습니다.
 
 `inspect --json`은 영상을 검수하는 도구용입니다. 출력, 장면, 화면 글자, 목소리, 파일 목록과 함께 변경
-종류별 해시(`content`, `voice`, `audio`, 출력마다 `presentation`, `engine`의 구성 요소)를 내므로, 바뀐
+종류별 해시(`content`, `voice`, `audio`, 출력 이름마다 하나씩인 `presentation_by_output`, `engine`의 구성 요소)를 내므로, 바뀐
 부분만 다시 검수할 수 있습니다. 형식에 없는 것(철자가 틀린 속성, 글자로 보일 자리의 지시문)이 있는
 대본은 거부합니다. 계산할 수 없는 해시는 이유와 함께 `null`입니다. `engine`은 구성 요소별로 비교하세요.
 `defaults_*`에 새 키가 생긴 것은 s2v에 새 필드가 생긴 것으로, 대본 해시에는 영향이 없습니다.
-캐릭터를 그리는 출력의 `presentation`에는 그 출력이 보여 주는 모든 face의 그림(합성이 읽는 파일의
+캐릭터를 그리는 출력의 `presentation_by_output` 해시에는 그 출력이 보여 주는 모든 face의 그림(합성이 읽는 파일의
 sha256)이 들어가고, 그림이 없는 face가 있으면 `null`입니다. 단일 이미지(classic) 캐릭터는 framing과
 무관하게 같은 그림입니다.
 
@@ -263,7 +288,9 @@ speed: 0.8, maxPause: 1.5 }`). 감정은 목소리(Qwen 프리셋 화자는 감�
 30초 동안 청자 반응 없음(캐릭터가 있고 대기 동작을 끈 경우만), 학습한 persona의 happy·excited 대사. 오류가 아니라 조언입니다.
 `--json`은 페이지 대신 노트 전부(종류별 5개로 자르지 않음)를 냅니다. 노트마다 `code`, `cast`,
 `paragraph`(`scene:block`, 그 문단 문장 id의 앞부분)와 `line`, 걸친 마지막 문단(`toParagraph`, `toLine`),
-반응하지 않는 `listener`, `emo`가 있고, `audio`는 실제 음성이 있는 문장 수를 알려 줍니다. 순서에는 뜻이
+반응하지 않는 `listener`, `emo`가 있고, `audio`는 수가 아니라 객체입니다: `total` 문장 중
+`measured`개에 실제 음성이 있고(나머지는 추정), `stale`은 합성한 뒤 바뀐 문장 수, `current`는 lock의 문장 id 집합이
+지금 계획과 같은지, `mock`은 이 실행이 `S2V_TTS=mock`을 썼는지입니다. 순서에는 뜻이
 없고 `message`는 사람용입니다. lint가 실패하면 JSON을 내고 exit 1로 끝납니다.
 
 ### 캐릭터
@@ -382,7 +409,7 @@ node packages/cli/dist/main.js character setup        # 환경, 다운로드, 4�
 
 # 1. character.yaml이 있는 폴더: `kind`에 디자인을 적습니다
 node packages/cli/dist/main.js character create characters/mina --candidates 4
-#    → 고를 정면 이미지 4장(확인 페이지가 열립니다)
+#    → 고를 정면 이미지 4장(확인 페이지가 열립니다; --no-open이면 열지 않음)
 node packages/cli/dist/main.js character pick characters/mina 2
 
 # 2. 나머지는 라운드별로: 기준 → 몸 → 포즈 → 표정 → 입·눈 프레임

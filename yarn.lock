@@ -1265,6 +1265,7 @@ __metadata:
     "@script2video/renderer-remotion": "workspace:*"
     "@types/node": "npm:^26.6.5"
     typescript: "npm:~6.0.0"
+    yaml: "npm:^2.9.1"
   bin:
     s2v: ./dist/main.js
   languageName: unknown

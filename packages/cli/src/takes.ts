@@ -6,12 +6,14 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import type { Script } from '@script2video/core';
+import { BusyError } from './heavy-lock.js';
 import { mockEnabled } from './mock-tts.js';
 import {
   dropStaleWithId,
   pickText,
   rawShaOf,
   readPicks,
+  readPicksAt,
   shellQuote,
   writePicks,
   type PickLine,
@@ -188,7 +190,7 @@ export function pickTakes(
 ): string[] {
   if (args.length === 0) throw new Error('give at least one <id>=<take>');
   const c = context(scriptPath, script, repoRoot);
-  const picks = readPicks(c.lockDir);
+  const { file: picks, text: read } = readPicksAt(c.lockDir);
   const out: string[] = [];
   const chosen = new Map<string, { job: SentenceJob; n: number }>();
   for (const arg of args) {
@@ -238,10 +240,17 @@ export function pickTakes(
     out.push(`${job.id}: take ${n}${pick && pick.take !== n ? ` (was ${pick.take})` : ''}`);
   }
   mkdirSync(c.lockDir, { recursive: true });
-  writePicks(c.lockDir, picks);
+  if (writePicks(c.lockDir, picks, read) === null) throw picksChanged();
   out.push(`run s2v tts ${c.scriptArg} to apply`);
   return out;
 }
+
+/** picks.json changed while this command worked on it (a tts run wrote it): run again (73). */
+const picksChanged = () =>
+  new BusyError(
+    'changed',
+    'the takes picks changed while picking (another command wrote picks.json, a tts run?); run again',
+  );
 
 /** `s2v takes unpick <script> <id> …`: back to the automatic choice on the next `tts`. */
 export function unpickTakes(
@@ -252,7 +261,7 @@ export function unpickTakes(
 ): string[] {
   if (ids.length === 0) throw new Error('give at least one sentence id');
   const c = context(scriptPath, script, repoRoot);
-  const picks = readPicks(c.lockDir);
+  const { file: picks, text: read } = readPicksAt(c.lockDir);
   const out: string[] = [];
   let removed = 0;
   for (const id of ids) {
@@ -268,7 +277,7 @@ export function unpickTakes(
     removed += n;
   }
   if (removed > 0) {
-    writePicks(c.lockDir, picks);
+    if (writePicks(c.lockDir, picks, read) === null) throw picksChanged();
     out.push(`run s2v tts ${c.scriptArg} to choose again`);
   }
   return out;

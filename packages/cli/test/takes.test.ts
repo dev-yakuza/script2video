@@ -7,7 +7,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { takeBudgetDone } from '@script2video/core';
 import { mockMeasure } from '../src/mock-tts.js';
 import type { PicksFile } from '../src/picks.js';
-import { neighborFor, planSentences, synthesizeScript, type LockManifest } from '../src/tts.js';
+import {
+  neighborFor,
+  planSentences,
+  synthesizeScript,
+  toAudioManifest,
+  type AutoSelect,
+  type LockManifest,
+} from '../src/tts.js';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -30,7 +37,9 @@ function setup(body: string) {
   const lockPath = join(dir, 'video', 'audio', 'ko', 'manifest.json');
   const picks = () =>
     JSON.parse(readFileSync(join(dir, 'video', 'audio', 'ko', 'picks.json'), 'utf8')) as PicksFile;
-  const run = async (extra: { retry?: string[]; recheck?: boolean } = {}) => {
+  const run = async (
+    extra: { retry?: string[]; recheck?: boolean; takesAll?: boolean; frozen?: boolean } = {},
+  ) => {
     const logs: string[] = [];
     const r = await synthesizeScript(path, script, REPO, {
       asr: false,
@@ -83,7 +92,7 @@ describe('stage 3 takes (mock)', () => {
     await t.run();
     let [e] = Object.values(t.lock().entries);
     expect(Object.keys(e!.takes!)).toEqual(['0', '1', '2', '3', '4']);
-    expect(e!.select!.n).toBe(2);
+    expect((e!.select as AutoSelect).n).toBe(2);
 
     const u = setup('host{emo=sad}: 오늘은 정말 슬픈 이야기를 해 볼게요.');
     process.env.S2V_TTS_MOCK_FAIL = `${u.job().synthKey.slice(0, 8)}:0,1,2,3,4,5`;
@@ -154,18 +163,23 @@ describe('stage 3 takes (mock)', () => {
     expect(Object.keys(e.takes!)).toEqual(['6', '7', '8']);
   });
 
-  it('makes all six takes with S2V_TAKES_ALL but chooses as the budget does', async () => {
+  it('makes all six takes with takesAll (S2V_TAKES_ALL) but chooses as the budget does', async () => {
     const t = setup('host{emo=sad}: 오늘은 조금 슬픈 이야기를 해 볼게요.');
     await t.run();
     const budget = Object.values(t.lock().entries)[0]!;
     const u = setup('host{emo=sad}: 오늘은 조금 슬픈 이야기를 해 볼게요.');
+    // the library reads no environment: the CLI passes S2V_TAKES_ALL in
     process.env.S2V_TAKES_ALL = '6';
     try {
       await u.run();
+      expect(Object.keys(Object.values(u.lock().entries)[0]!.takes!)).not.toHaveLength(6);
     } finally {
       delete process.env.S2V_TAKES_ALL;
     }
-    const all = Object.values(u.lock().entries)[0]!;
+    const v = setup('host{emo=sad}: 오늘은 조금 슬픈 이야기를 해 볼게요.');
+    await v.run({ takesAll: true });
+    expect(Object.keys(Object.values(v.lock().entries)[0]!.takes!)).toHaveLength(6);
+    const all = Object.values(v.lock().entries)[0]!;
     expect(Object.keys(all.takes!)).toHaveLength(6);
     expect(all.attempt).toBe(budget.attempt);
     expect(all.select).toEqual(budget.select);
@@ -246,7 +260,7 @@ describe('stage 3 takes (mock)', () => {
     expect(r.synthesized).toBe(1);
     const e = t.lock().entries[t.lock().sentences[id]!]!;
     expect(e.attempt).toBeLessThanOrEqual(2);
-    expect(e.select!.retry).toBe(false);
+    expect((e.select as AutoSelect).retry).toBe(false);
   });
 
   it('marks a plain retry only when the kept take is one of the retry takes', async () => {
@@ -328,5 +342,43 @@ describe('stage 3 takes (mock)', () => {
     expect(neighborFor(jobs[1]!, jobs[0], undefined, rate)).toBeUndefined(); // no lock entry
     expect(at(1, { ...passed, checks: ['too fast'] })).toBeUndefined(); // a fallback take
     expect(at(1, { ...passed, f0: null })).toEqual({ f0: null, rate: 4.5 }); // the rate alone
+  });
+});
+
+describe('a render takes the lock it checked (final review 8)', { timeout: 60_000 }, () => {
+  // mock audio only: never a real server
+  const prev = process.env.S2V_TTS;
+  beforeAll(() => {
+    process.env.S2V_TTS = 'mock';
+  });
+  afterAll(() => {
+    if (prev === undefined) delete process.env.S2V_TTS;
+    else process.env.S2V_TTS = prev;
+  });
+
+  it('synthesizeScript returns that lock; a later change of the file does not reach it', async () => {
+    const t = setup('host: 오늘은 날씨가 좋아요.');
+    await t.run();
+    const r = await t.run({ frozen: true });
+    const before = readFileSync(t.lockPath, 'utf8');
+    expect(r.manifest).toEqual(JSON.parse(before));
+    const audio = toAudioManifest(r.manifest, r.lockDir);
+    expect(Object.values(audio)[0]!.src.startsWith(r.lockDir)).toBe(true);
+    // another run rewrites the file afterwards: what was checked stays
+    writeFileSync(t.lockPath, JSON.stringify({ ...JSON.parse(before), sentences: {} }));
+    expect(toAudioManifest(r.manifest, r.lockDir)).toEqual(audio);
+  });
+
+  it('render and snapshot build the timeline from it, not from the file read again', () => {
+    const src = readFileSync(join(REPO, 'packages/cli/src/main.ts'), 'utf8');
+    for (const start of ["case 'snapshot': {", "case 'render': {"]) {
+      const branch = src.slice(src.indexOf(start));
+      const rest = branch.slice(branch.indexOf('await synthesizeScript('));
+      const end = rest.indexOf('buildTimeline(');
+      expect(end, start).toBeGreaterThan(0);
+      const call = rest.slice(end, rest.indexOf(');', end));
+      expect(call, start).toContain('toAudioManifest(tts.manifest, tts.lockDir)');
+      expect(call, start).not.toContain('loadAudioManifest(');
+    }
   });
 });

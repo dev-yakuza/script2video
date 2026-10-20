@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   allowHostOf,
   isGlobalUnicast,
@@ -14,7 +14,7 @@ import {
   resolverRules,
   targetOf,
 } from '../src/capture/address.js';
-import { requestVerdict } from '../src/capture/capture.js';
+import { requestVerdict, stopOnSignal } from '../src/capture/capture.js';
 import { FrameReader } from '../src/capture/cdp.js';
 import {
   BR,
@@ -372,5 +372,38 @@ describe('the command', { timeout: 30_000 }, () => {
       status: null,
       contentHash: null,
     });
+  });
+});
+
+describe('capture on a signal and at exit (final review 18)', () => {
+  it('closes the browser, then ends as signalled: 130, 143, 129', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    try {
+      for (const [sig, code] of [
+        ['SIGINT', 130],
+        ['SIGTERM', 143],
+        ['SIGHUP', 129],
+      ] as const) {
+        let closed = false;
+        stopOnSignal(async () => {
+          closed = true;
+        })(sig);
+        await new Promise((r) => setImmediate(r));
+        expect(closed).toBe(true);
+        expect(exit).toHaveBeenLastCalledWith(code);
+      }
+    } finally {
+      exit.mockRestore();
+    }
+  });
+
+  it('loading the file writer adds no exit listener (every command loads it)', () => {
+    const files = join(REPO, 'packages/cli/dist/capture/files.js');
+    const out = execFileSync(process.execPath, [
+      '--input-type=module',
+      '-e',
+      `const n = process.listenerCount('exit'); await import(${JSON.stringify(files)}); console.log(process.listenerCount('exit') - n);`,
+    ]).toString();
+    expect(out.trim()).toBe('0');
   });
 });

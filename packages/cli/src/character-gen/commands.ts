@@ -6,14 +6,14 @@
  * become inputs (P2); approving also rebuilds the layers and the derived yaml fields.
  */
 
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { CHARACTER_YAML, loadCharacterSpec } from '@script2video/renderer-remotion';
+import { ExitError } from '../errors.js';
 import {
   EXIT_MEMORY,
-  ExitError,
   IMAGEGEN_DIR,
   imagegenPython,
   readImagegenLock,
@@ -21,9 +21,11 @@ import {
   type RoundJob,
 } from '../imagegen.js';
 import { acquireActor } from '../actor-lock.js';
+import { openPage } from '../html.js';
 import { acquireHeavy } from '../heavy-lock.js';
 import { genPreflight } from '../services-status.js';
 import {
+  assertGenerated,
   loadGraph,
   MIN_PER_IMAGE,
   MIN_PER_ROUND,
@@ -188,9 +190,12 @@ function toolInfo(repoRoot: string): Record<string, string> {
 
 export async function createCharacter(
   dir: string,
-  opts: GenOptions & { candidates: number },
+  opts: GenOptions & { candidates: number; open?: boolean },
 ): Promise<void> {
   const yaml = join(dir, CHARACTER_YAML);
+  // an image character's folder is not made a generated one (nothing written there)
+  if (existsSync(yaml) && loadCharacterSpec(dir).source !== 'generated')
+    throw new Error(`${yaml}: source must be "generated"`);
   acquireActor(dir);
   if (!existsSync(yaml)) {
     mkdirSync(dir, { recursive: true });
@@ -243,11 +248,12 @@ export async function createCharacter(
   const page = writeReview(dir, [{ title: 'Round 1: candidates', entries: candidateEntries(g) }], {
     candidates: true,
   });
-  openPage(page);
+  if (opts.open !== false) openPage(page);
   opts.log(`review: ${page}\nnext: s2v character pick ${dir} <n>`);
 }
 
 export function pickCandidate(dir: string, n: string, log: (m: string) => void): void {
+  assertGenerated(dir);
   acquireActor(dir);
   const g = loadGraph(dir);
   const c = g.prov.candidates[n];
@@ -277,16 +283,6 @@ export function pickCandidate(dir: string, n: string, log: (m: string) => void):
   if (old && old.approvedSha !== sha)
     log('the front reference changed: everything made from it will be generated again');
   log(`picked candidate ${n} as the front reference\nnext: s2v character build ${dir}`);
-}
-
-function openPage(page: string): void {
-  if (process.env.S2V_NO_OPEN) return;
-  const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
-  try {
-    spawn(opener, [page], { stdio: 'ignore', detached: true }).unref();
-  } catch {
-    // No opener: the path is printed.
-  }
 }
 
 // ---------- build ----------
@@ -430,6 +426,7 @@ export async function buildCharacter(
     printBuildPlan(buildPlan(dir, opts.repoRoot, log), dir, log);
     return { failed: [] };
   }
+  assertGenerated(dir);
   acquireActor(dir);
   let g = loadGraph(dir);
   for (const e of g.errors) log(`warning: ${e}`);
@@ -652,7 +649,10 @@ export async function reviewCharacter(
   opts: GenOptions & { open?: boolean; check?: boolean },
 ): Promise<{ graph: LoadedGraph; run: ReviewRun }> {
   const { log } = opts;
-  if (opts.check !== false) acquireActor(dir);
+  if (opts.check !== false) {
+    assertGenerated(dir);
+    acquireActor(dir);
+  }
   let g: LoadedGraph = loadGraph(dir);
   if (opts.check === false)
     return {
@@ -736,6 +736,7 @@ export async function approveItems(
   ids: string[],
   opts: GenOptions & { all?: boolean; except?: string[]; resetDerived?: boolean },
 ): Promise<void> {
+  assertGenerated(dir);
   acquireActor(dir);
   const g = loadGraph(dir);
   const waiting = [...g.items.values()].filter((it) =>
@@ -811,6 +812,7 @@ export function redoItems(
   seed: number | undefined,
   log: (m: string) => void,
 ): void {
+  assertGenerated(dir);
   acquireActor(dir);
   const g = loadGraph(dir);
   // Per group: whether the still itself is redone, or only its frames (they edit the still).

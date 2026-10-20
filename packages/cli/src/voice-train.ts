@@ -35,14 +35,16 @@ import {
   type Lang,
   type TrainMeasure,
 } from '@script2video/core';
-import { defaultMemoryLimitGb, ExitError, modelsDir, runWatched } from './imagegen.js';
+import { ExitError } from './errors.js';
+import { defaultMemoryLimitGb, modelsDir, runWatched } from './imagegen.js';
 import { checkVoice, resolvePersona, vectorShaOf, type PersonaRef } from './persona.js';
 import { ALIGNER, Service, TTS_SERVER } from './services.js';
 import { measureTrainClip, TRAIN_MEASURE_VERSION } from './train-data.js';
 import { ALIGN_VERSION } from './tts.js';
 import { createReference, embed, synthesisBody, type RefVoice } from './voice-refs.js';
 import { atomicWrite } from './atomic.js';
-import { acquireHeavy } from './heavy-lock.js';
+import { acquireHeavy, BusyError } from './heavy-lock.js';
+import { machinePreflight } from './services-status.js';
 
 const run = promisify(execFile);
 
@@ -57,7 +59,18 @@ export interface TrainOptions {
   log: (m: string) => void;
   /** Finds a running image generation (default: `imagegenRunning`; tests pass their own). */
   imagegenBusy?: () => Promise<string | null>;
+  /** Tests: the trainer command instead of tts-server's python (needs no models). */
+  trainer?: { cmd: string; args: string[] };
+  /** Tests: TTS and aligner stub servers already answer on the ports (not a busy machine). */
+  sharedServers?: boolean;
 }
+
+/**
+ * s2v's code for a trainer that failed: its own code, unless that would read as s2v's usage (2),
+ * busy (73, 74), memory (75) or signal (128 + n) codes — then 1.
+ */
+export const trainerExit = (code: number): number =>
+  code === 0 || [2, 73, 74, 75].includes(code) || code >= 128 ? 1 : code;
 
 const sha256 = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
 
@@ -74,14 +87,13 @@ export async function imagegenRunning(): Promise<string | null> {
   }
 }
 
-/** The trainer command (tests replace it with S2V_TRAIN_CMD, a JSON array). */
-function trainerCommand(repoRoot: string): { cmd: string; args: string[]; cwd: string } {
-  const custom = process.env.S2V_TRAIN_CMD;
+/** The trainer command (tests pass their own in TrainOptions.trainer). */
+function trainerCommand(
+  repoRoot: string,
+  custom?: { cmd: string; args: string[] },
+): { cmd: string; args: string[]; cwd: string } {
   const cwd = join(repoRoot, 'tts-server');
-  if (custom) {
-    const [cmd, ...args] = JSON.parse(custom) as string[];
-    return { cmd: cmd!, args, cwd };
-  }
+  if (custom) return { ...custom, cwd };
   // the venv's python itself, not `uv run`: the memory watchdog must see the training process
   return { cmd: join(cwd, '.venv', 'bin', 'python'), args: ['train_speaker.py'], cwd };
 }
@@ -123,29 +135,29 @@ export async function trainVoice(
   acquireHeavy('tts');
   const busy = await (opts.imagegenBusy ?? imagegenRunning)();
   if (busy)
-    throw new Error(`image generation is running (${busy}); train when it is done (A6: not both)`);
+    throw new BusyError(
+      'orphan',
+      `image generation is running outside any s2v lock (${busy}); train when it is done`,
+    );
+  // a resident or unowned TTS / aligner server holds the memory training needs (exit 73)
+  await machinePreflight(repoRoot, 'training', { sharedServers: opts.sharedServers });
   const tts = new Service(TTS_SERVER, repoRoot);
   const aligner = new Service(ALIGNER, repoRoot);
-  // (tests run against stub servers: S2V_TRAIN_SHARED_SERVERS=1)
-  for (const s of [tts, aligner])
-    if (process.env.S2V_TRAIN_SHARED_SERVERS !== '1' && (await s.health()))
-      throw new Error(
-        `${s.spec.id} is already running on port ${s.spec.port} (started outside this command): stop it — training needs its memory`,
-      );
   // what the training needs, checked before an hour of data making
   const snapshot = (name: string) =>
     join(modelsDir(), `${name.replace(/[^0-9A-Za-z_]/g, '_')}__${revisions[name]!.slice(0, 12)}`);
   // (a replaced trainer — tests — needs no models)
+  const custom = opts.trainer;
   for (const [name, inside] of [
     [MODEL, 'speech_tokenizer'],
     ['qwen3-tts-1.7b-base', ''],
   ] as const)
-    if (!process.env.S2V_TRAIN_CMD && !existsSync(join(snapshot(name), inside)))
+    if (!custom && !existsSync(join(snapshot(name), inside)))
       throw new Error(
         `model ${name} is not installed: (cd tts-server && uv run --frozen python scripts/fetch_models.py ${name})`,
       );
-  const trainer = trainerCommand(repoRoot);
-  if (!process.env.S2V_TRAIN_CMD && !existsSync(trainer.cmd))
+  const trainer = trainerCommand(repoRoot, custom);
+  if (!custom && !existsSync(trainer.cmd))
     throw new Error(`${trainer.cmd} not found: (cd tts-server && uv sync --frozen)`);
   log(`checking the ${lang} reference clip of ${id} ...`);
   const refFails = await checkVoice(yamlPath, lang, repoRoot, log);
@@ -509,7 +521,7 @@ export async function trainVoice(
     await down(); // the training process gets the memory
     const codes = join(work, 'codes');
     const python = async (args: string[], what: string) => {
-      const t = trainerCommand(repoRoot);
+      const t = trainerCommand(repoRoot, custom);
       let failed: string | null = null;
       const r = await runWatched(t.cmd, [...t.args, ...args], {
         cwd: t.cwd,
@@ -534,11 +546,12 @@ export async function trainVoice(
           `${what} was stopped: it used ${r.peakGb.toFixed(1)} GB (limit ${Math.min(28, defaultMemoryLimitGb())} GB); run again to resume`,
           r.code,
         );
+      // stopped by a signal to s2v: the exit code is the signal's (128 + n, shutdown.ts)
+      if (r.interrupted) throw new ExitError(`${what} interrupted; run again to resume`, r.code);
       if (r.code !== 0)
         throw new ExitError(
           `${what} failed${failed ? `: ${failed}` : ''} (exit ${r.code})`,
-          // the trainer's own code must not read as s2v's busy (73, 74) or memory (75) codes
-          [73, 74, 75].includes(r.code) ? 1 : r.code || 1,
+          trainerExit(r.code),
         );
     };
     log(`${stage}: encoding ${clips.length} clips ...`);

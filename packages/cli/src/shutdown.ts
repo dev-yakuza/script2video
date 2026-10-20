@@ -5,9 +5,12 @@
  *
  * - normal end and errors: `await shutdown()` in main, then a natural exit with process.exitCode
  *   (process.exit would cut piped stdout at 64 KB).
- * - signals: one handler per signal. While another listener runs (runWatched stopping its child),
- *   it does nothing: the command comes down as an error and ends the normal way. Otherwise it waits
- *   for the groups, releases, flushes and exits 128 + n. A second signal kills at once.
+ * - signals: one handler per signal. The exit code is 128 + n from the first signal on (130
+ *   SIGINT, 143 SIGTERM, 129 SIGHUP), also when the command then ends with an error (a browser or
+ *   child that the signal stopped). While runWatched stops its child (watchChild), the handler does
+ *   nothing more: the command comes down through main. Otherwise it waits for the groups, releases,
+ *   flushes and exits. Other listeners (Remotion's browser) do not count. A second signal kills
+ *   at once.
  * - `exit` (a command's own process.exit): synchronous fallback.
  */
 
@@ -23,6 +26,10 @@ const releasers = new Set<() => void>();
 
 let armed = false;
 let signalled = 0;
+/** The first signal this process got: it sets the exit code (an error after it does not). */
+let signalledWith: NodeJS.Signals | null = null;
+/** runWatched children being run: a signal is theirs to stop. */
+let watching = 0;
 const handlers = new Map<NodeJS.Signals, () => void>();
 let onExit: (() => void) | null = null;
 
@@ -37,6 +44,27 @@ export function trackGroup(pgid: number): void {
 export function forgetGroup(pgid: number): void {
   groups.delete(pgid);
 }
+
+/** runWatched runs a child it stops itself on a signal; call the returned function when done. */
+export function watchChild(): () => void {
+  watching++;
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    watching--;
+  };
+}
+
+/** A signal arrived: the first one sets the exit code (128 + n), also for runWatched's own handler. */
+export function noteSignal(sig: NodeJS.Signals): void {
+  if (signalledWith) return;
+  signalledWith = sig;
+  process.exitCode = signalCode(sig);
+}
+
+/** The first signal this process got, if any. */
+export const signalledBy = (): NodeJS.Signals | null => signalledWith;
 
 export function onStop(stop: () => void): void {
   stoppers.add(stop);
@@ -150,7 +178,8 @@ export function runMain(main: () => Promise<void>, codeOf: (e: unknown) => numbe
     () => shutdown(),
     async (e: unknown) => {
       console.error(e instanceof Error ? e.message : e);
-      process.exitCode = codeOf(e);
+      // after a signal the command ends as signalled (128 + n), whatever error it came down with
+      if (!signalledWith) process.exitCode = codeOf(e);
       await shutdown();
       await Promise.all([flush(process.stdout), flush(process.stderr)]);
       setTimeout(() => process.exit(process.exitCode), 2000).unref();
@@ -160,13 +189,14 @@ export function runMain(main: () => Promise<void>, codeOf: (e: unknown) => numbe
 
 function onSignal(sig: NodeJS.Signals): void {
   signalled++;
+  noteSignal(sig);
   if (signalled > 1) {
     signalGroups('SIGKILL');
     releaseAll();
     process.exit(signalCode(sig));
   }
-  // another listener (runWatched) is stopping its child: the command ends through main
-  if (process.listenerCount(sig) > 1) return;
+  // runWatched is stopping its child: the command ends through main
+  if (watching > 0) return;
   void (async () => {
     if (groups.size) console.error('stopping servers …');
     stopAll();
@@ -203,6 +233,10 @@ export function resetShutdownForTests(): void {
   onExit = null;
   armed = false;
   signalled = 0;
+  // a signal emitted in a test set the exit code of the test process: take it back
+  if (signalledWith && process.exitCode === signalCode(signalledWith)) process.exitCode = undefined;
+  signalledWith = null;
+  watching = 0;
   groups.clear();
   stoppers.clear();
   releasers.clear();

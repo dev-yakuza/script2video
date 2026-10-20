@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { isIpLiteralHost, resolverRules } from './address.js';
+import { SIGNALS, signalCode } from '../shutdown.js';
 import { writeAtomic } from './files.js';
 import { launchBrowser, type Browser, type Cdp, type Json } from './cdp.js';
 import {
@@ -154,18 +155,21 @@ export function browserArgs(o: CaptureOptions): string[] {
 
 export async function capture(o: CaptureOptions): Promise<CaptureOutcome> {
   const browser = launchBrowser(o.browserPath, browserArgs(o));
-  const stop = () => {
-    void browser.close().then(() => process.exit(130));
-  };
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
+  const stop = stopOnSignal(() => browser.close());
+  for (const sig of SIGNALS) process.once(sig, stop);
   try {
     return await run(browser, o);
   } finally {
-    process.off('SIGINT', stop);
-    process.off('SIGTERM', stop);
+    for (const sig of SIGNALS) process.off(sig, stop);
     await browser.close();
   }
+}
+
+/** On a signal: close the browser, then end as signalled (128 + n: 130, 143, 129). */
+export function stopOnSignal(close: () => Promise<void>): (sig: NodeJS.Signals) => void {
+  return (sig) => {
+    void close().then(() => process.exit(signalCode(sig)));
+  };
 }
 
 async function run(browser: Browser, o: CaptureOptions): Promise<CaptureOutcome> {

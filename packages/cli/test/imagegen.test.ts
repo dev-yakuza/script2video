@@ -46,7 +46,12 @@ describe('runWatched (memory watchdog)', () => {
       onLine: (l) => (grandchild = Number(l.split(' ')[1])),
       log: (m) => logs.push(m),
     });
-    expect(r).toEqual({ code: EXIT_MEMORY, peakGb: 21.5, stoppedForMemory: true });
+    expect(r).toEqual({
+      code: EXIT_MEMORY,
+      peakGb: 21.5,
+      stoppedForMemory: true,
+      interrupted: false,
+    });
     expect(logs).toEqual(['memory 21.5 GB > limit 20 GB: stopping']);
     await new Promise((res) => setTimeout(res, 100));
     expect(alive(grandchild)).toBe(false);
@@ -82,7 +87,7 @@ describe('runWatched (memory watchdog)', () => {
         log: (m) => logs.push(m),
       },
     );
-    expect(r).toEqual({ code: 3, peakGb: 0, stoppedForMemory: false });
+    expect(r).toEqual({ code: 3, peakGb: 0, stoppedForMemory: false, interrupted: false });
     expect(lines).toEqual(['a', 'b']);
     expect(logs).toEqual([
       'warning: could not read memory use (footprint missing, or the machine is swapping)',
@@ -118,7 +123,7 @@ describe('runWatched (memory watchdog)', () => {
         process.emit('SIGINT');
       },
     });
-    expect(r).toMatchObject({ code: 130, stoppedForMemory: false });
+    expect(r).toMatchObject({ code: 130, stoppedForMemory: false, interrupted: true });
     expect(process.listenerCount('SIGINT')).toBe(0);
     await new Promise((res) => setTimeout(res, 100));
     expect(alive(grandchild)).toBe(false);

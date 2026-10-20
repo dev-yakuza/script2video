@@ -3,9 +3,9 @@
  * (circle mark) or dragging (box mark). A coordinate reader, not an editor (PLAN 5.6).
  */
 
-import { spawn } from 'node:child_process';
 import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, resolve } from 'node:path';
+import { openPage } from './html.js';
 
 const PAGE = (imageFile: string, title: string) => `<!doctype html>
 <meta charset="utf-8">
@@ -74,7 +74,6 @@ export function pick(imagePath: string, workRoot: string): string {
   copyFileSync(abs, join(dir, imageFile));
   const page = join(dir, 'index.html');
   writeFileSync(page, PAGE(imageFile, basename(abs)));
-  const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
-  spawn(opener, [page], { stdio: 'ignore', detached: true }).unref();
+  openPage(page);
   return page;
 }

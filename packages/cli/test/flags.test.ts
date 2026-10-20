@@ -2,12 +2,21 @@
  * Strict flags (S3 plan 4): every command takes only its own flags; the usage text, the header of
  * main.ts and the documented examples name the same flags as the table.
  */
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { commandOf, FLAGS, parseFor, USAGE, UsageError, type CommandKey } from '../src/args.js';
+import {
+  commandOf,
+  FLAGS,
+  intFlag,
+  parseFor,
+  USAGE,
+  UsageError,
+  type CommandKey,
+} from '../src/args.js';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const cli = join(REPO, 'packages/cli/dist/main.js');
@@ -202,5 +211,80 @@ describe('the flag table is what the help and the docs say', () => {
       }
     }
     expect(checked).toBeGreaterThan(20);
+  });
+});
+
+describe(
+  'bad numbers and combinations are usage errors (final review 9)',
+  { timeout: 60_000 },
+  () => {
+    // a script that does not exist: the flags are checked first (2); before, the file was (1)
+    const nope = join(REPO, 'videos/no-such-video/script.ko.md');
+    const exec = (args: string[]) => {
+      const r = spawnSync('node', [cli, ...args], { cwd: REPO, env: process.env });
+      return { status: r.status, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
+    };
+
+    it('exit 2 with nothing on stdout', () => {
+      for (const args of [
+        ['timeline', nope, '--fps', 'abc'],
+        ['timeline', nope, '--fps', '29.97'],
+        ['direct', nope, '--json', '--fps', '0'],
+        ['snapshot', nope, '--fps', '-1'],
+        ['render', nope, '--fps', '30x'],
+        ['render', nope, '--workers', 'abc'],
+        ['render', nope, '--workers', '0'],
+        ['render', nope, '--frozen-audio', '--recheck'],
+        ['render', nope, '--frozen-audio', '--no-asr'],
+        ['voice', 'create', join(REPO, 'voices/nope.yaml'), '--candidates', 'abc'],
+        ['voice', 'check', join(REPO, 'voices/nope.yaml'), '--lang', 'fr'],
+      ]) {
+        const r = exec(args);
+        expect(r.status, args.join(' ')).toBe(2);
+        expect(r.stdout, args.join(' ')).toBe('');
+      }
+      expect(exec(['timeline', nope, '--fps', 'abc']).stderr).toMatch(/whole-number fps/);
+    });
+
+    it('new --lang fr: exit 2, nothing made', () => {
+      const dir = join(mkdtempSync(join(tmpdir(), 's2v-new-')), 'v');
+      const r = exec(['new', dir, '--lang', 'fr']);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toMatch(/--lang takes ko, ja, en, not "fr"/);
+      expect(existsSync(dir)).toBe(false);
+    });
+
+    it('intFlag', () => {
+      expect(intFlag('fps', '30', 1)).toBe(30);
+      expect(() => intFlag('fps', '1e2', 1)).toThrow(UsageError);
+      expect(() => intFlag('candidates', '17', 1, 16)).toThrow(/from 1 to 16/);
+    });
+  },
+);
+
+describe('the README contracts (final review 1, 11, 15)', () => {
+  const readmes = ['README.md', 'README.ko.md', 'README.ja.md'].map((f) => ({
+    f,
+    text: readFileSync(join(REPO, f), 'utf8'),
+  }));
+
+  it('the busy reason is the line starting with `busy (<reason>): `, not a line by position', () => {
+    for (const { f, text } of readmes) {
+      expect(text, f).toContain('`busy (<reason>): `');
+      expect(text, f).toContain('`actor busy: `');
+      expect(text, f).not.toMatch(/first line of stderr|stderr 첫 줄|stderr の\s*1 行目/);
+    }
+  });
+
+  it('one exit code table, the JSON keys as they are, no stale version, no unexplained tool names', () => {
+    for (const { f, text } of readmes) {
+      for (const code of ['| 73 ', '| 74 ', '| 75 ', '| 128+n'])
+        expect(text, `${f} ${code}`).toContain(code);
+      expect(text, f).toContain('143 SIGTERM');
+      expect(text, f).toContain('presentation_by_output');
+      expect(text, f).not.toContain('v0.1.0');
+      expect(text, f).not.toContain('lock.py');
+      expect(text, f).toContain('S2V_NO_OPEN');
+    }
   });
 });

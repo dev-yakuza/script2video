@@ -129,8 +129,6 @@ export type CharacterSpec = LayeredSpec | ImportedSpec;
 export type ViewDef = z.infer<typeof viewSchema>;
 export type BodyDef = z.infer<typeof bodySchema>;
 export type HeadDef = z.infer<typeof headSchema>;
-export type ExpressionDef = z.infer<typeof expressionSchema>;
-export type FaceDef = z.infer<typeof faceSchema>;
 export type SetDef = z.infer<typeof setSchema>;
 
 type PresetDef = Pick<

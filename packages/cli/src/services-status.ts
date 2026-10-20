@@ -23,27 +23,36 @@ import {
 import { ALIGNER, Service, TTS_SERVER, type ServiceSpec } from './services.js';
 
 /**
- * Image generation may start (S8): no resident TTS server, no server answering the TTS or aligner
- * port (exit 73). Run while holding the gen lock: only then is a dead resident.json removed (by its
- * process only — a server still loading does not answer yet).
+ * Image generation or voice training may start (S8): no resident TTS server, no server answering
+ * the TTS or aligner port (exit 73). Run while holding the machine lock: only then is a dead
+ * resident.json removed (by its process only — a server still loading does not answer yet).
+ * `sharedServers` (tests of training against stub servers) leaves the ports out.
  */
-export async function genPreflight(repoRoot: string): Promise<void> {
+export async function machinePreflight(
+  repoRoot: string,
+  verb: 'generating' | 'training',
+  opts: { sharedServers?: boolean } = {},
+): Promise<void> {
   const resident = readResident();
   if (resident) {
     if (residentProcessAlive(resident))
       throw new BusyError(
         'resident',
-        `a resident tts-server is running (pid ${resident.pid}, port ${resident.port}): stop it (Ctrl-C the tts-server start terminal) before generating`,
+        `a resident tts-server is running (pid ${resident.pid}, port ${resident.port}): stop it (Ctrl-C the tts-server start terminal) before ${verb}`,
       );
     removeResident(resident);
   }
+  if (opts.sharedServers) return;
   for (const spec of [TTS_SERVER, ALIGNER])
     if (await new Service(spec, repoRoot).health())
       throw new BusyError(
         'orphan',
-        `${spec.id} is running on port ${spec.port} and no s2v command owns it: stop it before generating (both need tens of GB); see: s2v services status`,
+        `${spec.id} is running on port ${spec.port} and no s2v command owns it: stop it before ${verb} (both need tens of GB); see: s2v services status`,
       );
 }
+
+/** Image generation may start (machinePreflight). */
+export const genPreflight = (repoRoot: string) => machinePreflight(repoRoot, 'generating');
 
 type Busy = { reason: BusyReason } | null;
 

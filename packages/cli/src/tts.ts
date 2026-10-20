@@ -71,7 +71,7 @@ import {
   pickText,
   PICKS_VERSION,
   picksPath,
-  readPicks,
+  readPicksAt,
   shellQuote,
   stalePicks,
   writePicks,
@@ -423,6 +423,11 @@ export interface TtsOptions {
   log: (msg: string) => void;
   /** Tests: called before each save of the manifest (another run may write it there). */
   beforeSave?: () => void;
+  /**
+   * E7 (stage 3 plan 6): make all six takes of emotion lines; the choice stays the budget's. The
+   * CLI sets it from S2V_TAKES_ALL=6 (a development setting, README).
+   */
+  takesAll?: boolean;
 }
 
 export interface SentenceJob {
@@ -827,8 +832,7 @@ export async function synthesizeScript(
     atomicWrite(manifestPath, next);
     lastText = next;
   };
-  // E7 (stage 3 plan 6): make all six takes of emotion lines; the choice stays the budget's
-  const takesAll = process.env.S2V_TAKES_ALL === '6';
+  const takesAll = opts.takesAll === true;
   /** Tell how long synthesis will take (stage 3 plan 9). */
   const estimateTime = (
     todo: SentenceJob[],
@@ -993,9 +997,22 @@ export async function synthesizeScript(
   Object.assign(manifest.sentences, plan.sentences);
   // picks (stage 3b plan 1): a draft or another lock folder neither reads nor writes them
   const usePicks = !opts.draft && !opts.lockDir;
-  const picks: PicksFile = usePicks ? readPicks(lockDir) : { version: PICKS_VERSION, picks: {} };
+  const picksRead = usePicks ? readPicksAt(lockDir) : null;
+  const picks: PicksFile = picksRead?.file ?? { version: PICKS_VERSION, picks: {} };
+  // the picks text last read or written: a `takes pick` meanwhile is not overwritten (final review 17)
+  let picksText = picksRead?.text ?? null;
+  let picksDiverged = false;
   const savePicks = () => {
-    if (usePicks) writePicks(lockDir, picks);
+    if (!usePicks || picksDiverged) return;
+    const written = writePicks(lockDir, picks, picksText);
+    if (written !== null) {
+      picksText = written;
+      return;
+    }
+    picksDiverged = true;
+    pushOnce(
+      'the takes picks changed during this run and were not rewritten: the audio lock and picks.json now differ, so the next --frozen-audio render fails with "unapplied picks" — run tts again',
+    );
   };
   const pickLines: PickLine[] = jobs.map((j) => ({ id: j.id, pickKey: j.pickKey, text: j.text }));
   const scriptArg = shellQuote(relative(process.cwd(), scriptPath) || scriptPath);
@@ -1655,7 +1672,7 @@ export async function synthesizeScript(
       if (decision === 'write') atomicWrite(manifestPath, next);
       else if (decision === 'changed')
         pushOnce('the audio lock changed during this run; not rewritten');
-      return { manifestPath, synthesized: 0, reused: jobs.length, warnings };
+      return { manifestPath, manifest, lockDir, synthesized: 0, reused: jobs.length, warnings };
     }
     // ---------- recordings: align each paragraph once, cut it into sentences ----------
     for (const rec of recorded) {
@@ -2108,7 +2125,7 @@ export async function synthesizeScript(
     aligner.stop();
   }
   save();
-  return { manifestPath, synthesized, reused, warnings };
+  return { manifestPath, manifest, lockDir, synthesized, reused, warnings };
 }
 
 /**
@@ -2147,6 +2164,14 @@ export function loadAudioManifest(
 ): AudioManifest {
   const lockDir = lockDirOverride ?? join(dirname(scriptPath), 'audio', lang);
   const m = JSON.parse(readFileSync(join(lockDir, 'manifest.json'), 'utf8')) as LockManifest;
+  return toAudioManifest(m, lockDir);
+}
+
+/**
+ * A lock as the timeline reads it: sentence id → absolute wav, duration, words. A render takes the
+ * lock synthesizeScript checked (returned), not the file again (final review 8).
+ */
+export function toAudioManifest(m: LockManifest, lockDir: string): AudioManifest {
   const out: AudioManifest = {};
   for (const [id, key] of Object.entries(m.sentences)) {
     const e = m.entries[key];
@@ -2193,8 +2218,9 @@ export function pruneAudio(
 function prunePicks(scriptPath: string, script: Script, lockDir: string, repoRoot: string): string {
   if (!existsSync(picksPath(lockDir))) return 'no picks';
   let file: PicksFile;
+  let read: string | null;
   try {
-    file = readPicks(lockDir);
+    ({ file, text: read } = readPicksAt(lockDir));
   } catch (e) {
     return `picks kept: ${(e as Error).message}`;
   }
@@ -2210,6 +2236,7 @@ function prunePicks(scriptPath: string, script: Script, lockDir: string, repoRoo
       delete file.picks[k];
       n++;
     }
-  if (n > 0) writePicks(lockDir, file);
+  if (n > 0 && writePicks(lockDir, file, read) === null)
+    return 'picks kept: picks.json changed meanwhile (a takes pick?); run audio prune again';
   return `removed ${n} pick(s) no line uses`;
 }

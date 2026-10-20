@@ -148,6 +148,20 @@ export function renderBase(
 }
 
 /**
+ * A snapshot's results (final review 10): `<out-dir>/<output>.<lang>[.draft].snapshot.png` and
+ * `….frames/`, named as the render's results are — a draft never replaces the real one.
+ */
+export function snapshotPaths(
+  outDir: string,
+  output: string,
+  lang: string,
+  draft: boolean,
+): { sheet: string; frames: string } {
+  const base = renderBase(outDir, output, lang, { draft });
+  return { sheet: `${base}.snapshot.png`, frames: `${base}.frames` };
+}
+
+/**
  * A render's work folder (S11 plan 3.7): one per output, language and draft as before, and one
  * per scene pick (always hashed: case-only differences stay apart on case-blind disks).
  */

@@ -69,6 +69,21 @@ runMain(async () => {
     // as a character round reports it (commands.ts roundFailed)
     throw new ExitError(r.code === 130 ? 'round 2 interrupted; finished images are kept' : 'round 2 ended ' + r.code, r.code);
   }
+  if (mode === 'foreign') {
+    // another library's listeners (Remotion's browser) do not hold the signal back
+    for (const sig of ['SIGTERM', 'SIGHUP']) process.on(sig, () => {});
+    console.log('locked');
+    await new Promise((r) => setTimeout(r, 5000));
+    throw new ExitError('the signal was not handled', 1);
+  }
+  if (mode === 'foreign-race') {
+    console.log('locked');
+    setInterval(() => {}, 1000); // the browser keeps the process going
+    // the signal stops what the command waits for (a browser): it fails right after
+    await new Promise((_, reject) =>
+      process.on('SIGTERM', () => setImmediate(() => reject(new Error('browser closed')))),
+    );
+  }
   console.log('locked');
   if (mode === 'throw') throw new ExitError('boom', 1);
   if (mode === 'exit') process.exit(1);
@@ -165,7 +180,7 @@ describe('ending a lock holder', { timeout: 90_000 }, () => {
   });
 
   it('E3 the lock is released only after the server group is gone (signal, stopped, process.exit, re-entered)', async () => {
-    const runs: [string, string | null, Record<string, string>][] = [
+    const runs: [string, NodeJS.Signals | null, Record<string, string>][] = [
       ['server-wait', 'SIGINT', {}],
       ['server-stop', null, {}],
       ['server-exit', null, {}],
@@ -216,6 +231,46 @@ describe('ending a lock holder', { timeout: 90_000 }, () => {
     // the child was stopped by runWatched (SIGTERM to its group) and the command went on to say so
     expect(readFileSync(watched, 'utf8')).toBe('SIGTERM');
     expect(d.out()).toMatch(/round 2 interrupted; finished images are kept/);
+    expect(lockGone(c)).toBe(true);
+  });
+
+  it('E5 SIGTERM while runWatched stops its child: the same message, exit 143', async () => {
+    const watched = join(tmp('watched'), 'log');
+    const c = await ctx({ WATCHED_LOG: watched });
+    const d = start('watched', c);
+    await until(() => existsSync(`${watched}.ready`));
+    d.p.kill('SIGTERM');
+    expect(await d.exit).toBe(143);
+    expect(readFileSync(watched, 'utf8')).toBe('SIGTERM');
+    expect(d.out()).toMatch(/round 2 interrupted; finished images are kept/);
+    expect(lockGone(c)).toBe(true);
+  });
+
+  it('E11 another library listening for SIGTERM / SIGHUP: still 143 / 129', async () => {
+    for (const [sig, code] of [
+      ['SIGTERM', 143],
+      ['SIGHUP', 129],
+    ] as const) {
+      const c = await ctx();
+      const d = start('foreign', c);
+      await until(() => d.out().includes('locked'));
+      const sent = Date.now();
+      d.p.kill(sig);
+      expect(await d.exit).toBe(code);
+      // ended by our handler, not by the command giving up 5 s later
+      expect(Date.now() - sent).toBeLessThan(3000);
+      expect(d.out()).not.toMatch(/not handled/);
+      expect(lockGone(c)).toBe(true);
+    }
+  });
+
+  it('E12 the command fails because of the signal: the signal code wins (143, not 1)', async () => {
+    const c = await ctx();
+    const d = start('foreign-race', c);
+    await until(() => d.out().includes('locked'));
+    d.p.kill('SIGTERM');
+    // whichever ends first (the signal handler or main's error path), the code is the signal's
+    expect(await d.exit).toBe(143);
     expect(lockGone(c)).toBe(true);
   });
 

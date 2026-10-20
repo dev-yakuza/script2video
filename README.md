@@ -4,7 +4,7 @@
 
 Write a Markdown script, get a narrated explainer video — in Korean, English or Japanese, with local open-source TTS. Zoom and highlight your own screenshots as you talk. Reproducible: same script + same environment → same video. YouTube 16:9, Shorts 9:16 from one source.
 
-> **Status:** pre-release (v0.1.0). The script format may still change before 1.0.
+> **Status:** pre-release (0.x). The script format may still change before 1.0.
 
 **Samples** (all assets CC0, made for this project): `videos/sample-ko` (Korean presenter +
 dialogue line), `videos/sample-dialogue-ko` (two characters, reactions, sound effects),
@@ -84,7 +84,10 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | character art: YMM4 import and generation (see below); `--json` on `build --dry-run`, `review` and `missing` for tools                                         |
 
 Run them as `node packages/cli/dist/main.js <command> …`. `S2V_TTS=mock` runs everything with
-synthetic audio (no models), useful for layout work and CI.
+synthetic audio (no models), useful for layout work and CI. `S2V_NO_OPEN=1` opens no page (the
+`takes` and `direct` pages, `pick`, the character pages; `--no-open` does it per command).
+`S2V_TAKES_ALL=6` (development) makes all six takes of every emotion line; the choice stays the
+same. Numbers such as `--fps` and `--workers` are whole numbers (s2v takes whole-number fps).
 
 Each command takes only its own flags; an unknown one is an error (exit 2), and so is an unknown
 `--output`. A sentence for `say` that starts with `-` goes after `--`. `--version --json` gives
@@ -92,6 +95,24 @@ Each command takes only its own flags; an unknown one is an error (exit 2), and 
 pin `id` and stop when it changes.
 `stale_build` says a package's `dist` is older than its source (run `yarn build`). `inspect`'s
 `s2v_version` is the same `id`.
+
+**Exit codes.**
+
+| code  | meaning                                                                                                                                                                                                                                                                        |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0     | done                                                                                                                                                                                                                                                                           |
+| 1     | failed: lint errors, a failing check, `character missing` finding something missing, a script that does not parse (then `--json` prints nothing)                                                                                                                               |
+| 2     | usage or setup: an unknown flag or a bad value (`--fps abc`, `--lang fr`, a `--scenes` id the output lacks, a `capture` URL with an IP address), `character create` writing a `character.yaml` to fill in, a relative `S2V_STATE_DIR`, a lock token of the other kind; no JSON |
+| 73    | the machine is busy (below): the one stderr line starting with `busy (<reason>): ` says why                                                                                                                                                                                    |
+| 74    | another command works on this character: the one stderr line starting with `actor busy: `                                                                                                                                                                                      |
+| 75    | stopped at the memory limit (`--max-memory-gb`); run again to resume                                                                                                                                                                                                           |
+| 128+n | ended by a signal: 130 Ctrl-C (SIGINT), 143 SIGTERM, 129 SIGHUP — for commands holding a lock or running servers, and `capture`; other commands may end by the signal itself (or with 1 while rendering)                                                                       |
+
+**JSON output.** A command's `--json` keys are not renamed. Some commands write snake_case keys
+(`inspect`, `services status`, `--version`, the `index.json` of `snapshot --frames`) and others
+camelCase (`sentences`, the `character` commands, `capture --text`); a new field follows the
+command it is added to, and a new command uses snake_case. Fields may be added: ignore keys you do
+not know. `sentences --json` is an array.
 
 Results go to `out/<script folder>/` (render, snapshot, the `direct` and `takes` pages).
 `--out-dir <dir>` puts them in `<dir>` instead, with the same names below it: a render writes
@@ -110,24 +131,29 @@ each take tens of GB, so s2v runs one of them at a time on this machine. A comma
 (`tts`, `say`, `voice create/check/refs`, `import-recording`, `render` and `snapshot` without
 `--frozen-audio`) takes the machine lock when it first needs a server (a `tts` with nothing to
 synthesize takes none); `voice train` and `audio prune` take it when they start; `character setup`, `create` and a `build` round take it for
-image generation. When another job holds it, the command stops at once with exit 73 and the reason
-on the first line of stderr, `busy (lock|breaking|resident|orphan|changed): …`;
-`s2v services status` says who holds what. `dev` holds the lock for its whole session, and
-`character setup` for the whole setup, downloads included: TTS commands wait until they end.
+image generation. When another job holds it, the command stops at once with exit 73; the reason is
+the one stderr line that starts with `busy (<reason>): `, one of `lock`, `breaking`, `resident`,
+`orphan` or `changed` (the audio lock or the takes picks changed under this run: run it again).
+Read that line only when the exit is 73 (other lines, from the script's checks or a Python step,
+may come before or after it). `s2v services status` says who holds what. `dev` holds the lock for its whole session, and
+`character setup` for the whole setup, downloads included: TTS commands stop with exit 73 until they end.
 `--frozen-audio` renders and snapshots take no lock (they read the audio lock's wav files, so do
-not run `audio prune` meanwhile). A server kept by `tts-server start` is reused by TTS commands, one
+not run `audio prune` meanwhile). A render or snapshot that synthesizes keeps the lock until it
+ends, the video rendering included: render with `--frozen-audio` after `tts` to free the machine
+sooner. A server kept by `tts-server start` is reused by TTS commands, one
 at a time; it holds the lock only while it starts, image generation refuses to start beside it
 (stop it with Ctrl-C in its terminal), and Ctrl-C there warns when a TTS command is still using it
-(exit 130). Commands that write a generated character (`create`, `pick`, `build`, `review` with its
+(exit 130). A TTS command whose `S2V_TTS_PORT` is not the resident server's stops with
+`busy (resident)` instead of loading a second model. Commands that write a generated character (`create`, `pick`, `build`, `review` with its
 checks, `approve`, `redo`, `missing --apply`) take that character's work lock, so two of them never
-change one character at once (exit 74); `build --dry-run --json`, `review --json --no-check` and
+change one character at once (exit 74, with the one stderr line starting with `actor busy: `); `build --dry-run --json`, `review --json --no-check` and
 `missing --json` report the command working on it in `running`. A command killed outright may leave
 a server running (normally the server ends with it): `services status [--json]` lists servers that
 answer the TTS or aligner port (of the current `S2V_TTS_PORT` / `S2V_ALIGNER_PORT`) with no command
 behind them, and how to stop each. Servers or Python started by hand, outside s2v, are not seen by
 the lock.
 
-For tools (Studio's `lock.py` shares the format): the lock is `~/.s2v/heavy.lock.d/` (or
+For tools (a wrapper that takes the same lock must follow this algorithm): the lock is `~/.s2v/heavy.lock.d/` (or
 `$S2V_STATE_DIR`, an absolute path; s2v and the tool must see the same one) with `owner.json`
 `{kind: "tts"|"gen", pid, pid_start, holder, token}`. It is taken by writing `owner.json` into a
 private `heavy.lock.d.new.<rand>/` and renaming that onto `heavy.lock.d` (a rename onto an empty
@@ -185,7 +211,8 @@ does not load or answers other than 2xx is exit 1: no picture, and the JSON says
 Linux the browser needs its sandbox (user namespaces); in a container that cannot give it,
 `S2V_CAPTURE_NO_SANDBOX=1` runs without.
 
-`snapshot --frames` writes `<output>.<lang>.frames/` beside the sheet: a full-size still at every
+`snapshot` writes `<output>.<lang>[.draft].snapshot.png` (a `--draft` snapshot never replaces the
+other one), and `--frames` writes `<output>.<lang>[.draft].frames/` beside the sheet: a full-size still at every
 point the picture changes (the first visual settled, each visual and cue, a character's face and
 its return to the default, stage switches, held motions), at most 12 a scene, numbered over the
 video, and `index.json` with each still's scene, frame, second and reasons plus the s2v id and the
@@ -195,12 +222,12 @@ last run's sheet and stills first; without `--frames` the stills folder is left 
 the script only, not its assets or character art; an interrupted run may leave `<…>.frames.tmp/`.
 
 `inspect --json` is for tools that review videos: it lists outputs, scenes, screen text, voices
-and files, and gives one hash per kind of change (`content`, `voice`, `audio`, one
-`presentation` per output, and the `engine` parts), so a reviewer re-checks only what changed. It
+and files, and gives one hash per kind of change (`content`, `voice`, `audio`,
+`presentation_by_output` with one per output name, and the `engine` parts), so a reviewer re-checks only what changed. It
 refuses scripts with anything the format does not know (a misspelled attribute, a directive
 where it would be shown as text). A hash it cannot compute is `null` with a reason. Compare
 `engine` part by part; a new key in `defaults_*` comes from a new s2v field and changes no
-script hash. When an output draws characters, its `presentation` includes the art of every face it
+script hash. When an output draws characters, its `presentation_by_output` hash includes the art of every face it
 shows (the files each composition reads, by sha256); a face without its pictures makes it `null`.
 Classic single-image characters look the same in every framing.
 
@@ -316,8 +343,10 @@ speaker talking for many paragraphs, half a minute without a listener reacting (
 motion off), and happy or excited lines of a trained persona. They are advice, not errors.
 `--json` prints every note instead of a page (not capped at five per kind), each with its `code`,
 `cast`, `paragraph` (`scene:block`, the start of its sentence ids) and `line`, the last paragraph
-it spans (`toParagraph`, `toLine`), the `listener` that does not react and the `emo`; `audio` says
-how many lines have real audio. Their order means nothing; `message` is for people. It exits 1 when
+it spans (`toParagraph`, `toLine`), the `listener` that does not react and the `emo`; `audio` is an object,
+not a count: `measured` of `total` lines have real audio (the rest are estimated), `stale` lines
+changed since they were synthesized, `current` says the lock's sentence ids are the current plan's,
+and `mock` that this run used `S2V_TTS=mock`. Their order means nothing; `message` is for people. It exits 1 when
 lint fails (with the JSON).
 
 ### Characters
@@ -443,7 +472,7 @@ node packages/cli/dist/main.js character setup        # environment, download, 4
 
 # 1. a folder with character.yaml: describe the design in `kind`
 node packages/cli/dist/main.js character create characters/mina --candidates 4
-#    → four front images to choose from (a review page opens)
+#    → four front images to choose from (a review page opens; --no-open does not open it)
 node packages/cli/dist/main.js character pick characters/mina 2
 
 # 2. the rest, round by round: references → body → poses → expressions → mouth and eye frames

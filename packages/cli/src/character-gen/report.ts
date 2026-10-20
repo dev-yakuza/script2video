@@ -369,5 +369,3 @@ export function reviewReport(
     }),
   };
 }
-
-export type ReviewReport = ReturnType<typeof reviewReport>;

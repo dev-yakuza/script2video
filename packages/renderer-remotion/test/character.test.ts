@@ -196,7 +196,7 @@ describe('resolveFace (flip rule, pivots, offsets)', () => {
     face: string,
     side: 'left' | 'right',
     yaml = BASE,
-    framing: 'full' | 'head' = 'full',
+    framing: Parameters<typeof resolveFace>[2] = 'full',
   ) => resolveFace('/c', spec(yaml), framing, face, side, [W, H]);
 
   it('keeps front art unflipped on both sides, at the same screen pivot', () => {

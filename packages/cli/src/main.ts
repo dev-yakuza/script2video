@@ -27,7 +27,7 @@
  *   s2v voice train <voices/id.yaml> [--lang ko] [--min-emotion 150]   (its trained speaker, about 3 h)
  *   s2v voice refs <script.md> [--refresh]   (reference voices for the consistency checks)
  *   s2v character setup [--max-memory-gb N]   (optional image generation; Apple silicon)
- *   s2v character create <dir> [--candidates 4] [--max-memory-gb N]
+ *   s2v character create <dir> [--candidates 4] [--max-memory-gb N] [--no-open]
  *   s2v character pick <dir> <n>
  *   s2v character build <dir> [--dry-run [--json]] [--layers-only] [--reset-derived] [--max-memory-gb N] [--no-open]
  *   s2v character review <dir> [--json [--no-check]] [--no-open]
@@ -66,7 +66,6 @@ import {
   driftMessage,
   pickScenes,
   type AudioManifest,
-  type Lang,
 } from '@script2video/core';
 import { headlessBrowserPath, renderScenes, type Aspect } from '@script2video/renderer-remotion';
 import { renderedLengthWarning } from './length.js';
@@ -77,7 +76,8 @@ import { dropThumbnail, writePublishFiles, writeSubtitleFiles, writeThumbnail } 
 import { timelineMouths } from './mouth.js';
 import { checkSubtitles } from './check.js';
 import { importCharacter } from './character-import.js';
-import { defaultMemoryLimitGb, ExitError, setupImagegen } from './imagegen.js';
+import { ExitError } from './errors.js';
+import { defaultMemoryLimitGb, setupImagegen } from './imagegen.js';
 import {
   approveItems,
   buildCharacter,
@@ -90,11 +90,13 @@ import {
 import {
   addedText,
   applyMissing,
+  applyMissingFlow,
   findMissing,
   missingFails,
   missingJson,
   printMissing,
   type Added,
+  type MissingReport,
 } from './character-gen/missing.js';
 import { buildPlan, reviewReport } from './character-gen/report.js';
 import { checkDevOutput, dev } from './dev.js';
@@ -114,15 +116,18 @@ import {
 import { pick } from './pick.js';
 import { runResident, say } from './say.js';
 import { clearSnapshot, snapshot, type SnapshotTargets } from './snapshot.js';
-import { loadAudioManifest, pruneAudio, synthesizeScript } from './tts.js';
+import { loadAudioManifest, pruneAudio, synthesizeScript, toAudioManifest } from './tts.js';
 import { listTakes, pickTakes, unpickTakes } from './takes.js';
-import { buildTakesPage, openPage } from './takes-page.js';
+import { buildTakesPage } from './takes-page.js';
+import { openPage } from './html.js';
 import { trainVoice } from './voice-train.js';
 import { voiceRefs } from './voice-refs.js';
 import { inspectScript } from './inspect.js';
 import { directDiagnostics, directHtml, directJson, directManifest } from './direct.js';
 import {
   commandOf,
+  intFlag,
+  langFlag,
   onOff,
   parseFor,
   parseScenesFlag,
@@ -133,7 +138,14 @@ import {
 import { printVersion, versionInfo } from './version.js';
 import { sentencesReport } from './sentences.js';
 import { proxyPlacement, writeProxyPng } from './watermark.js';
-import { cacheDirOf, checkOutDir, outDirOf, renderBase, renderWorkDir } from './paths.js';
+import {
+  cacheDirOf,
+  checkOutDir,
+  outDirOf,
+  renderBase,
+  renderWorkDir,
+  snapshotPaths,
+} from './paths.js';
 import { scenesLint, spokenIn } from './scenes.js';
 import { runCapture } from './capture/index.js';
 import { acquireHeavy } from './heavy-lock.js';
@@ -220,6 +232,9 @@ function memoryLimit(value: string | undefined): number {
   return n;
 }
 
+/** S2V_TAKES_ALL=6 (development, README): all six takes of emotion lines (stage 3 E7). */
+const TAKES_ALL = process.env.S2V_TAKES_ALL === '6';
+
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   if (command === '--version') {
@@ -268,7 +283,7 @@ async function main(): Promise<void> {
     const { values } = parseFor('new', rest);
     const dir = positionals[0];
     if (!dir) usage();
-    const lang = (values.lang ?? 'ko') as Lang;
+    const lang = langFlag(values.lang);
     const script = scaffold(resolve(dir), lang);
     console.error(`created ${script}\nnext: s2v lint ${script} && s2v render ${script} --draft`);
     return;
@@ -375,6 +390,7 @@ async function main(): Promise<void> {
       }
       for (const l of lines) console.log(l);
     } catch (e) {
+      if (e instanceof ExitError) throw e; // busy (changed) stays 73
       console.error(`error: ${(e as Error).message}`);
       process.exit(1);
     }
@@ -383,11 +399,7 @@ async function main(): Promise<void> {
   if (command === 'voice') {
     const [sub, yamlPath, n] = positionals;
     if (!yamlPath) usage();
-    const langOf = (value: string | undefined) => {
-      const lang = (value ?? 'ko') as Lang;
-      if (!['ko', 'ja', 'en'].includes(lang)) usage();
-      return lang;
-    };
+    const langOf = langFlag;
     const log = (m: string) => console.error(m);
     if (sub === 'refs') {
       const { values } = parseFor('voice refs', rest);
@@ -409,7 +421,7 @@ async function main(): Promise<void> {
       const lang = langOf(values.lang);
       await createVoice(resolve(yamlPath), REPO_ROOT, {
         lang,
-        candidates: Math.max(1, Number(values.candidates ?? 3)),
+        candidates: intFlag('candidates', values.candidates ?? '3', 1, 16),
         play: values.play,
         log,
       });
@@ -456,7 +468,11 @@ async function main(): Promise<void> {
       const { values } = parseFor('character create', rest);
       const n = Number(values.candidates ?? 4);
       if (!Number.isInteger(n) || n < 1 || n > 16) usage();
-      await createCharacter(resolve(src), { ...gen(values['max-memory-gb']), candidates: n });
+      await createCharacter(resolve(src), {
+        ...gen(values['max-memory-gb']),
+        candidates: n,
+        open: !values['no-open'],
+      });
       return;
     }
     if (sub === 'pick' && src && items.length === 1) {
@@ -550,18 +566,17 @@ async function main(): Promise<void> {
       const script = parsed.script;
       enrichCast(script, dirname(scriptPath));
       const find = () => findMissing(script, dirname(scriptPath), { repoRoot: REPO_ROOT, log });
-      const reports = find();
-      const added = new Map<string, Added[]>();
-      // S8: the work lock of every character this will write, all taken before any write
-      if (values.apply)
-        acquireActors(reports.filter((x) => x.checked && x.notInSet.length > 0).map((x) => x.dir));
-      if (values.apply)
-        // only characters that were judged (S9b: a skipped or unreadable one has nothing to add)
-        for (const r of reports.filter((x) => x.checked)) {
+      let reports: MissingReport[];
+      let added = new Map<string, Added[]>();
+      if (values.apply) {
+        // S8: the work lock of every character this will write, taken before any write and
+        // judged again under it (final review 16)
+        ({ reports, added } = applyMissingFlow(find, acquireActors, (r) => {
           const a = applyMissing(r);
-          added.set(r.cast, a);
           if (a.length) console.error(`${r.cast}: added ${a.map(addedText).join(', ')}`);
-        }
+          return a;
+        }));
+      } else reports = find();
       const after = values.apply ? find() : reports;
       if (values.json)
         process.stdout.write(`${JSON.stringify(missingJson(after, added), null, 2)}\n`);
@@ -596,6 +611,7 @@ async function main(): Promise<void> {
   switch (command) {
     case 'snapshot': {
       const { values } = parseFor('snapshot', rest);
+      const fps = intFlag('fps', values.fps, 1);
       const rhythmOpts = rhythmOf(values.rhythm);
       const outDir = checkOutDir(outDirOf(path, REPO_ROOT, values['out-dir']), path, REPO_ROOT);
       const script = load(path);
@@ -607,12 +623,13 @@ async function main(): Promise<void> {
         ? join(cacheDirOf(REPO_ROOT, 'draft-audio', path), script.meta.lang)
         : undefined;
       const name = `${outputName}.${script.meta.lang}`;
+      const paths = snapshotPaths(outDir, outputName, script.meta.lang, draft);
       const targets: SnapshotTargets = {
-        sheet: join(outDir, `${name}.snapshot.png`),
+        sheet: paths.sheet,
         ...(values.frames
           ? {
               frames: {
-                dir: join(outDir, `${name}.frames`),
+                dir: paths.frames,
                 meta: {
                   output: outputName,
                   lang: script.meta.lang,
@@ -629,6 +646,7 @@ async function main(): Promise<void> {
       // Snapshot needs the timeline (audio durations + word timings): synthesize what is missing,
       // or with --frozen-audio take the lock as it is (S6).
       const tts = await synthesizeScript(path, script, REPO_ROOT, {
+        takesAll: TAKES_ALL,
         asr: false,
         draft,
         frozen: values['frozen-audio'],
@@ -639,8 +657,8 @@ async function main(): Promise<void> {
       const { timeline } = buildTimeline(
         script,
         outputName,
-        loadAudioManifest(path, script.meta.lang, lockDir),
-        Number(values.fps),
+        toAudioManifest(tts.manifest, tts.lockDir),
+        fps,
         rhythmOpts,
       );
       // its own work folder: a render of the same output may run beside it (S6)
@@ -768,6 +786,7 @@ async function main(): Promise<void> {
       const script = load(path);
       const started = Date.now();
       const result = await synthesizeScript(path, script, REPO_ROOT, {
+        takesAll: TAKES_ALL,
         asr: !values['no-asr'],
         recheck: values.recheck,
         ...(values.retry ? { retry: values.retry } : {}),
@@ -781,6 +800,7 @@ async function main(): Promise<void> {
     }
     case 'direct': {
       const { values } = parseFor('direct', rest);
+      const fps = intFlag('fps', values.fps, 1);
       const rhythmOpts = rhythmOf(values.rhythm);
       // S9b: --json writes no page, so the page's flags are not used
       if (values.json && (values['out-dir'] !== undefined || values['no-open']))
@@ -795,7 +815,7 @@ async function main(): Promise<void> {
       const dm = directManifest(path, script, REPO_ROOT);
       const plan = directPlan(script, outputName, dm.manifest, {
         ...rhythmOpts,
-        fps: Number(values.fps),
+        fps: fps,
       });
       if (values.json) {
         process.stdout.write(`${JSON.stringify(directJson(plan, dm), null, 2)}\n`);
@@ -820,6 +840,7 @@ async function main(): Promise<void> {
     }
     case 'timeline': {
       const { values } = parseFor('timeline', rest);
+      const fps = intFlag('fps', values.fps, 1);
       const rhythmOpts = rhythmOf(values.rhythm);
       const script = load(path);
       profileOf(script, values.output);
@@ -827,7 +848,7 @@ async function main(): Promise<void> {
         script,
         values.output,
         loadAudioManifest(path, script.meta.lang),
-        Number(values.fps),
+        fps,
         rhythmOpts,
       );
       for (const i of issues) console.error(`warning: ${i.sentenceId}: ${i.message}`);
@@ -843,6 +864,14 @@ async function main(): Promise<void> {
     }
     case 'render': {
       const { values } = parseFor('render', rest);
+      const fps = intFlag('fps', values.fps, 1);
+      const workers =
+        values.workers === undefined ? undefined : intFlag('workers', values.workers, 1);
+      // a frozen render synthesizes and hears nothing (final review 9)
+      if (values['frozen-audio'] && (values.recheck || values['no-asr']))
+        throw new UsageError(
+          's2v render: --frozen-audio synthesizes nothing: --recheck and --no-asr do nothing with it',
+        );
       const rhythmOpts = rhythmOf(values.rhythm);
       const idleFlag = onOff('idle', values.idle);
       if (values.watermark !== undefined && values.watermark !== 'proxy')
@@ -890,6 +919,7 @@ async function main(): Promise<void> {
       // the whole script, not the pick: the lock keeps every sentence (S11 plan 3.3; CI checks
       // that a frozen --scenes render leaves the lock's bytes as they were)
       const tts = await synthesizeScript(path, full, REPO_ROOT, {
+        takesAll: TAKES_ALL,
         asr: !values['no-asr'],
         recheck: values.recheck,
         frozen: values['frozen-audio'],
@@ -902,8 +932,8 @@ async function main(): Promise<void> {
       const { timeline, issues } = buildTimeline(
         script,
         outputName,
-        loadAudioManifest(path, script.meta.lang, lockDir),
-        Number(values.fps),
+        toAudioManifest(tts.manifest, tts.lockDir),
+        fps,
         rhythmOpts,
       );
       for (const i of issues) log(`warning: ${i.sentenceId}: ${i.message}`);
@@ -942,7 +972,7 @@ async function main(): Promise<void> {
         ...(draft ? { scale: 0.5 } : {}),
         idle,
         noCache: values['no-cache'],
-        ...(values.workers ? { concurrency: Math.max(1, Number(values.workers)) } : {}),
+        ...(workers ? { concurrency: workers } : {}),
         log,
       });
       log(

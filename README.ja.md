@@ -4,7 +4,7 @@
 
 Markdown で台本を書くと、ナレーション付きの解説動画ができます。韓国語・英語・日本語に対応し、音声はローカルで動くオープンソースの TTS で合成します。話すタイミングに合わせて、自分で撮ったスクリーンショットを拡大・強調できます。同じ台本と同じ環境なら同じ動画になります。1 つの台本から YouTube（16:9）と Shorts（9:16）を作れます。
 
-> **ステータス:** 正式公開前（v0.1.0）。1.0 までは台本の形式が変わる可能性があります。
+> **ステータス:** 正式公開前（0.x）。1.0 までは台本の形式が変わる可能性があります。
 
 **サンプル**（素材はすべてこのプロジェクト用に作った CC0）: `videos/sample-ko`（韓国語の進行役 + 会話 1 行）、
 `videos/sample-dialogue-ko`（キャラクター 2 人、リアクション、効果音）、`videos/sample-en`（英語、ダークテーマ、チャートと比較）。
@@ -83,13 +83,34 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | キャラクターの絵: YMM4 の取り込みと生成（下記）；ツール向けの `--json`（`build --dry-run`、`review`、`missing`）                                |
 
 `node packages/cli/dist/main.js <command> …` の形で実行します。`S2V_TTS=mock` を付けると、モデルなしで
-合成した仮の音声で全体を動かせるので、レイアウト作業や CI に便利です。
+合成した仮の音声で全体を動かせるので、レイアウト作業や CI に便利です。`S2V_NO_OPEN=1` ならページを
+開きません(`takes`・`direct` のページ、`pick`、キャラクターのページ。コマンドごとには `--no-open`)。
+`S2V_TAKES_ALL=6`(開発用)は感情のある文ごとに take を 6 つすべて作ります(選ばれる結果は同じ)。`--fps`・
+`--workers` などの数は整数です(s2v は整数の fps だけを受け取ります)。
 
 各コマンドは自分のフラグだけを受け取り、知らないフラグと知らない `--output` はエラーです（exit 2）。`say` の文が `-` で
 始まるときは `--` の後に書きます。`--version --json` は `id`（semver + s2v が実行するコードと固定データの
 ハッシュ、未コミットの変更を含む）を出します。ツールは `id` を固定し、変わったら止まります。`stale_build` は
 どれかのパッケージの `dist` がソースより古いという意味です（`yarn build`）。`inspect` の `s2v_version` も
 同じ `id` です。
+
+**終了コード。**
+
+| コード | 意味                                                                                                                                                                                                                                                       |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0      | 完了                                                                                                                                                                                                                                                       |
+| 1      | 失敗: lint のエラー、失敗した検査、`character missing` が足りないものを見つけた、解析できない台本(このとき `--json` は何も出さない)                                                                                                                        |
+| 2      | 使い方または準備: 知らないフラグや不正な値(`--fps abc`、`--lang fr`、出力にない `--scenes` の id、IP アドレスの `capture` URL)、`character create` が記入用の `character.yaml` を書いた、相対パスの `S2V_STATE_DIR`、種類の違うロックのトークン。JSON なし |
+| 73     | マシンが使用中(下記): `busy (<reason>): ` で始まる stderr の 1 行が理由                                                                                                                                                                                    |
+| 74     | ほかのコマンドがこのキャラクターを作業中: `actor busy: ` で始まる stderr の 1 行                                                                                                                                                                           |
+| 75     | メモリの上限(`--max-memory-gb`)で停止。もう一度実行すると続きから                                                                                                                                                                                          |
+| 128+n  | シグナルで終了: 130 Ctrl-C(SIGINT)、143 SIGTERM、129 SIGHUP — ロックを持つかサーバーを起動したコマンドと `capture`。ほかのコマンドはシグナルそのもので終わることがある(レンダリング中なら 1)                                                               |
+
+**JSON 出力。** コマンドの `--json` のキー名は変えません。snake_case のキーを書くコマンド(`inspect`、
+`services status`、`--version`、`snapshot --frames` の `index.json`)と camelCase のコマンド(`sentences`、
+`character` のコマンド、`capture --text`)があります。新しい項目はそのコマンドの書き方に従い、新しい
+コマンドは snake_case を使います。項目は増えることがあるので、知らないキーは無視してください。
+`sentences --json` は配列です。
 
 成果物は `out/<台本フォルダ>/` にできます（render、snapshot、`direct`・`takes` のページ）。`--out-dir <dir>` を
 指定すると同じ名前で `<dir>` の下に書きます。render は `<output>.<lang>[.draft].{mp4,srt,vtt,description.md}` と、作ったときだけ `.chapters.txt`・`.thumbnail.png` を書き、作らなかったほうは前回のファイルを消します（ほかの出力、draft とそうでないほう、snapshot のファイルには触れません）。0 以外のコードで終わった
@@ -103,23 +124,27 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 s2v はこのマシンで一度に一つだけ動かします。合成するコマンド(`tts`、`say`、`voice create/check/refs`、
 `import-recording`、`--frozen-audio` なしの `render`・`snapshot`)はサーバーが最初に必要になったときに
 マシンのロックを取り(合成するものがない `tts` は取りません)、`voice train` と `audio prune` は始めるときに取り、`character setup`・`create`・
-`build` のラウンドは画像生成のために取ります。ほかの処理が持っていればすぐに exit 73 で止まり、stderr の
-1 行目に理由 `busy (lock|breaking|resident|orphan|changed): …` を出します。誰が何を持っているかは
+`build` のラウンドは画像生成のために取ります。ほかの処理が持っていればすぐに exit 73 で止まり、理由は stderr の
+`busy (<reason>): ` で始まる 1 行です(`lock`、`breaking`、`resident`、`orphan`、`changed` — `changed` は
+この実行中に音声ロックか takes の pick が変わったので、もう一度実行)。その行は exit が 73 のときだけ
+読んでください(台本の検査や Python の段階のほかの行が前後に出ることがあります)。誰が何を持っているかは
 `s2v services status` が示します。`dev` はセッションの間ずっと、`character setup` はダウンロードを含む
-セットアップの間ずっとロックを持ちます: その間 TTS のコマンドは終わるまで待つ必要があります。
+セットアップの間ずっとロックを持ちます: その間 TTS のコマンドは終わるまで exit 73 で止まります。
 `--frozen-audio` のレンダー・スナップショットはロックを取りません(音声ロックの wav を読むので、その間は
-`audio prune` を実行しないでください)。`tts-server start` で起動したサーバーは TTS コマンドが一つずつ
+`audio prune` を実行しないでください)。合成する render・snapshot は動画のレンダリングが終わるまで
+ロックを持ちます: マシンを早く空けるには `tts` の後に `--frozen-audio` でレンダーしてください。`tts-server start` で起動したサーバーは TTS コマンドが一つずつ
 再利用します。起動している間だけロックを持ち、その横では画像生成が始まらず(その端末で Ctrl-C で止めて
-ください)、Ctrl-C のときに TTS コマンドがまだ使っていれば警告します(exit 130)。生成キャラクターを書く
+ください)、Ctrl-C のときに TTS コマンドがまだ使っていれば警告します(exit 130)。`S2V_TTS_PORT` が常駐サーバーのポートと違う TTS コマンドは、2 つ目のモデルを読み込まずに `busy (resident)` で
+止まります。生成キャラクターを書く
 コマンド(`create`、`pick`、`build`、検査をやり直す `review`、`approve`、`redo`、`missing --apply`)は
-そのキャラクターの作業ロックを取り、一つのキャラクターを同時に変えません(exit 74)。
+そのキャラクターの作業ロックを取り、一つのキャラクターを同時に変えません(exit 74、`actor busy: ` で始まる stderr の 1 行)。
 `build --dry-run --json`、`review --json --no-check`、`missing --json` は作業中のコマンドを `running` に
 出します。強制終了されたコマンドはサーバーを残すことがあります(普通は一緒に終わります):
 `services status [--json]` は TTS・aligner のポート(今の `S2V_TTS_PORT` / `S2V_ALIGNER_PORT`)に応答する
 のに後ろにコマンドがいないサーバーと、その止め方を示します。s2v の外で手で起動したサーバーや Python は
 ロックからは見えません。
 
-ツール向け(Studio の `lock.py` と同じ形式): ロックは `~/.s2v/heavy.lock.d/`(または絶対パスの
+ツール向け(同じロックを取るラッパーはこのアルゴリズムに従うこと): ロックは `~/.s2v/heavy.lock.d/`(または絶対パスの
 `$S2V_STATE_DIR`。s2v とツールが同じ場所を見ること)で、`owner.json` は
 `{kind: "tts"|"gen", pid, pid_start, holder, token}` です。非公開の `heavy.lock.d.new.<rand>/` に
 `owner.json` を書き、そのフォルダーを `heavy.lock.d` へ rename して取ります(空のフォルダーへの rename は
@@ -152,14 +177,15 @@ JSON の `blocked` に記します（WebSocket は `websockets` に。ワーカ�
 ブラウザにサンドボックス（ユーザー名前空間）が必要です。それを用意できないコンテナでは
 `S2V_CAPTURE_NO_SANDBOX=1` でサンドボックスなしで実行します。
 
-`snapshot --frames` は並べた一枚の隣に `<output>.<lang>.frames/` を書きます。画面が変わる時点（最初の画が落ち着いた後、画と cue ごと、キャラクターの表情と既定の表情に戻るとき、舞台の入れ替え、保たれる動き）ごとに原寸の静止画をシーンあたり最大 12 枚、動画全体の通し番号で、そして静止画ごとのシーン・フレーム・秒・理由と s2v id、台本の sha256 を記した `index.json` を書きます。静止画のキャラクターは休んだ姿勢です（呼吸・まばたき・うなずきなし）。実行は前回の並べた一枚と静止画を先に消します。`--frames` なしで実行すると静止画フォルダはそのままです。`--frozen-audio` は音声 lock をそのまま使い、音声のない文があれば失敗します。`script_sha256` は台本だけを見て、素材とキャラクターの絵は見ません。中断した実行は `<…>.frames.tmp/` を残すことがあります。
+`snapshot` は `<output>.<lang>[.draft].snapshot.png` を書きます(`--draft` のスナップショットはもう一方を上書きしません)。
+`--frames` は並べた一枚の隣に `<output>.<lang>[.draft].frames/` を書きます。画面が変わる時点（最初の画が落ち着いた後、画と cue ごと、キャラクターの表情と既定の表情に戻るとき、舞台の入れ替え、保たれる動き）ごとに原寸の静止画をシーンあたり最大 12 枚、動画全体の通し番号で、そして静止画ごとのシーン・フレーム・秒・理由と s2v id、台本の sha256 を記した `index.json` を書きます。静止画のキャラクターは休んだ姿勢です（呼吸・まばたき・うなずきなし）。実行は前回の並べた一枚と静止画を先に消します。`--frames` なしで実行すると静止画フォルダはそのままです。`--frozen-audio` は音声 lock をそのまま使い、音声のない文があれば失敗します。`script_sha256` は台本だけを見て、素材とキャラクターの絵は見ません。中断した実行は `<…>.frames.tmp/` を残すことがあります。
 
 `inspect --json` は動画を検収するツール向けです。出力、シーン、画面の文字、声、ファイルの一覧と、変更の
-種類ごとのハッシュ（`content`、`voice`、`audio`、出力ごとの `presentation`、`engine` の構成要素）を出すので、
+種類ごとのハッシュ（`content`、`voice`、`audio`、出力名ごとに一つの `presentation_by_output`、`engine` の構成要素）を出すので、
 変わった部分だけを検収し直せます。形式にないもの（綴りを誤った属性、文字として表示される位置の指示）が
 ある台本は拒否します。計算できないハッシュは理由付きで `null` です。`engine` は構成要素ごとに比べてください。
 `defaults_*` に新しいキーが増えたのは s2v に新しい項目が加わったためで、台本のハッシュには影響しません。
-キャラクターを描く出力の `presentation` には、その出力が見せるすべての face の絵（合成が読むファイルの
+キャラクターを描く出力の `presentation_by_output` のハッシュには、その出力が見せるすべての face の絵（合成が読むファイルの
 sha256）が入り、絵がない face があると `null` になります。1 枚絵（classic）のキャラクターは framing に
 関係なく同じ絵です。
 
@@ -269,7 +295,9 @@ wav のパスとともにテキストで表示します。`s2v takes pick <scrip
 エラーではなく助言です。
 `--json` はページの代わりにノートすべて（種類ごとに 5 件で切らない）を出します。ノートごとに `code`、`cast`、
 `paragraph`（`scene:block`、その段落の文 id の先頭）と `line`、範囲の最後の段落（`toParagraph`、`toLine`）、
-反応しない `listener`、`emo` があり、`audio` は実際の音声がある文の数を示します。順序に意味はなく、
+反応しない `listener`、`emo` があり、`audio` は数ではなくオブジェクトです: `total` 文のうち
+`measured` 文に実際の音声があり(残りは推定)、`stale` は合成後に変わった文の数、`current` はロックの文 id の集合が
+今の計画と同じか、`mock` はこの実行が `S2V_TTS=mock` を使ったかを示します。順序に意味はなく、
 `message` は人向けです。lint が失敗すると JSON を出して exit 1 で終わります。
 
 ### キャラクター
@@ -387,7 +415,7 @@ node packages/cli/dist/main.js character setup        # 環境、ダウンロー
 
 # 1. character.yaml のあるフォルダ: `kind` にデザインを書きます
 node packages/cli/dist/main.js character create characters/mina --candidates 4
-#    → 選ぶための正面画像 4 枚（確認ページが開きます）
+#    → 選ぶための正面画像 4 枚（確認ページが開きます。--no-open なら開きません）
 node packages/cli/dist/main.js character pick characters/mina 2
 
 # 2. 残りはラウンドごとに: 基準 → 体 → ポーズ → 表情 → 口・目のフレーム

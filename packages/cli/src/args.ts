@@ -4,7 +4,7 @@
  * missing from the table does not compile.
  */
 import { parseArgs, type ParseArgsOptionDescriptor } from 'node:util';
-import { SCENE_ID, type OutputProfile, type Script } from '@script2video/core';
+import { SCENE_ID, type Lang, type OutputProfile, type Script } from '@script2video/core';
 
 export const OPTIONS = {
   'no-asr': { type: 'boolean', default: false },
@@ -84,7 +84,7 @@ export const FLAGS = {
   'voice train': ['lang', 'min-emotion'],
   'voice refs': ['refresh'],
   'character setup': ['max-memory-gb'],
-  'character create': ['candidates', 'max-memory-gb'],
+  'character create': ['candidates', 'max-memory-gb', 'no-open'],
   'character pick': [],
   'character build': [
     'dry-run',
@@ -217,6 +217,29 @@ export function onOff(flag: string, value: string | undefined): boolean | undefi
   return value === 'on';
 }
 
+/**
+ * A whole-number flag (final review 9): `--fps`, `--workers`, `--candidates`. Anything else, or
+ * one out of range, is a usage error (exit 2) before anything runs.
+ */
+export function intFlag(flag: string, value: string, min: number, max?: number): number {
+  const n = /^-?\d+$/.test(value.trim()) ? Number(value) : NaN;
+  const range = max === undefined ? `at least ${min}` : `from ${min} to ${max}`;
+  if (!Number.isSafeInteger(n) || n < min || (max !== undefined && n > max))
+    throw new UsageError(
+      `--${flag} takes a whole number ${range}, not "${value}"${flag === 'fps' ? ' (s2v takes whole-number fps)' : ''}`,
+    );
+  return n;
+}
+
+/** `--lang`: ko, ja or en (default ko). */
+export function langFlag(value: string | undefined): Lang {
+  const lang = value ?? 'ko';
+  if (!LANGS.includes(lang as Lang))
+    throw new UsageError(`--lang takes ${LANGS.join(', ')}, not "${lang}"`);
+  return lang as Lang;
+}
+const LANGS: readonly Lang[] = ['ko', 'ja', 'en'];
+
 /** An output of the script, or a usage error naming the ones it has (S11 plan 3.9: exit 2). */
 export function profileOf(script: Script, name: string): OutputProfile {
   const profile = script.meta.outputs[name];
@@ -273,7 +296,7 @@ export const USAGE = [
   's2v voice train <voices/id.yaml> [--lang ko] [--min-emotion 150]   (its trained speaker, about 3 h)',
   's2v voice refs <script.md> [--refresh]   (reference voices for the consistency checks)',
   's2v character setup [--max-memory-gb N]   (optional image generation; Apple silicon)',
-  's2v character create <dir> [--candidates 4] [--max-memory-gb N]',
+  's2v character create <dir> [--candidates 4] [--max-memory-gb N] [--no-open]',
   's2v character pick <dir> <n>',
   's2v character build <dir> [--dry-run [--json]] [--layers-only] [--reset-derived] [--max-memory-gb N] [--no-open]',
   's2v character review <dir> [--json [--no-check]] [--no-open]',

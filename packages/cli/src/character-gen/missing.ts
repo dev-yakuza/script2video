@@ -322,3 +322,33 @@ export function missingJson(reports: MissingReport[], added: Map<string, Added[]
 /** Whether `character missing` fails: something to fix, unknown, or not judged. */
 export const missingFails = (reports: MissingReport[]) =>
   reports.some((r) => blocksMissing(r) || (r.checked && (missingCount(r) > 0 || !r.managed)));
+
+/**
+ * `character missing --apply` (final review 16): judge, take the work lock of every character
+ * that needs additions, judge again under the locks, and repeat while that finds more characters to
+ * lock; then apply the last judgment to the locked characters only. A busy character (74) stops it
+ * before anything is written. Characters that need nothing are not locked (nothing is written in
+ * them, not even a .gitignore).
+ */
+export function applyMissingFlow(
+  find: () => MissingReport[],
+  acquire: (dirs: string[]) => void,
+  apply: (r: MissingReport) => Added[],
+): { reports: MissingReport[]; added: Map<string, Added[]> } {
+  const needs = (rs: MissingReport[]) =>
+    rs.filter((x) => x.checked && x.notInSet.length > 0).map((x) => x.dir);
+  const locked = new Set<string>();
+  let reports = find();
+  for (;;) {
+    const more = [...new Set(needs(reports))].filter((d) => !locked.has(d));
+    if (more.length === 0) break;
+    acquire(more);
+    for (const d of more) locked.add(d);
+    reports = find();
+  }
+  const added = new Map<string, Added[]>();
+  // only characters that were judged (S9b: a skipped or unreadable one has nothing to add)
+  for (const r of reports.filter((x) => x.checked && locked.has(x.dir)))
+    added.set(r.cast, apply(r));
+  return { reports, added };
+}

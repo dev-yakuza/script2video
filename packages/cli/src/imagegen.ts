@@ -24,6 +24,7 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { ExitError } from './errors.js';
 import { acquireHeavy } from './heavy-lock.js';
+import { noteSignal, watchChild } from './shutdown.js';
 import { genPreflight } from './services-status.js';
 
 export const IMAGEGEN_DIR = 'imagegen';
@@ -148,6 +149,8 @@ export interface WatchResult {
   code: number;
   peakGb: number;
   stoppedForMemory: boolean;
+  /** Stopped by a signal to this process (the exit code is then 128 + n, set by shutdown.ts). */
+  interrupted: boolean;
 }
 
 /**
@@ -186,13 +189,15 @@ export function runWatched(cmd: string, args: string[], opts: WatchOptions): Pro
     signalGroup('SIGTERM');
     kill ??= setTimeout(() => signalGroup('SIGKILL'), graceMs);
   };
-  const onSignal = () => {
+  const onSignal = (sig: NodeJS.Signals) => {
+    noteSignal(sig);
     if (interrupted) signalGroup('SIGKILL');
     interrupted = true;
     stop();
   };
   const onExit = () => signalGroup('SIGKILL');
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+  const unwatch = watchChild();
   for (const sig of signals) process.on(sig, onSignal);
   process.on('exit', onExit);
   child.stdin?.on('error', () => {}); // EPIPE when the child exits first
@@ -231,6 +236,7 @@ export function runWatched(cmd: string, args: string[], opts: WatchOptions): Pro
       closed = true;
       clearInterval(timer);
       if (kill) clearTimeout(kill);
+      unwatch();
       for (const sig of signals) process.off(sig, onSignal);
       process.off('exit', onExit);
     };
@@ -249,12 +255,15 @@ export function runWatched(cmd: string, args: string[], opts: WatchOptions): Pro
           : interrupted
             ? 130
             : (code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1));
-      resolve({ code: exit, peakGb: peak, stoppedForMemory: stopped && !finished });
+      resolve({
+        code: exit,
+        peakGb: peak,
+        stoppedForMemory: stopped && !finished,
+        interrupted: interrupted && !finished,
+      });
     });
   });
 }
-
-export { ExitError } from './errors.js';
 
 /** Exit code of a Python step for a bad round or a broken environment (run.py). */
 export const EXIT_USAGE = 2;

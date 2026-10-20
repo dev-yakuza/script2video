@@ -26,7 +26,9 @@ import { mockSynthesize } from '../src/mock-tts.js';
 import { readSpeaker } from '../src/persona.js';
 import { ALIGNER, Service, TTS_SERVER } from '../src/services.js';
 import { trainVoice } from '../src/voice-train.js';
-import { BusyError } from '../src/heavy-lock.js';
+import { BusyError, writeResident } from '../src/heavy-lock.js';
+import { resetLocksForTests } from '../src/locks-reset.js';
+import { signalledBy } from '../src/shutdown.js';
 import { livePid, writeOwner } from './lock-helpers.js';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -61,6 +63,11 @@ if (cmd === 'train') {
   }));
   console.log('******** model banner');
   console.log(JSON.stringify({ event: 'epoch', epoch: 7, val: 2.15 }));
+}
+if (cmd === 'check' && process.env.FAKE_TRAINER_HANG) {
+  // stopped by s2v (SIGTERM to the group) while it runs
+  writeFileSync(process.env.FAKE_TRAINER_HANG, '');
+  setTimeout(() => {}, 30000);
 }
 if (cmd === 'check' && process.env.FAKE_TRAINER_FAIL) {
   console.log(JSON.stringify({ event: 'error', message: 'the training input differs' }));
@@ -170,8 +177,6 @@ describe('s2v voice train', { timeout: 300_000 }, () => {
     stub = stubs(root);
     process.env.S2V_TTS_PORT = String(await listen(stub.tts));
     process.env.S2V_ALIGNER_PORT = String(await listen(stub.aligner));
-    process.env.S2V_TRAIN_SHARED_SERVERS = '1';
-    process.env.S2V_TRAIN_CMD = JSON.stringify([process.execPath, join(root, 'fake-trainer.mjs')]);
     process.env.FAKE_TRAINER_LOG = trainerLog;
     delete process.env.S2V_TTS;
   });
@@ -183,7 +188,7 @@ describe('s2v voice train', { timeout: 300_000 }, () => {
     Object.assign(process.env, env);
   });
 
-  const train = (minEmotion: number, busy: string | null = null) => {
+  const train = (minEmotion: number, busy: string | null = null, sharedServers = true) => {
     const logs: string[] = [];
     return {
       logs,
@@ -193,6 +198,9 @@ describe('s2v voice train', { timeout: 300_000 }, () => {
         log: (m) => logs.push(m),
         // not the machine's processes: other tests may run a stand-in imagegen python meanwhile
         imagegenBusy: async () => busy,
+        trainer: { cmd: process.execPath, args: [join(root, 'fake-trainer.mjs')] },
+        // the stub servers answer on the ports: not someone else's servers
+        sharedServers,
       }),
     };
   };
@@ -217,10 +225,82 @@ describe('s2v voice train', { timeout: 300_000 }, () => {
     }
   });
 
-  it('does not start while image generation runs (A6)', async () => {
-    await expect(train(0, '123 python imagegen/run.py').run).rejects.toThrow(
-      /image generation is running \(123 python imagegen\/run.py\)/,
+  it('does not start while image generation runs (A6): busy (orphan), 73', async () => {
+    const err = await train(0, '123 python imagegen/run.py').run.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BusyError);
+    expect((err as BusyError).reason).toBe('orphan');
+    expect((err as BusyError).exitCode).toBe(73);
+    expect((err as Error).message).toMatch(
+      /^busy \(orphan\): image generation is running outside any s2v lock \(123 python imagegen\/run.py\)/,
     );
+  });
+
+  it('a resident tts-server or an unowned server on the ports: busy (resident|orphan), 73', async () => {
+    const p = livePid();
+    writeResident({
+      pid: p.pid,
+      pid_start: p.start,
+      port: 1,
+      server_pgid: null,
+      id: TTS_SERVER.id,
+      wrapper_version: TTS_SERVER.wrapper,
+      started: new Date().toISOString(),
+    });
+    writeFileSync(trainerLog, '');
+    try {
+      const err = await train(0).run.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BusyError);
+      expect((err as BusyError).reason).toBe('resident');
+      expect((err as BusyError).exitCode).toBe(73);
+      expect((err as Error).message).toMatch(/before training/);
+    } finally {
+      rmSync(join(process.env.S2V_STATE_DIR!, 'resident.json'), { force: true });
+      p.kill();
+    }
+    // the stub servers, seen as servers no s2v command owns
+    const err = await train(0, null, false).run.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BusyError);
+    expect((err as BusyError).reason).toBe('orphan');
+    expect(readFileSync(trainerLog, 'utf8')).toBe('');
+  });
+
+  it("the trainer's own 2 or 137 is not s2v's usage or signal code", async () => {
+    process.env.FAKE_TRAINER_FAIL = '1';
+    try {
+      for (const code of ['2', '137']) {
+        process.env.FAKE_TRAINER_CODE = code;
+        const err = await train(0).run.catch((e: unknown) => e);
+        expect((err as Error).message).toMatch(new RegExp(`\\(exit ${code}\\)`));
+        expect((err as { exitCode: number }).exitCode).toBe(1);
+      }
+    } finally {
+      delete process.env.FAKE_TRAINER_FAIL;
+      delete process.env.FAKE_TRAINER_CODE;
+    }
+  });
+
+  it("a signal while the trainer runs: interrupted, and the exit code is the signal's", async () => {
+    for (const [sig, code] of [
+      ['SIGINT', 130],
+      ['SIGTERM', 143],
+    ] as const) {
+      const ready = join(root, `hang-${sig}`);
+      process.env.FAKE_TRAINER_HANG = ready;
+      try {
+        const t = train(0);
+        const until = Date.now() + 20_000;
+        while (!existsSync(ready) && Date.now() < until)
+          await new Promise((r) => setTimeout(r, 20));
+        process.emit(sig);
+        const err = await t.run.catch((e: unknown) => e);
+        expect((err as Error).message).toMatch(/interrupted; run again to resume/);
+        expect(signalledBy()).toBe(sig);
+        expect(process.exitCode).toBe(code);
+      } finally {
+        delete process.env.FAKE_TRAINER_HANG;
+        resetLocksForTests();
+      }
+    }
   });
 
   it('S8: refuses at once while another job holds the machine (73), before any data', async () => {
