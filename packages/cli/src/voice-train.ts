@@ -42,6 +42,7 @@ import { measureTrainClip, TRAIN_MEASURE_VERSION } from './train-data.js';
 import { ALIGN_VERSION } from './tts.js';
 import { createReference, embed, synthesisBody, type RefVoice } from './voice-refs.js';
 import { atomicWrite } from './atomic.js';
+import { acquireHeavy } from './heavy-lock.js';
 
 const run = promisify(execFile);
 
@@ -118,6 +119,8 @@ export async function trainVoice(
   );
 
   // ---------- 1. start checks ----------
+  // S8: the machine lock for the whole run (data, training, reference), exit 73 when busy
+  acquireHeavy('tts');
   const busy = await (opts.imagegenBusy ?? imagegenRunning)();
   if (busy)
     throw new Error(`image generation is running (${busy}); train when it is done (A6: not both)`);
@@ -534,7 +537,8 @@ export async function trainVoice(
       if (r.code !== 0)
         throw new ExitError(
           `${what} failed${failed ? `: ${failed}` : ''} (exit ${r.code})`,
-          r.code || 1,
+          // the trainer's own code must not read as s2v's busy (73, 74) or memory (75) codes
+          [73, 74, 75].includes(r.code) ? 1 : r.code || 1,
         );
     };
     log(`${stage}: encoding ${clips.length} clips ...`);

@@ -20,7 +20,9 @@ import {
   runRound,
   type RoundJob,
 } from '../imagegen.js';
-import { ALIGNER, Service, TTS_SERVER } from '../services.js';
+import { acquireActor } from '../actor-lock.js';
+import { acquireHeavy } from '../heavy-lock.js';
+import { genPreflight } from '../services-status.js';
 import {
   loadGraph,
   MIN_PER_IMAGE,
@@ -73,11 +75,9 @@ mirror: true
 
 /** Refuse to start while another big model is loaded, and warn about swap / huge processes (C15). */
 export async function memoryPreflight(repoRoot: string, log: (m: string) => void): Promise<void> {
-  for (const spec of [TTS_SERVER, ALIGNER])
-    if (await new Service(spec, repoRoot).health())
-      throw new Error(
-        `${spec.id} is running on port ${spec.port}: stop it before generating (both need tens of GB)`,
-      );
+  // S8: the machine lock first (exit 73 while anything heavy runs), then what it cannot see
+  acquireHeavy('gen');
+  await genPreflight(repoRoot);
   if (process.platform !== 'darwin') return;
   try {
     const { stdout } = await run('sysctl', ['-n', 'vm.swapusage']);
@@ -191,6 +191,7 @@ export async function createCharacter(
   opts: GenOptions & { candidates: number },
 ): Promise<void> {
   const yaml = join(dir, CHARACTER_YAML);
+  acquireActor(dir);
   if (!existsSync(yaml)) {
     mkdirSync(dir, { recursive: true });
     writeFileSync(yaml, TEMPLATE);
@@ -247,6 +248,7 @@ export async function createCharacter(
 }
 
 export function pickCandidate(dir: string, n: string, log: (m: string) => void): void {
+  acquireActor(dir);
   const g = loadGraph(dir);
   const c = g.prov.candidates[n];
   const from = join(dir, WORK, 'candidates', `${n}.png`);
@@ -428,6 +430,7 @@ export async function buildCharacter(
     printBuildPlan(buildPlan(dir, opts.repoRoot, log), dir, log);
     return { failed: [] };
   }
+  acquireActor(dir);
   let g = loadGraph(dir);
   for (const e of g.errors) log(`warning: ${e}`);
   if (g.prov.items[FRONT_REF]?.state !== 'approved')
@@ -437,9 +440,7 @@ export async function buildCharacter(
       `views/front/_src/ref.png is gone: s2v character pick ${dir} <n> (or restore the file)`,
     );
   if (opts.layersOnly && Object.keys(g.prov.inflight ?? {}).length)
-    log(
-      'warning: a generation round is in flight or was stopped; if it is running, its end may freeze these layers as hand edits (stop it first)',
-    );
+    log('warning: a stopped generation round left items in flight; build again to resume it');
   // Twin entries first (C10): they are derived fields, written once and then like the user's.
   const twins = twinWrites(g.spec);
   if (twins.length) {
@@ -651,6 +652,7 @@ export async function reviewCharacter(
   opts: GenOptions & { open?: boolean; check?: boolean },
 ): Promise<{ graph: LoadedGraph; run: ReviewRun }> {
   const { log } = opts;
+  if (opts.check !== false) acquireActor(dir);
   let g: LoadedGraph = loadGraph(dir);
   if (opts.check === false)
     return {
@@ -734,6 +736,7 @@ export async function approveItems(
   ids: string[],
   opts: GenOptions & { all?: boolean; except?: string[]; resetDerived?: boolean },
 ): Promise<void> {
+  acquireActor(dir);
   const g = loadGraph(dir);
   const waiting = [...g.items.values()].filter((it) =>
     ['generated', 'failed'].includes(status(g, it.id)),
@@ -808,6 +811,7 @@ export function redoItems(
   seed: number | undefined,
   log: (m: string) => void,
 ): void {
+  acquireActor(dir);
   const g = loadGraph(dir);
   // Per group: whether the still itself is redone, or only its frames (they edit the still).
   const groups = new Map<string, boolean>();

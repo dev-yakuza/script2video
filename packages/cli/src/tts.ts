@@ -103,6 +103,7 @@ import {
   type RefVoice,
 } from './voice-refs.js';
 import { atomicWrite } from './atomic.js';
+import { acquireHeavy, BusyError, heldHere } from './heavy-lock.js';
 
 const run = promisify(execFile);
 export const POSTPROCESS_VERSION = 'pp3-48k-mono-trim50db-pausecap-edgecut';
@@ -420,6 +421,8 @@ export interface TtsOptions {
   /** Never synthesize: fail if any sentence has no audio in the lock (reproducible renders). */
   frozen?: boolean;
   log: (msg: string) => void;
+  /** Tests: called before each save of the manifest (another run may write it there). */
+  beforeSave?: () => void;
 }
 
 export interface SentenceJob {
@@ -775,9 +778,26 @@ export async function synthesizeScript(
   let reused = 0;
   let started = false;
   let alignerStarted = false;
+  /** The manifest text as this run last saw it (read at the start, or written since). */
+  let lastText = previousText;
+  /**
+   * S8 plan 3.8: the machine lock, taken before the first server. The manifest was read before it:
+   * another run that wrote it meanwhile would be overwritten, so stop before synthesis instead.
+   */
+  const lockAndRecheck = () => {
+    if (heldHere()) return;
+    acquireHeavy('tts');
+    const now = existsSync(manifestPath) ? readFileSync(manifestPath, 'utf8') : null;
+    if (now !== lastText)
+      throw new BusyError(
+        'changed',
+        `the audio lock changed since this run started (another run wrote ${manifestPath}); run again`,
+      );
+  };
   /** Synthesis needs both servers. */
   const ensureServices = async () => {
     if (started) return;
+    lockAndRecheck();
     opts.log(alignerStarted ? 'starting tts-server ...' : 'starting tts-server and aligner ...');
     const [th, ah] = await Promise.all([tts.ensure(), aligner.ensure()]);
     manifest.env = { ...manifest.env, tts: th, aligner: ah };
@@ -786,11 +806,27 @@ export async function synthesizeScript(
   /** Measuring and re-judging need the aligner only: no TTS model is loaded for them (S9a). */
   const ensureAligner = async () => {
     if (alignerStarted) return;
+    lockAndRecheck();
     opts.log('starting aligner ...');
     manifest.env = { ...manifest.env, aligner: await aligner.ensure() };
     alignerStarted = true;
   };
-  const save = () => atomicWrite(manifestPath, JSON.stringify(manifest, null, 2));
+  /**
+   * Only a run holding the machine lock synthesizes; one without it (nothing to synthesize) writes
+   * the manifest only when nobody else did since it read it (S8 plan 3.8, as a frozen run does).
+   */
+  const save = () => {
+    opts.beforeSave?.();
+    const next = JSON.stringify(manifest, null, 2);
+    if (!heldHere()) {
+      const current = existsSync(manifestPath) ? readFileSync(manifestPath, 'utf8') : null;
+      const decision = frozenSaveDecision(lastText, current, next);
+      if (decision === 'changed') pushOnce('the audio lock changed during this run; not rewritten');
+      if (decision !== 'write') return;
+    }
+    atomicWrite(manifestPath, next);
+    lastText = next;
+  };
   // E7 (stage 3 plan 6): make all six takes of emotion lines; the choice stays the budget's
   const takesAll = process.env.S2V_TAKES_ALL === '6';
   /** Tell how long synthesis will take (stage 3 plan 9). */
@@ -896,6 +932,7 @@ export async function synthesizeScript(
             }
             return r;
           } catch (e) {
+            if (e instanceof BusyError) throw e; // S8: busy is not an unchecked voice
             return unchecked(v, e);
           }
         })(),
@@ -910,6 +947,7 @@ export async function synthesizeScript(
       await ensureServices();
       return { r, sim: cosine(await embed(tts, wavPath), await vectors.get(r)) };
     } catch (e) {
+      if (e instanceof BusyError) throw e;
       return unchecked(refVoice(job), e);
     }
   };
@@ -1613,7 +1651,7 @@ export async function synthesizeScript(
         );
       const next = JSON.stringify(manifest, null, 2);
       const current = existsSync(manifestPath) ? readFileSync(manifestPath, 'utf8') : null;
-      const decision = frozenSaveDecision(previousText, current, next);
+      const decision = frozenSaveDecision(lastText, current, next);
       if (decision === 'write') atomicWrite(manifestPath, next);
       else if (decision === 'changed')
         pushOnce('the audio lock changed during this run; not rewritten');

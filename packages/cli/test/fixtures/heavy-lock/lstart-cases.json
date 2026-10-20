@@ -1,0 +1,54 @@
+{
+  "about": "pid_start comparison (S8): a and b are two readings of one start time; epoch is a read as UTC (ms); macos: exact string, linux: within 2 s",
+  "cases": [
+    {
+      "a": "Mon Oct 19 20:06:47 2026",
+      "b": "Mon Oct 19 20:06:47 2026",
+      "epoch": 1792440407000,
+      "macos": true,
+      "linux": true
+    },
+    {
+      "a": "Mon Oct 19 20:06:47 2026",
+      "b": "Mon Oct 19 20:06:48 2026",
+      "epoch": 1792440407000,
+      "macos": false,
+      "linux": true
+    },
+    {
+      "a": "Mon Oct 19 20:06:47 2026",
+      "b": "Mon Oct 19 20:06:49 2026",
+      "epoch": 1792440407000,
+      "macos": false,
+      "linux": true
+    },
+    {
+      "a": "Mon Oct 19 20:06:47 2026",
+      "b": "Mon Oct 19 20:06:50 2026",
+      "epoch": 1792440407000,
+      "macos": false,
+      "linux": false
+    },
+    {
+      "a": "Mon Oct  5 01:02:03 2026",
+      "b": "Mon Oct  5 01:02:04 2026",
+      "epoch": 1791162123000,
+      "macos": false,
+      "linux": true
+    },
+    {
+      "a": "Thu Dec 31 23:59:59 2026",
+      "b": "Fri Jan  1 00:00:01 2027",
+      "epoch": 1798761599000,
+      "macos": false,
+      "linux": true
+    },
+    {
+      "a": "Sat Feb 28 23:59:59 2026",
+      "b": "Sun Mar  1 00:00:00 2026",
+      "epoch": 1772323199000,
+      "macos": false,
+      "linux": true
+    }
+  ]
+}

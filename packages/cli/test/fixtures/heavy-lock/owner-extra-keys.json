@@ -1,0 +1,9 @@
+{
+  "kind": "tts",
+  "pid": 4244,
+  "pid_start": "Tue Oct 20 00:00:00 2026",
+  "holder": "x",
+  "token": "11111111111111111111111111111111",
+  "version": 2,
+  "note": "keys a reader does not know are ignored"
+}

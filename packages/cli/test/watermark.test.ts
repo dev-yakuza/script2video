@@ -36,7 +36,8 @@ function meanV(file: string, crop: string, t = 0.5): number {
   return Number(/VAVG=([\d.]+)/.exec(readFileSync(txt, 'utf8'))![1]);
 }
 
-describe('the PROXY band', () => {
+// pure work, but past 5 s beside the other test files on a busy machine
+describe('the PROXY band', { timeout: 30_000 }, () => {
   it('is a PNG the size the plan says, the same bytes each time', () => {
     expect(crc32(Buffer.from('IEND')).toString(16)).toBe('ae426082');
     expect(proxySize(1920)).toEqual({ w: 461, h: 115, k: 11 });

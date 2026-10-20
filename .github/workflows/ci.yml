@@ -139,7 +139,7 @@ jobs:
           python-version: '3.12'
       - run: uvx ruff@0.17.0 check .
       - run: uvx ruff@0.17.0 format --check .
-      - run: python -m py_compile tts-server/server.py tts-server/helpers.py tts-server/train_speaker.py tts-server/scripts/*.py aligner/server.py aligner/pitch_helpers.py imagegen/*.py
+      - run: python -m py_compile tts-server/server.py tts-server/helpers.py tts-server/train_speaker.py tts-server/scripts/*.py aligner/server.py aligner/pitch_helpers.py aligner/lifeline.py imagegen/*.py
       - run: python -m unittest discover -s tts-server -p 'test_*.py'
       - run: python -m unittest discover -s imagegen -p 'test_*.py'
       # the image steps with numpy / Pillow / scipy as imagegen/uv.lock pins them (uv cannot sync

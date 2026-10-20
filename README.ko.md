@@ -79,6 +79,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `export-script <script>`                                                                                                                                 | 내레이션을 직접 녹음할 때 읽을 대본 만들기                                                                                             |
 | `import-recording <script> <take.wav> [--write]`                                                                                                         | 한 번에 녹음한 파일을 문단별로 나누기(`:audio`)                                                                                        |
 | `tts-server start`                                                                                                                                       | 명령어 사이에 TTS 서버를 계속 띄워 두기                                                                                                |
+| `services status [--json]`                                                                                                                               | 기기 잠금, 상주 TTS 서버, 어떤 명령도 소유하지 않은 서버(끄는 방법)                                                                    |
 | `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | 캐릭터 그림: YMM4 가져오기와 생성(아래 참조); 도구용 `--json`(`build --dry-run`, `review`, `missing`)                                  |
 
 `node packages/cli/dist/main.js <command> …` 형태로 실행합니다. `S2V_TTS=mock`을 붙이면 모델 없이
@@ -95,6 +96,36 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 함께 씁니다. 같은 대본·출력·언어의 render와 snapshot은 작업 폴더를 함께 쓰므로 한 번에 하나씩 돌리세요.
 `.s2v-cache/`는 언제든 지워도 됩니다. 그 안의 `render/`·`draft-audio/`·`check/`는 `<대본 폴더>-<해시>`로 나뉘며,
 해시가 없는 폴더는 이전 버전의 것입니다. 결과물 폴더의 `*.tmp.*`는 중단된 실행이 남긴 것입니다. `dev`는 대본 폴더를 감시하므로 `--out-dir`은 그 밖에 두세요.
+
+**무거운 작업은 기기에서 하나씩.** TTS·정렬 서버, 음성 학습, 이미지 모델은 각각 수십 GB를 쓰므로 s2v는
+이 기기에서 한 번에 하나만 돌립니다. 합성하는 명령(`tts`, `say`, `voice create/check/refs`,
+`import-recording`, `--frozen-audio` 없는 `render`·`snapshot`)은 서버가 처음 필요할 때 기기 잠금을
+잡고(합성할 것이 없는 `tts`는 잡지 않음), `voice train`과 `audio prune`은 시작할 때 잡으며, `character setup`·`create`·`build`의 라운드는
+이미지 생성을 위해 잡습니다. 다른 작업이 잡고 있으면 바로 exit 73으로 멈추고 stderr 첫 줄에 이유
+`busy (lock|breaking|resident|orphan|changed): …`를 냅니다. 누가 무엇을 잡았는지는
+`s2v services status`가 알려 줍니다. `dev`는 세션 내내, `character setup`은 내려받기를 포함한 설치 내내
+잠금을 쥡니다: 그동안 TTS 명령은 끝날 때까지 기다려야 합니다. `--frozen-audio` 렌더·스냅샷은 잠그지
+않습니다(오디오 lock의 wav를 읽으므로 그동안 `audio prune`을 돌리지 마세요). `tts-server start`로 띄운
+서버는 TTS 명령들이 하나씩 재사용합니다. 서버를 띄우는 동안만 잠금을 쥐고, 그 옆에서는 이미지 생성이
+시작되지 않으며(그 터미널에서 Ctrl-C로 끄세요), Ctrl-C 때 TTS 명령이 아직 쓰고 있으면 경고합니다(exit
+130). 생성 캐릭터를 쓰는 명령(`create`, `pick`, `build`, 검사를 다시 하는 `review`, `approve`, `redo`,
+`missing --apply`)은 그 캐릭터의 작업 잠금을 잡아 한 캐릭터를 동시에 바꾸지 않습니다(exit 74).
+`build --dry-run --json`, `review --json --no-check`, `missing --json`은 작업 중인 명령을 `running`에
+냅니다. 강제로 죽은 명령은 서버를 남길 수 있습니다(보통은 함께 내려감): `services status [--json]`은
+TTS·aligner 포트(지금의 `S2V_TTS_PORT` / `S2V_ALIGNER_PORT`)에 응답하는데 뒤에 명령이 없는 서버와 끄는
+방법을 보여 줍니다. s2v 밖에서 손으로 띄운 서버나 Python은 잠금이 알지 못합니다.
+
+도구용(Studio의 `lock.py`와 같은 형식): 잠금은 `~/.s2v/heavy.lock.d/`(또는 절대 경로 `$S2V_STATE_DIR`;
+s2v와 도구가 같은 곳을 봐야 함)이고 `owner.json`은 `{kind: "tts"|"gen", pid, pid_start, holder, token}`
+입니다. 비공개 `heavy.lock.d.new.<rand>/`에 `owner.json`을 쓰고 그 폴더를 `heavy.lock.d`로 rename해서
+잡습니다(빈 폴더 위로의 rename은 성공하므로 `mkdir`로 잡고 나중에 owner를 쓰는 방식과 섞지 마세요).
+`LC_ALL=C TZ=UTC ps -o lstart= -p <pid>`가 `pid_start`와 맞지 않는 보유자(Linux는 2초 안이면 같음 — 부팅
+시각이 시계 조정에 따라 움직임; 큰 시계 점프는 살아 있는 보유자를 죽은 것으로 보이게 할 수 있음)는
+`heavy.lock.d.break` 뮤텍스 안에서 깹니다. 보유자의 `token`과 같은 `S2V_HEAVY_LOCK_TOKEN`을 받은 자식은
+그 잠금 아래에서 돕니다(같은 `kind`만; 그런 자식은 하나씩 차례로). `<character>/.work/op.lock.d`가
+작업 잠금이고(`{pid, pid_start, cmd, token}`, `S2V_ACTOR_LOCK_TOKEN`으로 재진입), s2v는 캐릭터의
+`.gitignore`에 `.work/`가 없으면 덧붙입니다. `resident.json`은 상주 서버(`pid`, `pid_start`, `port`,
+`server_pgid`)를 기록합니다.
 
 음성 lock의 각 문장은 ASR이 들었는지(`asr`)를 기록하고, 듣지 않았으면(`--no-asr`, mock 음성, 녹음) `cer`는 `null`입니다. ASR을 켠 `tts`는 아직 듣지 않은 lock 문장을 그 자리에서 듣습니다. 음성은 그대로이고, 떨어지면 다시 고릅니다(고른 테이크는 경고만 하고 둡니다). 이때는 정렬 서버만 띄웁니다(다시 고를 문장이 있으면 TTS 서버도).
 

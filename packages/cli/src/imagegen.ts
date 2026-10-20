@@ -22,6 +22,9 @@ import {
 import { constants, homedir, tmpdir, totalmem } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { ExitError } from './errors.js';
+import { acquireHeavy } from './heavy-lock.js';
+import { genPreflight } from './services-status.js';
 
 export const IMAGEGEN_DIR = 'imagegen';
 export const IMAGEGEN_LOCK = 'imagegen.lock.json';
@@ -251,15 +254,7 @@ export function runWatched(cmd: string, args: string[], opts: WatchOptions): Pro
   });
 }
 
-/** An error with the exit code the CLI should end with. */
-export class ExitError extends Error {
-  constructor(
-    message: string,
-    readonly exitCode: number,
-  ) {
-    super(message);
-  }
-}
+export { ExitError } from './errors.js';
 
 /** Exit code of a Python step for a bad round or a broken environment (run.py). */
 export const EXIT_USAGE = 2;
@@ -448,6 +443,10 @@ export async function setupImagegen(
     throw new Error(
       `character generation needs ${MIN_RAM_GB} GB of RAM (this Mac: ${ram.toFixed(0)} GB)`,
     );
+  // S8: the gen lock for the whole setup (the downloads too): TTS commands wait meanwhile
+  acquireHeavy('gen');
+  await genPreflight(repoRoot);
+  log('setup holds the machine lock until it ends: TTS commands wait (exit 73) meanwhile');
   const lock = readImagegenLock(repoRoot);
   const plan = planSetup(repoRoot, lock);
   if (opts.explicit && plan.steps.includes('quantize') && opts.maxGb < QUANTIZE_PEAK_GB)

@@ -80,6 +80,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `export-script <script>`                                                                                                                                 | a reading script for recording the narration yourself                                                                                                          |
 | `import-recording <script> <take.wav> [--write]`                                                                                                         | split one recorded take into paragraphs (`:audio`)                                                                                                             |
 | `tts-server start`                                                                                                                                       | keep the TTS server running between commands                                                                                                                   |
+| `services status [--json]`                                                                                                                               | the machine lock, the resident TTS server, and servers no command owns (how to stop them)                                                                      |
 | `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | character art: YMM4 import and generation (see below); `--json` on `build --dry-run`, `review` and `missing` for tools                                         |
 
 Run them as `node packages/cli/dist/main.js <command> …`. `S2V_TTS=mock` runs everything with
@@ -103,6 +104,41 @@ share a work folder). `.s2v-cache/` can be deleted at any time; its `render/`, `
 `check/` folders are keyed `<script folder>-<hash>`, and folders without the hash are from older
 versions. `*.tmp.*` files in a results folder are left by an interrupted run. `dev` watches the script
 folder: keep `--out-dir` outside it.
+
+**One heavy job at a time.** The TTS and alignment servers, voice training and the image model
+each take tens of GB, so s2v runs one of them at a time on this machine. A command that synthesizes
+(`tts`, `say`, `voice create/check/refs`, `import-recording`, `render` and `snapshot` without
+`--frozen-audio`) takes the machine lock when it first needs a server (a `tts` with nothing to
+synthesize takes none); `voice train` and `audio prune` take it when they start; `character setup`, `create` and a `build` round take it for
+image generation. When another job holds it, the command stops at once with exit 73 and the reason
+on the first line of stderr, `busy (lock|breaking|resident|orphan|changed): …`;
+`s2v services status` says who holds what. `dev` holds the lock for its whole session, and
+`character setup` for the whole setup, downloads included: TTS commands wait until they end.
+`--frozen-audio` renders and snapshots take no lock (they read the audio lock's wav files, so do
+not run `audio prune` meanwhile). A server kept by `tts-server start` is reused by TTS commands, one
+at a time; it holds the lock only while it starts, image generation refuses to start beside it
+(stop it with Ctrl-C in its terminal), and Ctrl-C there warns when a TTS command is still using it
+(exit 130). Commands that write a generated character (`create`, `pick`, `build`, `review` with its
+checks, `approve`, `redo`, `missing --apply`) take that character's work lock, so two of them never
+change one character at once (exit 74); `build --dry-run --json`, `review --json --no-check` and
+`missing --json` report the command working on it in `running`. A command killed outright may leave
+a server running (normally the server ends with it): `services status [--json]` lists servers that
+answer the TTS or aligner port (of the current `S2V_TTS_PORT` / `S2V_ALIGNER_PORT`) with no command
+behind them, and how to stop each. Servers or Python started by hand, outside s2v, are not seen by
+the lock.
+
+For tools (Studio's `lock.py` shares the format): the lock is `~/.s2v/heavy.lock.d/` (or
+`$S2V_STATE_DIR`, an absolute path; s2v and the tool must see the same one) with `owner.json`
+`{kind: "tts"|"gen", pid, pid_start, holder, token}`. It is taken by writing `owner.json` into a
+private `heavy.lock.d.new.<rand>/` and renaming that onto `heavy.lock.d` (a rename onto an empty
+folder succeeds, so never take it with `mkdir` and write the owner afterwards); a holder whose
+`LC_ALL=C TZ=UTC ps -o lstart= -p <pid>` no longer matches `pid_start` (within 2 s on Linux, where
+the boot time moves with clock adjustments; a large clock jump can make a live holder look dead) is
+broken under the `heavy.lock.d.break` mutex. A child given `S2V_HEAVY_LOCK_TOKEN` equal to the
+holder's `token` runs under its lock (same `kind` only; such children run one after another).
+`<character>/.work/op.lock.d` is the work lock (`{pid, pid_start, cmd, token}`, re-entered with
+`S2V_ACTOR_LOCK_TOKEN`); s2v adds `.work/` to the character's `.gitignore` when it is missing.
+`resident.json` records the resident server (`pid`, `pid_start`, `port`, `server_pgid`).
 
 Each line in the audio lock records whether ASR heard it (`asr`); `cer` is `null` when it did not
 (`--no-asr`, mock audio, recordings). A `tts` run with ASR hears every locked line that was not

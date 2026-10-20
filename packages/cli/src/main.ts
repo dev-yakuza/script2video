@@ -39,6 +39,7 @@
  *   s2v pick <image>   (mark a spot on an image)
  *   s2v doctor   (is this machine ready?)
  *   s2v tts-server start   (keep the TTS server running)
+ *   s2v services status [--json]   (the machine lock, the resident server and who owns each server)
  */
 
 import { createHash } from 'node:crypto';
@@ -135,6 +136,10 @@ import { proxyPlacement, writeProxyPng } from './watermark.js';
 import { cacheDirOf, checkOutDir, outDirOf, renderBase, renderWorkDir } from './paths.js';
 import { scenesLint, spokenIn } from './scenes.js';
 import { runCapture } from './capture/index.js';
+import { acquireHeavy } from './heavy-lock.js';
+import { acquireActors } from './actor-lock.js';
+import { servicesStatus, printServicesStatus } from './services-status.js';
+import { runMain } from './shutdown.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -237,6 +242,13 @@ async function main(): Promise<void> {
     await runResident(REPO_ROOT, (m) => console.error(m));
     return;
   }
+  if (command === 'services') {
+    const { values } = parseFor('services status', rest);
+    const status = await servicesStatus(REPO_ROOT);
+    if (values.json) process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
+    else printServicesStatus(status, (m) => process.stdout.write(`${m}\n`));
+    return;
+  }
   if (command === 'dev') {
     const { values } = parseFor('dev', rest);
     const file = positionals[0];
@@ -319,6 +331,8 @@ async function main(): Promise<void> {
     if (sub !== 'prune' || !scriptFile) usage();
     const scriptPath = resolve(scriptFile);
     const script = load(scriptPath);
+    // it deletes wav files a synthesizing run may have just written (S8 plan 3.8)
+    acquireHeavy('tts');
     const r = pruneAudio(scriptPath, script, script.meta.lang, REPO_ROOT);
     console.error(
       `removed ${r.entries} unused entries and ${r.files} files (${(r.bytes / 1e6).toFixed(1)} MB) from audio/${script.meta.lang}`,
@@ -538,6 +552,9 @@ async function main(): Promise<void> {
       const find = () => findMissing(script, dirname(scriptPath), { repoRoot: REPO_ROOT, log });
       const reports = find();
       const added = new Map<string, Added[]>();
+      // S8: the work lock of every character this will write, all taken before any write
+      if (values.apply)
+        acquireActors(reports.filter((x) => x.checked && x.notInSet.length > 0).map((x) => x.dir));
       if (values.apply)
         // only characters that were judged (S9b: a skipped or unreadable one has nothing to add)
         for (const r of reports.filter((x) => x.checked)) {
@@ -1044,7 +1061,6 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e: unknown) => {
-  console.error(e instanceof Error ? e.message : e);
-  process.exit(e instanceof UsageError ? 2 : e instanceof ExitError ? e.exitCode : 1);
-});
+// S8 plan 3.3a: servers down and locks released, then a natural exit (process.exit would cut
+// piped stdout at 64 KB); the code a command set in process.exitCode stays.
+runMain(main, (e) => (e instanceof UsageError ? 2 : e instanceof ExitError ? e.exitCode : 1));

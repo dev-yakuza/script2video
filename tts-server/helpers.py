@@ -5,8 +5,24 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import struct
+import threading
 from pathlib import Path
+
+
+def exit_with_parent() -> None:
+    """With S2V_LIFELINE=1, stdin is a pipe from the CLI that started this server: exit when it
+    closes, so a CLI killed outright (SIGKILL) leaves no server holding tens of GB (S8)."""
+    if os.environ.get("S2V_LIFELINE") != "1":
+        return
+
+    def watch() -> None:
+        while os.read(0, 4096):
+            pass
+        os._exit(1)
+
+    threading.Thread(target=watch, daemon=True).start()
 
 
 def sentence_seed(seed_material: str) -> int:

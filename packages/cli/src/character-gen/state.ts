@@ -194,8 +194,19 @@ export function seedOf(g: Graph, item: Item): number {
 
 export const workPath = (dir: string, id: string) => join(dir, WORK, workName(id));
 
-/** Keep the work folder out of git (the character folder is committed). */
+/**
+ * Keep the work folder out of git (the character folder is committed): a .gitignore without a
+ * `.work/` line gets one added (S8: the work lock lives there too); its other lines stay.
+ */
 export function ensureGitignore(dir: string): void {
   const f = join(dir, '.gitignore');
-  if (!existsSync(f)) writeFileSync(f, `${WORK}/\n`);
+  if (!existsSync(f)) {
+    writeFileSync(f, `${WORK}/\n`);
+    return;
+  }
+  const text = readFileSync(f, 'utf8');
+  const lines = text.split(/\r?\n/).map((l) => l.trim());
+  if (lines.some((l) => l === WORK || l === `${WORK}/` || l === `/${WORK}` || l === `/${WORK}/`))
+    return;
+  writeFileSync(f, `${text}${text === '' || text.endsWith('\n') ? '' : '\n'}${WORK}/\n`);
 }

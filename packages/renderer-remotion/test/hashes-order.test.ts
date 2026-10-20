@@ -142,7 +142,8 @@ function legacyImportedOf(dir: string, face: string, side: 'left' | 'right') {
   });
 }
 
-describe.skipIf(!hasFfmpeg)('render hashes (S4b R7)', { timeout: 60_000 }, () => {
+// about 25 s alone; on a busy machine it passes 60 s in the full suite, at HEAD as well
+describe.skipIf(!hasFfmpeg)('render hashes (S4b R7)', { timeout: 180_000 }, () => {
   it('keeps every key, in order, and every composition hash', () => {
     const { root, fonts } = characterFixture();
     const { hashes } = preparePublicDir(renderOptions(root, fonts));

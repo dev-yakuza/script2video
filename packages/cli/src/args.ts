@@ -69,6 +69,7 @@ export const FLAGS = {
   doctor: [],
   pick: [],
   'tts-server start': [],
+  'services status': ['json'],
   'audio prune': [],
   dev: ['output', 'video', 'no-asr'],
   new: ['lang'],
@@ -129,6 +130,7 @@ const WITH_SUB: Record<string, readonly string[]> = {
   character: ['setup', 'create', 'pick', 'build', 'review', 'approve', 'redo', 'missing', 'import'],
   audio: ['prune'],
   'tts-server': ['start'],
+  services: ['status'],
 };
 
 /** A command-line mistake: printed as is, exit 2. */
@@ -283,4 +285,5 @@ export const USAGE = [
   's2v pick <image>   (mark a spot on an image)',
   's2v doctor   (is this machine ready?)',
   's2v tts-server start   (keep the TTS server running)',
+  's2v services status [--json]   (the machine lock, the resident server and who owns each server)',
 ];

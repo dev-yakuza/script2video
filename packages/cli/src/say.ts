@@ -10,7 +10,22 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { toTtsText, type Lang } from '@script2video/core';
 import { compressPausesInFile } from './pauses.js';
+import {
+  acquireHeavy,
+  BusyError,
+  describeOwner,
+  ownProcessStart,
+  readHeavy,
+  readResident,
+  releaseHeavy,
+  removeResident,
+  residentProcessAlive,
+  writeResident,
+  type Resident,
+} from './heavy-lock.js';
+import { ExitError } from './errors.js';
 import { Service, TTS_SERVER } from './services.js';
+import { onRelease, onStop } from './shutdown.js';
 import { postprocess, wavDuration } from './tts.js';
 
 export interface SayOptions {
@@ -77,17 +92,58 @@ export async function say(text: string, repoRoot: string, opts: SayOptions): Pro
   }
 }
 
-/** Run a service in the foreground until Ctrl-C (resident mode for `s2v dev` / `s2v say`). */
+/**
+ * `s2v tts-server start` (S8 plan 3.5): keep a TTS server running for later commands. It takes the
+ * machine lock only while the server starts (no generation can start meanwhile), records itself
+ * in resident.json, and releases the lock: TTS commands then take turns and reuse it. Ctrl-C stops
+ * the server and removes the record.
+ */
 export async function runResident(repoRoot: string, log: (m: string) => void): Promise<void> {
   const service = new Service(TTS_SERVER, repoRoot);
-  const h = await service.ensure();
-  log(`tts-server ready at ${service.url} (${String(h.device)}). Ctrl-C to stop.`);
-  await new Promise<void>((resolve) => {
-    const stop = () => {
-      service.stop();
-      resolve();
-    };
-    process.on('SIGINT', stop);
-    process.on('SIGTERM', stop);
+  acquireHeavy('tts', { holder: 's2v tts-server start', reentry: false });
+  const old = readResident();
+  if (old && residentProcessAlive(old)) {
+    const h = await new Service({ ...TTS_SERVER, port: old.port }, repoRoot).health();
+    releaseHeavy();
+    if (h?.id === TTS_SERVER.id) {
+      log(`a resident tts-server is already running (pid ${old.pid}, port ${old.port})`);
+      return;
+    }
+    throw new BusyError(
+      'resident',
+      `a resident tts-server (pid ${old.pid}) does not answer on port ${old.port}; stop it (pid ${old.pid})`,
+    );
+  }
+  if (old) removeResident(old);
+  if (await service.health()) {
+    releaseHeavy();
+    throw new BusyError(
+      'orphan',
+      `port ${service.spec.port} answers but no s2v command owns it; see: s2v services status`,
+    );
+  }
+  const h = await service.ensure({ lock: false });
+  const record: Resident = {
+    pid: process.pid,
+    pid_start: ownProcessStart(),
+    port: service.spec.port,
+    server_pgid: service.pgid,
+    id: TTS_SERVER.id,
+    wrapper_version: TTS_SERVER.wrapper,
+    started: new Date().toISOString(),
+  };
+  writeResident(record);
+  releaseHeavy();
+  onStop(() => {
+    const lock = readHeavy();
+    if (lock?.alive && lock.owner?.kind === 'tts')
+      console.error(`warning: ${describeOwner(lock.owner)} may be using this server; it will fail`);
   });
+  onRelease(() => removeResident(record));
+  log(`tts-server ready at ${service.url} (${String(h.device)}). Ctrl-C to stop.`);
+  // until a signal (shutdown.ts stops the server and exits), or the server ends on its own
+  const end = await service.exited()!;
+  if (end.stopped) await new Promise<never>(() => {});
+  removeResident(record);
+  throw new ExitError(`tts-server exited (${String(end.code)}); it is not running any more`, 1);
 }

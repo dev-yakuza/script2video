@@ -1,0 +1,7 @@
+{
+  "kind": "gen",
+  "pid": 4243,
+  "pid_start": "Mon Oct  5 01:02:03 2026",
+  "holder": "studio lock.py run --kind gen -- s2v character build /abs/characters/sora",
+  "token": "fedcba9876543210fedcba9876543210"
+}

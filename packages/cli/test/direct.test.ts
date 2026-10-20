@@ -164,7 +164,8 @@ describe('directDiagnostics', () => {
   });
 });
 
-describe('s2v direct (command line)', () => {
+// each test starts the CLI; past 5 s on a busy machine
+describe('s2v direct (command line)', { timeout: 30_000 }, () => {
   const cli = join(REPO, 'packages/cli/dist/main.js');
   const run = (args: string[]) => {
     try {

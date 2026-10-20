@@ -25,6 +25,9 @@ import { ALIGNER, Service, TTS_SERVER } from '../src/services.js';
 import type { PicksFile } from '../src/picks.js';
 import { listTakes, pickTakes, unpickTakes } from '../src/takes.js';
 import { buildTakesPage, type PageData } from '../src/takes-page.js';
+import { BusyError } from '../src/heavy-lock.js';
+import { resetLocksForTests } from '../src/locks-reset.js';
+import { livePid, writeOwner } from './lock-helpers.js';
 import { integratedLoudness } from '../src/media.js';
 import {
   makeTakeWav,
@@ -215,6 +218,140 @@ describe('stage 3 takes against stub servers', { timeout: 120_000 }, () => {
     const lockPath = join(dir, 'audio', lang, 'manifest.json');
     return { dir, run, lock, lockPath, path, parsed };
   }
+
+  describe('S8: the machine lock', () => {
+    const foreign = () => {
+      const p = livePid();
+      const lock = join(process.env.S2V_STATE_DIR!, 'heavy.lock.d');
+      writeOwner(lock, {
+        kind: 'gen',
+        pid: p.pid,
+        pid_start: p.start,
+        holder: 'other',
+        token: 'cd'.repeat(16),
+      });
+      return () => {
+        rmSync(lock, { recursive: true, force: true });
+        p.kill();
+      };
+    };
+
+    it('C2 with something to synthesize: 73 before any server is asked; nothing to do: runs', async () => {
+      const s = script('ko', 'host: 잠금을 확인하는 문장입니다.');
+      const free = foreign();
+      try {
+        const before = { ...stub.calls };
+        const err = await s.run().catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(BusyError);
+        expect((err as BusyError).exitCode).toBe(73);
+        expect(stub.calls).toEqual(before);
+      } finally {
+        free();
+      }
+      await s.run(); // synthesized, the lock released at the end of the test
+      resetLocksForTests();
+      const free2 = foreign();
+      try {
+        const again = await s.run();
+        expect(again.synthesized).toBe(0);
+      } finally {
+        free2();
+      }
+    });
+
+    it('R-C2c a voice reference to make again while another holds the machine: 73, not "unchecked"', async () => {
+      const s = script('ko', 'host: 참조를 다시 만드는 문장입니다.');
+      await s.run();
+      resetLocksForTests();
+      // the voice reference is gone: --recheck has to make it again (a server)
+      const vdir = join(scripts, 'voices');
+      const listAll = (d: string): string[] =>
+        readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+          e.isDirectory() ? listAll(join(d, e.name)) : [join(d, e.name)],
+        );
+      for (const f of listAll(vdir)) rmSync(f, { force: true });
+      const before = readFileSync(s.lockPath, 'utf8');
+      const free = foreign();
+      try {
+        const r = await s.run({ recheck: true }).catch((e: unknown) => e);
+        expect(r).toBeInstanceOf(BusyError);
+        expect(readFileSync(s.lockPath, 'utf8')).toBe(before);
+      } finally {
+        free();
+      }
+    });
+
+    // the 73 comes from starting the servers for the measurement (recheckReasons → ensureServices),
+    // before similarity(); the rethrow in similarity's own catch stays as a defence
+    it('C2 --recheck of a line whose similarity is unknown while another holds the machine: 73 from starting the servers', async () => {
+      const s = script('ko', 'host: 유사도를 다시 재는 문장입니다.');
+      await s.run();
+      resetLocksForTests();
+      // the reference stays; the line's similarity is unknown (as after a reference change)
+      const lock = JSON.parse(readFileSync(s.lockPath, 'utf8')) as LockManifest;
+      for (const e of Object.values(lock.entries)) {
+        delete e.sim;
+        delete e.voiceRef;
+      }
+      writeFileSync(s.lockPath, JSON.stringify(lock, null, 2));
+      const before = readFileSync(s.lockPath, 'utf8');
+      const free = foreign();
+      try {
+        const r = await s.run({ recheck: true }).catch((e: unknown) => e);
+        expect(r).toBeInstanceOf(BusyError);
+        expect(readFileSync(s.lockPath, 'utf8')).toBe(before);
+      } finally {
+        free();
+      }
+    });
+
+    it('C10 (a) a run without the lock does not overwrite a lock another run wrote meanwhile', async () => {
+      const s = script('ko', 'host: 비교해서 쓰는 문장입니다.');
+      await s.run();
+      resetLocksForTests();
+      // an old lock: the run fills in fields (no synthesis, so no machine lock) and saves
+      const lock = JSON.parse(readFileSync(s.lockPath, 'utf8')) as LockManifest;
+      for (const e of Object.values(lock.entries)) delete (e as { asr?: boolean }).asr;
+      writeFileSync(s.lockPath, JSON.stringify(lock, null, 2));
+      const other = readFileSync(s.lockPath, 'utf8').replace('"version": 1', '"version":  1');
+      let wrote = false;
+      const r = await synthesizeScript(s.path, s.parsed, root, {
+        asr: false,
+        log: () => {},
+        // before its first save, another run rewrites the lock
+        beforeSave: () => {
+          if (!wrote) writeFileSync(s.lockPath, other);
+          wrote = true;
+        },
+      });
+      expect(wrote).toBe(true);
+      expect(r.synthesized).toBe(0);
+      expect(readFileSync(s.lockPath, 'utf8')).toBe(other);
+      expect(r.warnings).toContain('the audio lock changed during this run; not rewritten');
+    });
+
+    it('C10 the lock changed between reading it and taking the machine lock: 73 (changed), nothing synthesized', async () => {
+      const s = script('ko', 'host: 첫 문장입니다.');
+      await s.run();
+      resetLocksForTests();
+      const s2 = script('ko', 'host: 첫 문장입니다.\n\nhost: 새로 넣은 문장입니다.', s.dir);
+      const before = stub.calls.synthesize;
+      const err = await synthesizeScript(s2.path, s2.parsed, root, {
+        asr: false,
+        // before the first server: another run rewrites the lock
+        log: (m) => {
+          if (/^about \d+ min/.test(m))
+            writeFileSync(
+              s.lockPath,
+              readFileSync(s.lockPath, 'utf8').replace('"version": 1', '"version":  1'),
+            );
+        },
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BusyError);
+      expect((err as BusyError).reason).toBe('changed');
+      expect(stub.calls.synthesize).toBe(before);
+    });
+  });
 
   it('measures takes once: a second synthesis from the cache needs no server', async () => {
     const s = script(

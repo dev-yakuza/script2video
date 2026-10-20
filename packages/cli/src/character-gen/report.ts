@@ -28,6 +28,7 @@ import {
 } from './layers.js';
 import { currentDef, diskSha, fileSha, status, WORK, workPath, type Check } from './state.js';
 import { writeDerived } from './yaml-write.js';
+import { actorRunning } from '../actor-lock.js';
 
 const byName = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -56,6 +57,8 @@ function staleParts(layers: Map<string, ViewLayers>): string[] {
 // ---------- build --dry-run ----------
 
 export interface BuildPlan {
+  /** A command working on the character now (its work lock, S8), or null. */
+  running: { pid: number; pid_start: string; cmd: string } | null;
   state: 'pick' | 'generate' | 'review' | 'blocked' | 'derive' | 'complete';
   front: 'never-picked' | 'deleted' | null;
   candidates: number;
@@ -93,6 +96,7 @@ export function buildPlan(dir: string, repoRoot: string, log?: (m: string) => vo
         ? 'deleted'
         : null;
   const base = {
+    running: actorRunning(dir),
     front,
     candidates: candidates.length,
     candidatesAvailable: available,
@@ -183,6 +187,7 @@ export function buildPlan(dir: string, repoRoot: string, log?: (m: string) => vo
 /** The text of `character build --dry-run` (the same plan as `--json`). */
 export function printBuildPlan(p: BuildPlan, dir: string, log: (m: string) => void): void {
   for (const e of p.warnings) log(`warning: ${e}`);
+  if (p.running) log(`running now: ${p.running.cmd} (pid ${p.running.pid})`);
   if (p.front === 'never-picked')
     throw new Error(`no front reference yet: s2v character create ${dir}, then pick one`);
   if (p.front === 'deleted')
@@ -303,6 +308,7 @@ export function reviewReport(
   const recorded = g.prov.layers ?? {};
   const paths = [...new Set([...layerFiles(dir), ...Object.keys(recorded)])].sort(byName);
   return {
+    running: actorRunning(dir),
     recheck: run.recheck,
     page: run.page,
     waiting: waiting.length,

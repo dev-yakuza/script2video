@@ -37,7 +37,7 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
 sys.path.insert(0, str(HERE / "scripts"))
 from fetch_models import load_lock, snapshot_path  # noqa: E402
-from helpers import qwen_token_cap, read_speaker, sentence_seed, trained_request_error  # noqa: E402
+from helpers import exit_with_parent, qwen_token_cap, read_speaker, sentence_seed, trained_request_error  # noqa: E402
 
 SERVER_ID = "script2video-tts"
 WRAPPER_VERSION = "0.4.0"
@@ -340,6 +340,7 @@ def main() -> int:
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(f"warning: binding to non-loopback address {args.host}", file=sys.stderr)
 
+    exit_with_parent()
     import torch
     import uvicorn
 

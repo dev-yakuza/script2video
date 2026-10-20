@@ -26,6 +26,7 @@ import { usedFaces } from '../lint-assets.js';
 import { loadGraph } from './graph.js';
 import { deriveCode, faceNeeds, faceTodo, viewLayers } from './layers.js';
 import { PROVENANCE } from './state.js';
+import { actorRunning } from '../actor-lock.js';
 
 export interface MissingReport {
   cast: string;
@@ -312,6 +313,8 @@ export function missingJson(reports: MissingReport[], added: Map<string, Added[]
       optional: list(r.emotional),
       added: added.get(r.cast) ?? [],
       count: r.checked ? missingCount(r) : 0,
+      // a command working on the character now (S8 work lock), or null
+      running: r.checked ? actorRunning(r.dir) : null,
     };
   });
 }

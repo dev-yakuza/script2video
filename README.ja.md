@@ -79,6 +79,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `export-script <script>`                                                                                                                                 | ナレーションを自分で録音するための読み原稿を作る                                                                                                |
 | `import-recording <script> <take.wav> [--write]`                                                                                                         | 通しで録音したファイルを段落ごとに分ける（`:audio`）                                                                                            |
 | `tts-server start`                                                                                                                                       | コマンドの間も TTS サーバーを起動したままにする                                                                                                 |
+| `services status [--json]`                                                                                                                               | マシンのロック、常駐 TTS サーバー、どのコマンドも持っていないサーバー(止め方)                                                                   |
 | `character import / setup / create / pick / build / review / approve / redo / missing`                                                                   | キャラクターの絵: YMM4 の取り込みと生成（下記）；ツール向けの `--json`（`build --dry-run`、`review`、`missing`）                                |
 
 `node packages/cli/dist/main.js <command> …` の形で実行します。`S2V_TTS=mock` を付けると、モデルなしで
@@ -97,6 +98,39 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 実行してください。`.s2v-cache/` はいつ消してもかまいません。その中の `render/`・`draft-audio/`・`check/` は
 `<台本フォルダ>-<ハッシュ>` で分かれ、ハッシュのないフォルダは以前のバージョンのものです。成果物フォルダの
 `*.tmp.*` は中断した実行が残したものです。`dev` は台本フォルダを監視するので、`--out-dir` はその外に置いてください。
+
+**重い処理はマシンで一つずつ。** TTS・アライメントサーバー、音声の学習、画像モデルはそれぞれ数十 GB を使うので、
+s2v はこのマシンで一度に一つだけ動かします。合成するコマンド(`tts`、`say`、`voice create/check/refs`、
+`import-recording`、`--frozen-audio` なしの `render`・`snapshot`)はサーバーが最初に必要になったときに
+マシンのロックを取り(合成するものがない `tts` は取りません)、`voice train` と `audio prune` は始めるときに取り、`character setup`・`create`・
+`build` のラウンドは画像生成のために取ります。ほかの処理が持っていればすぐに exit 73 で止まり、stderr の
+1 行目に理由 `busy (lock|breaking|resident|orphan|changed): …` を出します。誰が何を持っているかは
+`s2v services status` が示します。`dev` はセッションの間ずっと、`character setup` はダウンロードを含む
+セットアップの間ずっとロックを持ちます: その間 TTS のコマンドは終わるまで待つ必要があります。
+`--frozen-audio` のレンダー・スナップショットはロックを取りません(音声ロックの wav を読むので、その間は
+`audio prune` を実行しないでください)。`tts-server start` で起動したサーバーは TTS コマンドが一つずつ
+再利用します。起動している間だけロックを持ち、その横では画像生成が始まらず(その端末で Ctrl-C で止めて
+ください)、Ctrl-C のときに TTS コマンドがまだ使っていれば警告します(exit 130)。生成キャラクターを書く
+コマンド(`create`、`pick`、`build`、検査をやり直す `review`、`approve`、`redo`、`missing --apply`)は
+そのキャラクターの作業ロックを取り、一つのキャラクターを同時に変えません(exit 74)。
+`build --dry-run --json`、`review --json --no-check`、`missing --json` は作業中のコマンドを `running` に
+出します。強制終了されたコマンドはサーバーを残すことがあります(普通は一緒に終わります):
+`services status [--json]` は TTS・aligner のポート(今の `S2V_TTS_PORT` / `S2V_ALIGNER_PORT`)に応答する
+のに後ろにコマンドがいないサーバーと、その止め方を示します。s2v の外で手で起動したサーバーや Python は
+ロックからは見えません。
+
+ツール向け(Studio の `lock.py` と同じ形式): ロックは `~/.s2v/heavy.lock.d/`(または絶対パスの
+`$S2V_STATE_DIR`。s2v とツールが同じ場所を見ること)で、`owner.json` は
+`{kind: "tts"|"gen", pid, pid_start, holder, token}` です。非公開の `heavy.lock.d.new.<rand>/` に
+`owner.json` を書き、そのフォルダーを `heavy.lock.d` へ rename して取ります(空のフォルダーへの rename は
+成功するので、`mkdir` で取って後から owner を書く方式と混ぜないでください)。
+`LC_ALL=C TZ=UTC ps -o lstart= -p <pid>` が `pid_start` と合わない持ち主(Linux では 2 秒以内なら同じ —
+起動時刻が時計の調整で動くため。大きな時計のずれは生きている持ち主を死んだように見せることがあります)は
+`heavy.lock.d.break` ミューテックスの中で壊します。持ち主の `token` と同じ `S2V_HEAVY_LOCK_TOKEN` を
+受け取った子プロセスはそのロックの下で動きます(同じ `kind` のみ。そうした子は一つずつ順に)。
+`<character>/.work/op.lock.d` が作業ロックで(`{pid, pid_start, cmd, token}`、`S2V_ACTOR_LOCK_TOKEN` で
+再入)、s2v はキャラクターの `.gitignore` に `.work/` がなければ追記します。`resident.json` は常駐サーバー
+(`pid`、`pid_start`、`port`、`server_pgid`)を記録します。
 
 音声 lock の各文は ASR が聞いたか（`asr`）を記録し、聞いていなければ（`--no-asr`、mock 音声、録音）`cer` は `null` です。ASR を有効にした `tts` は、まだ聞いていない lock の文をその場で聞きます。音声はそのままで、落ちたら選び直します（選んだテイクは警告だけで残します）。このときは整列サーバーだけを起動します（選び直す文があれば TTS サーバーも）。
 

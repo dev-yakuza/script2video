@@ -8,6 +8,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { acquireHeavy } from './heavy-lock.js';
+import { forgetGroup, onStop, trackGroup } from './shutdown.js';
 
 export interface ServiceSpec {
   id: string;
@@ -23,25 +25,25 @@ export interface Health {
   [key: string]: unknown;
 }
 
-/** Servers this process started; stopped on exit and on Ctrl-C / kill (no orphans). */
+/** Servers this process started; stopped on exit and on Ctrl-C / kill (no orphans, shutdown.ts). */
 const started = new Set<Service>();
-let watching = false;
-function watchSignals(): void {
-  if (watching) return;
-  watching = true;
-  const stopAll = () => {
-    for (const s of [...started]) s.stop();
-  };
-  process.once('exit', stopAll);
-  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const)
-    process.once(sig, () => {
-      stopAll();
-      process.exit(sig === 'SIGINT' ? 130 : 143);
-    });
+onStop(() => {
+  for (const s of [...started]) s.stop();
+});
+
+export interface EnsureOptions {
+  timeoutMs?: number;
+  /**
+   * Take the machine lock first (S8; default): also when an existing server is reused, since the
+   * command that started that server stops it when it ends. `tts-server start` holds it itself.
+   */
+  lock?: boolean;
 }
 
 export class Service {
   private child: ChildProcess | null = null;
+  private exit: Promise<{ code: number | string | null; stopped: boolean }> | null = null;
+  private stopping = false;
 
   constructor(
     readonly spec: ServiceSpec,
@@ -69,7 +71,9 @@ export class Service {
     }
   }
 
-  async ensure(timeoutMs = 120_000): Promise<Health> {
+  async ensure(opts: EnsureOptions = {}): Promise<Health> {
+    const timeoutMs = opts.timeoutMs ?? 120_000;
+    if (opts.lock !== false) acquireHeavy('tts');
     const running = await this.health();
     if (running) {
       if (running.id !== this.spec.id || running.lock_hash !== this.expectedLockHash()) {
@@ -89,14 +93,31 @@ export class Service {
       ['run', '--frozen', '--offline', 'python', 'server.py', '--port', String(this.spec.port)],
       {
         cwd: join(this.repoRoot, this.spec.dir),
-        stdio: ['ignore', 'ignore', 'pipe'],
-        env: { ...process.env, HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1' },
+        // stdin is a lifeline: when this process dies, even by SIGKILL, the pipe closes and the
+        // server exits (S8; S2V_LIFELINE, os._exit(1) in its stdin watcher)
+        stdio: ['pipe', 'ignore', 'pipe'],
+        env: {
+          ...process.env,
+          HF_HUB_OFFLINE: '1',
+          TRANSFORMERS_OFFLINE: '1',
+          S2V_LIFELINE: '1',
+        },
         // Own process group: stop() ends uv and the Python server it started together.
         detached: true,
       },
     );
+    const child = this.child;
+    this.stopping = false;
+    this.exit = new Promise((resolve) =>
+      child.once('exit', (code, signal) =>
+        resolve({ code: code ?? signal, stopped: this.stopping }),
+      ),
+    );
+    this.child.stdin?.on('error', () => {}); // EPIPE once the server is gone
+    // the lifeline must not keep this process alive
+    (this.child.stdin as unknown as { unref?: () => void } | null)?.unref?.();
     started.add(this);
-    watchSignals();
+    if (this.child.pid !== undefined) trackGroup(this.child.pid);
     let stderr = '';
     this.child.stderr?.on('data', (d: Buffer) => {
       stderr = (stderr + d.toString()).slice(-4000);
@@ -123,8 +144,22 @@ export class Service {
         child.kill('SIGTERM');
       }
     }
+    if (child) this.stopping = true;
+    // the group stays tracked (shutdown.ts) until it is seen gone: the lock is released after it.
+    // Closing stdin also ends the server through its lifeline (S2V_LIFELINE: os._exit(1)).
+    child?.stdin?.destroy();
     this.child = null;
     started.delete(this);
+  }
+
+  /** The process group of the server this process started (null when it did not start one). */
+  get pgid(): number | null {
+    return this.child?.pid ?? null;
+  }
+
+  /** How the server this process started ended (null when it did not start one). */
+  exited(): Promise<{ code: number | string | null; stopped: boolean }> | null {
+    return this.exit;
   }
 
   /** This process started the server (and can stop it). */
@@ -150,7 +185,10 @@ export class Service {
     };
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if (!alive() && !(await this.health())) return;
+      if (!alive() && !(await this.health())) {
+        forgetGroup(pid);
+        return;
+      }
       await new Promise((r) => setTimeout(r, 250));
     }
     try {
@@ -161,6 +199,7 @@ export class Service {
     const hard = Date.now() + 10_000;
     while (alive() && Date.now() < hard) await new Promise((r) => setTimeout(r, 100));
     if (alive()) console.error(`${this.spec.id} (process group ${pid}) did not exit after SIGKILL`);
+    else forgetGroup(pid);
   }
 
   async post<T>(path: string, body: unknown): Promise<{ data: T; headers: Headers }> {

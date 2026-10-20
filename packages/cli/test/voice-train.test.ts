@@ -26,6 +26,8 @@ import { mockSynthesize } from '../src/mock-tts.js';
 import { readSpeaker } from '../src/persona.js';
 import { ALIGNER, Service, TTS_SERVER } from '../src/services.js';
 import { trainVoice } from '../src/voice-train.js';
+import { BusyError } from '../src/heavy-lock.js';
+import { livePid, writeOwner } from './lock-helpers.js';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const GUEST = join(REPO, 'videos/sample-dialogue-ko/voices');
@@ -35,12 +37,20 @@ const REF_TEXT = (
 
 /** The stand-in for train_speaker.py: records its calls, writes best.json for `train`. */
 const FAKE_TRAINER = `
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 const [cmd, ...args] = process.argv.slice(2);
 const arg = (k) => args[args.indexOf(k) + 1];
 appendFileSync(process.env.FAKE_TRAINER_LOG, cmd + '\\n');
+// S8: who holds the machine lock while the trainer runs
+if (process.env.FAKE_TRAINER_LOCK_LOG) {
+  let pid = 'none';
+  try {
+    pid = JSON.parse(readFileSync(join(process.env.S2V_STATE_DIR, 'heavy.lock.d', 'owner.json'), 'utf8')).pid;
+  } catch {}
+  appendFileSync(process.env.FAKE_TRAINER_LOCK_LOG, pid + '\\n');
+}
 if (cmd === 'train') {
   const v = Array.from({ length: 2048 }, (_, i) => Math.fround(((i % 13) - 6) / 10));
   const buf = Buffer.alloc(v.length * 4);
@@ -54,7 +64,7 @@ if (cmd === 'train') {
 }
 if (cmd === 'check' && process.env.FAKE_TRAINER_FAIL) {
   console.log(JSON.stringify({ event: 'error', message: 'the training input differs' }));
-  process.exit(3);
+  process.exit(Number(process.env.FAKE_TRAINER_CODE ?? 3));
 }
 if (cmd === 'check') console.log(JSON.stringify({ event: 'checked', losses: { init: 2.5 } }));
 `;
@@ -187,10 +197,67 @@ describe('s2v voice train', { timeout: 300_000 }, () => {
     };
   };
 
+  it('S8: the machine lock comes before the image generation check (73, not A6)', async () => {
+    const p = livePid();
+    const lock = join(process.env.S2V_STATE_DIR!, 'heavy.lock.d');
+    writeOwner(lock, {
+      kind: 'gen',
+      pid: p.pid,
+      pid_start: p.start,
+      holder: 'imagegen',
+      token: 'cd'.repeat(16),
+    });
+    try {
+      const err = await train(0, '123 python imagegen/run.py').run.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BusyError);
+      expect((err as BusyError).exitCode).toBe(73);
+    } finally {
+      rmSync(lock, { recursive: true, force: true });
+      p.kill();
+    }
+  });
+
   it('does not start while image generation runs (A6)', async () => {
     await expect(train(0, '123 python imagegen/run.py').run).rejects.toThrow(
       /image generation is running \(123 python imagegen\/run.py\)/,
     );
+  });
+
+  it('S8: refuses at once while another job holds the machine (73), before any data', async () => {
+    const p = livePid();
+    const lock = join(process.env.S2V_STATE_DIR!, 'heavy.lock.d');
+    writeOwner(lock, {
+      kind: 'gen',
+      pid: p.pid,
+      pid_start: p.start,
+      holder: 'imagegen',
+      token: 'ab'.repeat(16),
+    });
+    writeFileSync(trainerLog, '');
+    const before = stub.calls.length;
+    try {
+      const err = await train(0).run.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BusyError);
+      expect((err as BusyError).exitCode).toBe(73);
+      expect(stub.calls.length).toBe(before);
+      expect(readFileSync(trainerLog, 'utf8')).toBe('');
+    } finally {
+      rmSync(lock, { recursive: true, force: true });
+      p.kill();
+    }
+  });
+
+  it("S8: the trainer's own 73 is not s2v's busy code", async () => {
+    process.env.FAKE_TRAINER_FAIL = '1';
+    process.env.FAKE_TRAINER_CODE = '73';
+    try {
+      const err = await train(0).run.catch((e: unknown) => e);
+      expect((err as Error).message).toMatch(/\(exit 73\)/);
+      expect((err as { exitCode: number }).exitCode).toBe(1);
+    } finally {
+      delete process.env.FAKE_TRAINER_FAIL;
+      delete process.env.FAKE_TRAINER_CODE;
+    }
   });
 
   it('reports the error of the trainer', async () => {
@@ -206,6 +273,10 @@ describe('s2v voice train', { timeout: 300_000 }, () => {
 
   it('stops before the second training when too few emotion clips pass', async () => {
     writeFileSync(trainerLog, '');
+    // S8: the machine lock is this process's while the trainer runs
+    const lockLog = join(root, 'lock.log');
+    writeFileSync(lockLog, '');
+    process.env.FAKE_TRAINER_LOCK_LOG = lockLog;
     const t = train(1000);
     await expect(t.run).rejects.toThrow(/emotion clips passed \(needs 1000; S2 had 184\)/);
     // neutral data, round-1 data and training 1 happened; training 2 did not
@@ -215,6 +286,10 @@ describe('s2v voice train', { timeout: 300_000 }, () => {
       'train',
     ]);
     expect(existsSync(join(root, 'voices/guest/ko.speaker.json'))).toBe(false);
+    delete process.env.FAKE_TRAINER_LOCK_LOG;
+    expect(readFileSync(lockLog, 'utf8').trim().split('\n')).toEqual(
+      Array(3).fill(String(process.pid)),
+    );
     expect(t.logs.join('\n')).toMatch(/neutral data: 3 sentences × 2 takes/);
     // the seeds name stage, round vector, power, emotion, set, sentence and take
     expect(stub.calls).toContainEqual(

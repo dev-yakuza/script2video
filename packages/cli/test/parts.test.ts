@@ -241,7 +241,7 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
       expect(r.copied).toBe(3);
       expect(existsSync(join(out, 'views', 'main', '体', '体_00.png'))).toBe(true);
     },
-    // spawns Python; slow when other test files run in parallel
-    30_000,
+    // spawns Python; slow when other test files run in parallel (on a busy machine, at HEAD too)
+    90_000,
   );
 });

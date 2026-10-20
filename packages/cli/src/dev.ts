@@ -21,7 +21,7 @@ export interface DevOptions {
   log: (m: string) => void;
 }
 
-function step(cli: string, args: string[]): Promise<number> {
+export function step(cli: string, args: string[]): Promise<number> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [cli, ...args], { stdio: 'inherit' });
     child.on('exit', (code) => resolve(code ?? 1));
