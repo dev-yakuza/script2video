@@ -103,7 +103,10 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | 73    | 기기가 바쁨(아래): `busy (<reason>): `로 시작하는 stderr 한 줄이 이유                                                                                                                                                                   |
 | 74    | 다른 명령이 이 캐릭터를 작업 중: `actor busy: `로 시작하는 stderr 한 줄                                                                                                                                                                 |
 | 75    | 메모리 한도(`--max-memory-gb`)에서 멈춤; 다시 실행하면 이어서 함                                                                                                                                                                        |
-| 128+n | 신호로 끝남: 130 Ctrl-C(SIGINT), 143 SIGTERM, 129 SIGHUP — 잠금을 쥐거나 서버를 띄운 명령과 `capture`; 다른 명령은 신호 자체로 끝날 수 있음(렌더링 중이면 1)                                                                            |
+| 128+n | 신호로 끝남, 첫 신호의 코드: 130 Ctrl-C(SIGINT), 143 SIGTERM, 129 SIGHUP — 잠금을 쥐거나 서버를 띄운 명령과 `capture`; 다른 명령은 신호 자체로 끝날 수 있음(렌더링 중이면 1)                                                            |
+
+두 번째 신호는 명령이 띄운 서버를 죽이고 명령을 바로 끝냅니다. 0.5초 안에 다시 온 같은 신호는 한 번으로
+셉니다(0.5초 안에 일부러 Ctrl-C를 두 번 눌렀다면 한 번 더 누르세요).
 
 **JSON 출력.** 명령의 `--json` 키 이름은 바꾸지 않습니다. 어떤 명령은 snake_case 키를(`inspect`,
 `services status`, `--version`, `snapshot --frames`의 `index.json`), 어떤 명령은 camelCase를(`sentences`,

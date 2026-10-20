@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { imagegenCheck } from '../src/doctor.js';
+import { DUP_WINDOW_MS, resetShutdownForTests } from '../src/shutdown.js';
 import {
   defaultMemoryLimitGb,
   EXIT_MEMORY,
@@ -127,6 +128,42 @@ describe('runWatched (memory watchdog)', () => {
     expect(process.listenerCount('SIGINT')).toBe(0);
     await new Promise((res) => setTimeout(res, 100));
     expect(alive(grandchild)).toBe(false);
+  });
+
+  // A child that takes its time over SIGTERM and then ends with 0 when it got one SIGTERM (5 when
+  // more): a SIGKILL instead, or a 5, ends the run as 130.
+  const slowTerm = (ms: number) =>
+    `let n = 0; process.on("SIGTERM", () => { n++; setTimeout(() => process.exit(n === 1 ? 0 : 5), ${ms}); }); console.log("ready"); setInterval(() => {}, 1000)`;
+  const twice = async (first: NodeJS.Signals, second: NodeJS.Signals, gapMs: number) => {
+    try {
+      return await runWatched(node, ['-e', slowTerm(gapMs + 1500)], {
+        maxGb: 1,
+        everyMs: 30,
+        sample: async () => 0.5,
+        onLine: () => {
+          process.emit(first);
+          if (gapMs === 0) process.emit(second);
+          else setTimeout(() => process.emit(second), gapMs);
+        },
+      });
+    } finally {
+      resetShutdownForTests();
+    }
+  };
+
+  it('the same signal twice at once is one signal: the child ends its own way', async () => {
+    const r = await twice('SIGTERM', 'SIGTERM', 0);
+    expect(r).toMatchObject({ code: 0, interrupted: false });
+  });
+
+  it('the same signal again after the duplicate window kills the group', async () => {
+    const r = await twice('SIGINT', 'SIGINT', DUP_WINDOW_MS + 200);
+    expect(r).toMatchObject({ code: 130, interrupted: true });
+  });
+
+  it('another signal right after the first kills the group', async () => {
+    const r = await twice('SIGINT', 'SIGTERM', 0);
+    expect(r).toMatchObject({ code: 130, interrupted: true });
   });
 
   it('drains stdout when nobody reads it (a full pipe would block the child)', async () => {

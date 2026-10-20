@@ -104,7 +104,10 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | 73     | マシンが使用中(下記): `busy (<reason>): ` で始まる stderr の 1 行が理由                                                                                                                                                                                    |
 | 74     | ほかのコマンドがこのキャラクターを作業中: `actor busy: ` で始まる stderr の 1 行                                                                                                                                                                           |
 | 75     | メモリの上限(`--max-memory-gb`)で停止。もう一度実行すると続きから                                                                                                                                                                                          |
-| 128+n  | シグナルで終了: 130 Ctrl-C(SIGINT)、143 SIGTERM、129 SIGHUP — ロックを持つかサーバーを起動したコマンドと `capture`。ほかのコマンドはシグナルそのもので終わることがある(レンダリング中なら 1)                                                               |
+| 128+n  | シグナルで終了、最初のシグナルのコード: 130 Ctrl-C(SIGINT)、143 SIGTERM、129 SIGHUP — ロックを持つかサーバーを起動したコマンドと `capture`。ほかのコマンドはシグナルそのもので終わることがある(レンダリング中なら 1)                                       |
+
+2 回目のシグナルはコマンドが起動したサーバーを強制終了し、コマンドをすぐに終えます。0.5 秒以内に届いた同じ
+シグナルは 1 回と数えます(0.5 秒以内に意図して Ctrl-C を 2 回押した場合は、もう一度押してください)。
 
 **JSON 出力。** コマンドの `--json` のキー名は変えません。snake_case のキーを書くコマンド(`inspect`、
 `services status`、`--version`、`snapshot --frames` の `index.json`)と camelCase のコマンド(`sentences`、

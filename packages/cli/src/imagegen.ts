@@ -24,7 +24,7 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { ExitError } from './errors.js';
 import { acquireHeavy } from './heavy-lock.js';
-import { noteSignal, watchChild } from './shutdown.js';
+import { noteSignal, signalSorter, watchChild } from './shutdown.js';
 import { genPreflight } from './services-status.js';
 
 export const IMAGEGEN_DIR = 'imagegen';
@@ -156,7 +156,8 @@ export interface WatchResult {
 /**
  * Run a command in its own process group under the memory watchdog. stdout lines go to onLine;
  * stderr is passed through. Ctrl-C / hangup stops the whole group (it is not in the terminal's
- * group); a second Ctrl-C kills it at once. stdin is a lifeline: if this process dies without
+ * group); a second Ctrl-C kills it at once (the same signal again within DUP_WINDOW_MS of the first
+ * is a duplicate, shutdown.ts signalSorter). stdin is a lifeline: if this process dies without
  * cleanup (SIGKILL), the pipe closes and the Python side exits (S2V_LIFELINE, imagegen/models.py).
  */
 export function runWatched(cmd: string, args: string[], opts: WatchOptions): Promise<WatchResult> {
@@ -189,16 +190,23 @@ export function runWatched(cmd: string, args: string[], opts: WatchOptions): Pro
     signalGroup('SIGTERM');
     kill ??= setTimeout(() => signalGroup('SIGKILL'), graceMs);
   };
+  // its own sorter (same rule as shutdown.ts): one shared by both listeners would see the second
+  // listener of the same signal as a duplicate
+  const sortSignal = signalSorter();
   const onSignal = (sig: NodeJS.Signals) => {
+    const kind = sortSignal(sig);
+    if (kind === 'duplicate') return;
     noteSignal(sig);
-    if (interrupted) signalGroup('SIGKILL');
+    if (kind === 'force') signalGroup('SIGKILL');
     interrupted = true;
     stop();
   };
   const onExit = () => signalGroup('SIGKILL');
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
   const unwatch = watchChild();
-  for (const sig of signals) process.on(sig, onSignal);
+  // one handler per signal, bound to its name (what a duplicate is compared by)
+  const handlers = signals.map((sig) => [sig, () => onSignal(sig)] as const);
+  for (const [sig, h] of handlers) process.on(sig, h);
   process.on('exit', onExit);
   child.stdin?.on('error', () => {}); // EPIPE when the child exits first
   if (child.stdout) {
@@ -237,7 +245,7 @@ export function runWatched(cmd: string, args: string[], opts: WatchOptions): Pro
       clearInterval(timer);
       if (kill) clearTimeout(kill);
       unwatch();
-      for (const sig of signals) process.off(sig, onSignal);
+      for (const [sig, h] of handlers) process.off(sig, h);
       process.off('exit', onExit);
     };
     child.once('error', (e) => {

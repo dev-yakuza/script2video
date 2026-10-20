@@ -10,7 +10,8 @@
  *   child that the signal stopped). While runWatched stops its child (watchChild), the handler does
  *   nothing more: the command comes down through main. Otherwise it waits for the groups, releases,
  *   flushes and exits. Other listeners (Remotion's browser) do not count. A second signal kills
- *   at once.
+ *   at once — but the same signal again within DUP_WINDOW_MS of the first is a duplicate and is
+ *   ignored (a tree-wide signal may reach a process twice at once, e.g. to its group and its pid).
  * - `exit` (a command's own process.exit): synchronous fallback.
  */
 
@@ -25,7 +26,6 @@ const stoppers = new Set<() => void>();
 const releasers = new Set<() => void>();
 
 let armed = false;
-let signalled = 0;
 /** The first signal this process got: it sets the exit code (an error after it does not). */
 let signalledWith: NodeJS.Signals | null = null;
 /** runWatched children being run: a signal is theirs to stop. */
@@ -55,6 +55,35 @@ export function watchChild(): () => void {
     watching--;
   };
 }
+
+/**
+ * The same signal again within this long of the first one is the same signal: Claude Code signals
+ * every descendant and may send one the same SIGTERM twice at once (to its group and to its pid).
+ * A person's second Ctrl-C comes later; one inside the window only needs pressing once more.
+ */
+export const DUP_WINDOW_MS = 500;
+
+export type SignalKind = 'first' | 'duplicate' | 'force';
+
+/**
+ * Sorts the signals one handler gets: the first, a duplicate of it (the same signal within
+ * DUP_WINDOW_MS of the first), or a real second one (another signal, or the same one later).
+ */
+export function signalSorter(
+  now: () => number = () => performance.now(),
+): (sig: NodeJS.Signals) => SignalKind {
+  let first: { sig: NodeJS.Signals; at: number } | null = null;
+  return (sig) => {
+    const t = now();
+    if (!first) {
+      first = { sig, at: t };
+      return 'first';
+    }
+    return sig === first.sig && t - first.at < DUP_WINDOW_MS ? 'duplicate' : 'force';
+  };
+}
+
+let sortSignal = signalSorter();
 
 /** A signal arrived: the first one sets the exit code (128 + n), also for runWatched's own handler. */
 export function noteSignal(sig: NodeJS.Signals): void {
@@ -188,12 +217,13 @@ export function runMain(main: () => Promise<void>, codeOf: (e: unknown) => numbe
 }
 
 function onSignal(sig: NodeJS.Signals): void {
-  signalled++;
+  const kind = sortSignal(sig);
+  if (kind === 'duplicate') return;
   noteSignal(sig);
-  if (signalled > 1) {
+  if (kind === 'force') {
     signalGroups('SIGKILL');
     releaseAll();
-    process.exit(signalCode(sig));
+    process.exit(signalCode(signalledWith ?? sig));
   }
   // runWatched is stopping its child: the command ends through main
   if (watching > 0) return;
@@ -232,7 +262,7 @@ export function resetShutdownForTests(): void {
   if (onExit) process.off('exit', onExit);
   onExit = null;
   armed = false;
-  signalled = 0;
+  sortSignal = signalSorter();
   // a signal emitted in a test set the exit code of the test process: take it back
   if (signalledWith && process.exitCode === signalCode(signalledWith)) process.exitCode = undefined;
   signalledWith = null;

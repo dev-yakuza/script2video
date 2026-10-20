@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { ALIGNER, Service, TTS_SERVER } from '../src/services.js';
+import { DUP_WINDOW_MS, signalSorter } from '../src/shutdown.js';
 import {
   CLI,
   dist,
@@ -145,6 +146,27 @@ async function until(f: () => boolean, ms = 20_000): Promise<void> {
 }
 
 const lockGone = (c: Ctx) => !existsSync(join(c.state, 'heavy.lock.d'));
+
+describe('signalSorter', () => {
+  it('the same signal within the window is a duplicate; another one, or later, forces', () => {
+    let t = 0;
+    const sort = signalSorter(() => t);
+    expect(sort('SIGTERM')).toBe('first');
+    t = DUP_WINDOW_MS - 1;
+    expect(sort('SIGTERM')).toBe('duplicate');
+    expect(sort('SIGINT')).toBe('force');
+    t = DUP_WINDOW_MS;
+    expect(sort('SIGTERM')).toBe('force');
+    // the window is counted from the first signal, not moved by duplicates
+    t = 0;
+    const again = signalSorter(() => t);
+    again('SIGINT');
+    t = 400;
+    expect(again('SIGINT')).toBe('duplicate');
+    t = 800;
+    expect(again('SIGINT')).toBe('force');
+  });
+});
 
 describe('ending a lock holder', { timeout: 90_000 }, () => {
   it('E1 every way out releases the lock, with the right code (SIGHUP 129)', async () => {
@@ -307,16 +329,22 @@ describe('ending a lock holder', { timeout: 90_000 }, () => {
     }
   });
 
-  it('E7 a second Ctrl-C ends at once, the server group killed', async () => {
+  // the first signal, then `second` after `gapMs`: a forced end (exit at once, group killed)
+  async function forced(
+    first: NodeJS.Signals,
+    second: NodeJS.Signals,
+    gapMs: number,
+    code: number,
+  ) {
     const c = await ctx({ FAKE_UV_SLOW_TERM: '60000', FAKE_UV_NO_LIFELINE: '1' });
     const d = start('server-wait', c);
     await until(() => d.out().includes('server '));
     const pgid = Number(/server (\d+)/.exec(d.out())![1]);
-    d.p.kill('SIGINT');
-    await new Promise((r) => setTimeout(r, 500));
+    d.p.kill(first);
+    await new Promise((r) => setTimeout(r, gapMs));
     const t0 = Date.now();
-    d.p.kill('SIGINT');
-    expect(await d.exit).toBe(130);
+    d.p.kill(second);
+    expect(await d.exit).toBe(code);
     expect(Date.now() - t0).toBeLessThan(3000);
     await until(() => {
       try {
@@ -326,6 +354,29 @@ describe('ending a lock holder', { timeout: 90_000 }, () => {
         return true;
       }
     }, 5000);
+    expect(lockGone(c)).toBe(true);
+  }
+
+  it('E7 a second Ctrl-C (after the duplicate window) ends at once, the server group killed', async () => {
+    await forced('SIGINT', 'SIGINT', DUP_WINDOW_MS + 500, 130);
+  });
+
+  it('E7 another signal right after the first ends at once too (the first one sets the code)', async () => {
+    await forced('SIGINT', 'SIGTERM', 100, 130);
+  });
+
+  it('E7 the same SIGTERM twice within the window is one signal: the servers go down gracefully', async () => {
+    const c = await ctx({ FAKE_UV_SLOW_TERM: '1500', FAKE_UV_NO_LIFELINE: '1' });
+    const d = start('server-wait', c);
+    await until(() => d.out().includes('server '));
+    // back to back, as a tree-wide signal arrives (to the group and to the pid)
+    d.p.kill('SIGTERM');
+    d.p.kill('SIGTERM');
+    expect(await d.exit).toBe(143);
+    // one clean-up (the duplicate did not start another), and the slow server was waited for (a
+    // SIGKILL leaves no exit line)
+    expect(d.out().match(/stopping servers/g)).toHaveLength(1);
+    expect(readFileSync(c.exitLog, 'utf8')).toMatch(/exit script2video-tts/);
     expect(lockGone(c)).toBe(true);
   });
 

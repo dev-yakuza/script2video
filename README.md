@@ -106,7 +106,10 @@ pin `id` and stop when it changes.
 | 73    | the machine is busy (below): the one stderr line starting with `busy (<reason>): ` says why                                                                                                                                                                                    |
 | 74    | another command works on this character: the one stderr line starting with `actor busy: `                                                                                                                                                                                      |
 | 75    | stopped at the memory limit (`--max-memory-gb`); run again to resume                                                                                                                                                                                                           |
-| 128+n | ended by a signal: 130 Ctrl-C (SIGINT), 143 SIGTERM, 129 SIGHUP — for commands holding a lock or running servers, and `capture`; other commands may end by the signal itself (or with 1 while rendering)                                                                       |
+| 128+n | ended by a signal, with the first signal's code: 130 Ctrl-C (SIGINT), 143 SIGTERM, 129 SIGHUP — for commands holding a lock or running servers, and `capture`; other commands may end by the signal itself (or with 1 while rendering)                                         |
+
+A second signal ends a command at once and kills the servers it started; the same signal again
+within 0.5 s counts once (a deliberate second Ctrl-C within 0.5 s needs one more press).
 
 **JSON output.** A command's `--json` keys are not renamed. Some commands write snake_case keys
 (`inspect`, `services status`, `--version`, the `index.json` of `snapshot --frames`) and others
