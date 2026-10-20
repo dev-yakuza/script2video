@@ -564,6 +564,26 @@ describe.skipIf(!E2E)('capture in a browser', { timeout: 120_000 }, () => {
     const w = await run('/workers', { timeoutMs: 6000 });
     expect([w.error, w.json.idle]).toEqual([null, true]);
     expect(w.json.contentHash).not.toBeNull();
+    // a worker's own script finishes in the worker's session: on a slow machine too, it is
+    // heard there (it once ran before that session listened, and the page never settled)
+    const slow = await run('/workers', {
+      timeoutMs: 6000,
+      slowCommands: { 'Network.enable': 300 },
+    });
+    expect([slow.error, slow.json.idle]).toEqual([null, true]);
+    // a worker ended before its script came is never attached: it is gone all the same
+    routes.set('/late-w.js', (_q, s) => {
+      setTimeout(() => {
+        s.setHeader('content-type', 'text/javascript');
+        s.end('self.x = 1;');
+      }, 400);
+    });
+    page(
+      '/ended',
+      `<p>끝</p><script>const w = new Worker('/late-w.js'); setTimeout(() => w.terminate(), 50);</script>`,
+    );
+    const ended = await run('/ended', { timeoutMs: 5000 });
+    expect([ended.error, ended.json.idle]).toEqual([null, true]);
 
     page(
       '/move-out',
@@ -686,8 +706,31 @@ describe.skipIf(!E2E)('capture in a browser', { timeout: 120_000 }, () => {
     const t = Date.now();
     const r = await run('/leaving', { timeoutMs: 2000 });
     expect(r.error).toMatch(/still moving to \S*\/never/);
-    // no grace spent waiting on a page that is not there yet
-    expect(Date.now() - t).toBeLessThan(5000);
+    // no grace spent waiting on a page that is not there yet: only the short wait for a move to
+    // land (1.5 s) after the 2 s deadline, not the 5 s grace too (8.5 s and the browser's start)
+    expect(Date.now() - t).toBeLessThan(8000);
+    // a move still on its way at the deadline that lands nowhere (a 204) leaves the page as it is
+    routes.set('/late-204', (_q, s) => {
+      setTimeout(() => {
+        s.statusCode = 204;
+        s.end();
+      }, 2300);
+    });
+    page('/staying', `<p>그대로</p><script>onload = () => { location = '/late-204'; };</script>`);
+    const stay = await run('/staying', { timeoutMs: 2000 });
+    expect([stay.error, stay.json.idle]).toEqual([null, false]);
+    expect(stay.json.text.map((x) => x.text)).toEqual(['그대로']);
+    // one that fails on its way shows an error page a moment later: that is where the page is
+    // (cut after the deadline; the browser asks once more on a new connection, cut at once)
+    let drops = 0;
+    routes.set('/drop', (q) => {
+      setTimeout(() => q.socket.destroy(), drops++ === 0 ? 2300 : 0);
+    });
+    page('/dropping', `<p>떠나는 중</p><script>onload = () => { location = '/drop'; };</script>`);
+    const drop = await run('/dropping', { timeoutMs: 2000 });
+    expect(drop.png).toBeNull();
+    // (to its error page, or on a busy machine still on the way there)
+    expect(drop.error).toMatch(/did not load after moving to (chrome-error:|\S*\/drop)/);
   });
 
   it('shares the byte budget fairly and keeps going when --assets-dir cannot be written', async () => {

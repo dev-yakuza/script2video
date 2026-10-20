@@ -23,6 +23,8 @@ export const IMAGE_MAX = 20 * 1024 * 1024;
 export const IMAGE_BUDGET = 200 * 1024 * 1024;
 const GRACE_MS = 5000;
 const IDLE_MS = 500;
+/** How long a move still on its way at the deadline may take to land (or not). */
+const MOVE_WAIT_MS = Math.min(GRACE_MS, 1500);
 const MAX_SIDE = 16384;
 export const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
 
@@ -46,6 +48,8 @@ export interface CaptureOptions {
   noWebrtcFlag?: boolean;
   /** Tests only: a smaller budget for picture bytes. */
   imageBudget?: number;
+  /** Tests only: ms to wait before sending these commands to a page or worker (a slow machine). */
+  slowCommands?: Record<string, number>;
   /** Tests only: runs just before the page is read and pictured (`page` runs script in it). */
   beforeStep?: (
     step: 'extract' | 'shot',
@@ -195,6 +199,9 @@ async function run(browser: Browser, o: CaptureOptions): Promise<CaptureOutcome>
   let onMove: (() => void) | null = null;
   // documents the main page asked for and has not finished getting (by request)
   const docRequests = new Map<string, { frame: string; loader: string; url: string }>();
+  // frame → a document request of it that failed: the frame still shows an error page, a moment
+  // later (measured: some 0.1 s, longer on a busy machine), so it stays in flight until then
+  const errorPages = new Map<string, string>();
   let main: string | null = null;
   const popups = new Set<string>();
   // one session per target: the first one to attach, the others wait for it
@@ -231,7 +238,11 @@ async function run(browser: Browser, o: CaptureOptions): Promise<CaptureOutcome>
   const attach = async (p: Json, parent?: string) => {
     const sid: string = p.sessionId;
     const type: string = p.targetInfo.type;
-    const send = (m: string, params: Json = {}) => cdp.send(m, params, sid);
+    const send = async (m: string, params: Json = {}) => {
+      const slow = o.slowCommands?.[m];
+      if (slow) await sleep(slow);
+      return cdp.send(m, params, sid);
+    };
     // a worker can come both from the browser and from its page: one session checks it, and
     // the other lets it run (each session holds it) once that one's checks are on
     const first = targets.get(p.targetInfo.targetId);
@@ -284,6 +295,17 @@ async function run(browser: Browser, o: CaptureOptions): Promise<CaptureOutcome>
       if (fetch.status === 'rejected' && type !== 'worker') {
         // a service or shared worker can be checked: one that cannot be does not run
         await cdp.send('Target.closeTarget', { targetId: p.targetInfo.targetId }).catch(() => {});
+        return;
+      }
+      if (type !== 'service_worker') {
+        // a dedicated or shared worker's own script starts in its page's session and finishes
+        // in the worker's, once the worker runs (measured). Let go before this session listens,
+        // the worker can finish it unheard, and the page never settles. A paused one answers
+        // Network.enable at once (measured), so it listens first; the other session waits too.
+        // bounded: a worker that does not answer still runs (its requests are then unheard)
+        await within(send('Network.enable'), 1000).catch(() => {});
+        checked();
+        await send('Runtime.runIfWaitingForDebugger').catch(() => {});
         return;
       }
       checked();
@@ -442,6 +464,11 @@ async function run(browser: Browser, o: CaptureOptions): Promise<CaptureOutcome>
         for (const [k, sid] of inflight) if (sid === p.sessionId) inflight.delete(k);
         lastChange = Date.now();
         break;
+      case 'Target.targetDestroyed':
+        // nor does a gone worker's own script (its request id is the worker's target id, started
+        // in its page's session), even one ended before it was ever attached
+        if (inflight.delete(p.targetId)) lastChange = Date.now();
+        break;
       case 'Fetch.requestPaused':
         void paused(p, e.sessionId!);
         break;
@@ -457,11 +484,46 @@ async function run(browser: Browser, o: CaptureOptions): Promise<CaptureOutcome>
         lastChange = Date.now();
         break;
       case 'Network.loadingFinished':
-      case 'Network.loadingFailed':
-        inflight.delete(p.requestId);
+      case 'Network.loadingFailed': {
+        const doc = docRequests.get(p.requestId);
         docRequests.delete(p.requestId);
         lastChange = Date.now();
+        // one cancelled (net::ERR_ABORTED: a download, another move) shows nothing
+        if (
+          doc &&
+          e.method === 'Network.loadingFailed' &&
+          !p.canceled &&
+          p.errorText !== 'net::ERR_ABORTED'
+        ) {
+          const before = errorPages.get(doc.frame);
+          if (before !== undefined) inflight.delete(before);
+          errorPages.set(doc.frame, p.requestId);
+          break;
+        }
+        inflight.delete(p.requestId);
         break;
+      }
+      case 'Page.frameNavigated':
+      case 'Page.frameStoppedLoading': {
+        const frame: string = p.frame?.id ?? p.frameId;
+        const failed = e.sessionId === main ? errorPages.get(frame) : undefined;
+        if (failed !== undefined) {
+          errorPages.delete(frame);
+          inflight.delete(failed);
+          lastChange = Date.now();
+        }
+        if (e.method === 'Page.frameStoppedLoading') break;
+        if (e.sessionId === main && !p.frame.parentId) {
+          // a new document committed (not a same-document move: pushState, a hash, a 204);
+          // a load still on its way leaves the old one read and pictured as one
+          const changed = p.frame.loaderId !== mainLoader;
+          mainFrame = p.frame.id;
+          mainLoader = p.frame.loaderId;
+          mainUrl = p.frame.url;
+          if (changed) onMove?.();
+        }
+        break;
+      }
       case 'Network.responseReceived':
         if (e.sessionId === main && p.type === 'Document')
           docs.set(p.requestId, { status: p.response.status, url: p.response.url });
@@ -476,15 +538,15 @@ async function run(browser: Browser, o: CaptureOptions): Promise<CaptureOutcome>
         json.websockets.push({ url: p.url, host });
         break;
       }
-      case 'Page.frameNavigated':
-        if (e.sessionId === main && !p.frame.parentId) {
-          // a new document committed (not a same-document move: pushState, a hash, a 204);
-          // a load still on its way leaves the old one read and pictured as one
-          const changed = p.frame.loaderId !== mainLoader;
-          mainFrame = p.frame.id;
-          mainLoader = p.frame.loaderId;
-          mainUrl = p.frame.url;
-          if (changed) onMove?.();
+      case 'Page.frameDetached':
+        if (e.sessionId === main) {
+          // a frame gone shows no error page
+          const failed = errorPages.get(p.frameId);
+          if (failed !== undefined) {
+            errorPages.delete(p.frameId);
+            inflight.delete(failed);
+            lastChange = Date.now();
+          }
         }
         break;
       case 'Page.loadEventFired':
@@ -544,15 +606,32 @@ async function run(browser: Browser, o: CaptureOptions): Promise<CaptureOutcome>
       return `the page answered HTTP ${doc.status}${moved}${blockedNote()}`;
     return null;
   };
-  const wrong = judge();
-  if (wrong) return fail(wrong);
-  const loaderAtStart = shown().loader;
   // where the main frame is still on its way to, if anywhere (the browser holds the page's
   // commands until it gets there, so there is nothing to read in the meantime)
   const goingTo = () =>
     [...docRequests.values()].find(
       (d) => d.frame === (mainFrame || nav.frameId) && d.loader !== shown().loader,
     )?.url;
+  // a move asked for is not one made: a 204 or 205, a download or a cancelled one leaves the
+  // page where it is, and a failed one still shows its error page. So one on its way at the
+  // deadline gets a short wait to land or not; the page is then judged where it is.
+  const onTheWay = () => goingTo() !== undefined || errorPages.has(mainFrame || nav.frameId);
+  const loaderAtDeadline = shown().loader;
+  if (!idle && onTheWay()) {
+    const until = Date.now() + MOVE_WAIT_MS;
+    while (onTheWay() && Date.now() < until) await sleep(50);
+  }
+  // one that failed on its way and has not shown its error page yet: it did not load all the same
+  const failing = errorPages.get(mainFrame || nav.frameId);
+  if (failing !== undefined)
+    return fail(
+      `the page did not load after moving to ${firstUrl.get(failing) ?? 'another page'}${blockedNote()}`,
+    );
+  const wrong = judge();
+  if (wrong) return fail(wrong);
+  const loaderAtStart = shown().loader;
+  if (loaderAtStart !== loaderAtDeadline)
+    warn(`the page moved to ${mainUrl || 'another page'} at the deadline; captured that page`);
   const going = !idle && goingTo();
   if (going) return fail(`the page was still moving to ${going} when --timeout came`);
   // past the deadline, each later step gets a grace
