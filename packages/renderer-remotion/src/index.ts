@@ -63,6 +63,7 @@ export {
 export {
   assignSides,
   dialogueShape,
+  FADE_FRAMES,
   MAX_AVATARS,
   stagePlan,
   type DialogueShape,

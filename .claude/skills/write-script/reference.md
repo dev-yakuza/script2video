@@ -125,10 +125,12 @@ flowchart LR
 ~~~
 
 `::thumbnail` is not shown in the video; render uses it for `<output>.<lang>.thumbnail.png`
-(otherwise a still of the first scene).
+(otherwise a still of the first scene that shows a visual).
 
 A visual stays on screen until the next one in the scene. Paragraphs after a visual are the
-narration shown over it.
+narration shown over it. Every scene with narration needs a visual, and the first one (shown from
+the scene's start) must not be an empty `::title` (`::title[…]`, a card or an image; characters
+count when every speaker has art): lint warns `no-visual` otherwise.
 
 ## Character framing
 

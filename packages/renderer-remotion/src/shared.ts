@@ -106,6 +106,43 @@ export const FACE_HOLD = 20;
 /** Height of a full (maxLines) subtitle box. */
 export const subtitleBoxHeight = (m: SubtitleMetrics) =>
   m.fontSize * m.lineHeight * m.maxLines + 2 * m.paddingY;
+/** Top edge of a full bottom-anchored subtitle box in a frame `frameH` tall. */
+export const subtitleBoxTop = (m: SubtitleMetrics, frameH: number) =>
+  frameH - m.bottom - subtitleBoxHeight(m);
+
+/** Space kept between an image fitted above the subtitles and the subtitle box. */
+export const SUBTITLE_CLEARANCE = 24;
+/** Share of the area's width and height a fitted image fills to count as covering it. */
+export const COVER_SHARE = 0.98;
+
+/**
+ * How an image fits its visual area (pilot-1 P2): `min(W/iw, H/ih)`, centred in `height`.
+ * When nothing is reserved at the bottom (`area.bottom` 0: 16:9 and 1:1 without speakers) and the
+ * subtitles sit at the bottom, an image that does not cover the area and whose bottom edge (with
+ * the Ken Burns drift) would pass the subtitle box top − SUBTITLE_CLEARANCE fits above that line
+ * instead, small enough that the drift stays above it too. Covering images (within COVER_SHARE)
+ * stay full-bleed.
+ */
+export function imageFitBox(
+  area: { width: number; height: number; bottom: number },
+  img: [number, number],
+  /** The output's subtitle box (`null`: none to keep clear of). */
+  subtitle: SubtitleMetrics | null,
+  kenBurnsMax = 1,
+): { fit: number; fw: number; fh: number; height: number } {
+  const { width: W, height: H } = area;
+  const [iw, ih] = img;
+  const fit = Math.min(W / iw, H / ih);
+  const normal = { fit, fw: iw * fit, fh: ih * fit, height: H };
+  if (area.bottom !== 0 || subtitle?.anchor !== 'bottom') return normal;
+  // within 2 % of the area counts as covering: a near-16:9 picture (1366×768, 1920×1078) keeps
+  // the full-frame fit rather than shrinking with bars on every side
+  const covers = normal.fw >= W * COVER_SHARE && normal.fh >= H * COVER_SHARE;
+  const limit = subtitleBoxTop(subtitle, H) - SUBTITLE_CLEARANCE;
+  if (covers || (H + normal.fh * kenBurnsMax) / 2 <= limit) return normal;
+  const above = Math.min(W / iw, limit / (ih * kenBurnsMax));
+  return { fit: above, fw: iw * above, fh: ih * above, height: limit };
+}
 
 export function dialogueGeometry(
   shape: DialogueShape,

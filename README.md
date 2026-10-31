@@ -57,7 +57,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `doctor`                                                                                                                                                 | checks Node, ffmpeg, uv, Python environments, models, fonts                                                                                                    |
 | `--version [--json]`                                                                                                                                     | the version to pin: semver plus a hash of the code (`--json` for tools)                                                                                        |
 | `new <dir> [--lang ko]`                                                                                                                                  | a new video folder with a starter script                                                                                                                       |
-| `lint <script>`                                                                                                                                          | static checks: syntax, assets (pictures PNG/JPEG by their bytes, `::video` mp4/webm/mov/m4v), pronunciation, subtitle budget, length                           |
+| `lint <script>`                                                                                                                                          | static checks: syntax, assets (pictures PNG/JPEG by their bytes, `::video` mp4/webm/mov/m4v), pronunciation, subtitle budget, length, `no-visual` (bare scene) |
 | `check <script>`                                                                                                                                         | lays every subtitle out in the real renderer and reports overflow                                                                                              |
 | `sentences <script> [--json]`                                                                                                                            | sentence ids (for `tts --retry`); `--json`: each line's lock key, voice attributes, picked take and lock state (whether ASR heard it)                          |
 | `say "<text>" --script <script>`                                                                                                                         | synthesize and play one sentence (pronunciation check)                                                                                                         |
@@ -244,6 +244,14 @@ dialogue; it follows the same reference and runs `lint` / `check` on the result.
 Visuals: `::title`, `::image` (zoom, circle / box / highlight / spotlight / arrow marks, image
 switches, slow Ken Burns drift), `:::bullets`, `:::code` (line highlight), `:::table` (row
 highlight), `:::chart` (bars), `:::compare` (2–3 columns), `:::gallery`, `:::quote`, `:::markdown`, `:::split` (image + text), `:::diagram` (mermaid), `::video`.
+A scene with narration whose first visual is missing or a `::title` without a label (the
+narration would start over a bare background) gets a `no-visual` warning from every command that
+reads the script; the exit code does not change. An image that does not fill the frame (a portrait
+or square picture in 16:9) is drawn above the bottom subtitles, Ken Burns drift included; `::video`
+and the pictures in `:::split` / `:::gallery` are not refitted yet. Since 0.13.0 such images are
+smaller than before, so stills approved on an earlier version differ from a re-render. Without
+`::thumbnail`, the thumbnail is the middle of the first visual of the first scene that shows one
+(the first scene with characters).
 Sound: background music ducked under speech, synthesized sound effects (`sfx: auto`), scene
 fades. Look: `theme: light | dark`, corner logo, `subtitleStyle` (size, position, colors, font).
 

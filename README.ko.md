@@ -56,7 +56,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `doctor`                                                                                                                                                 | Node, ffmpeg, uv, Python 환경, 모델, 폰트 점검                                                                                         |
 | `--version [--json]`                                                                                                                                     | 고정할 버전: semver와 코드 해시(도구는 `--json`)                                                                                       |
 | `new <dir> [--lang ko]`                                                                                                                                  | 시작용 대본이 든 새 영상 폴더 만들기                                                                                                   |
-| `lint <script>`                                                                                                                                          | 정적 검사: 문법, 에셋(그림은 바이트로 PNG/JPEG, `::video`는 mp4/webm/mov/m4v), 발음, 자막 분량, 길이                                   |
+| `lint <script>`                                                                                                                                          | 정적 검사: 문법, 에셋(그림은 바이트로 PNG/JPEG, `::video`는 mp4/webm/mov/m4v), 발음, 자막 분량, 길이, `no-visual`(빈 배경 위 내레이션) |
 | `check <script>`                                                                                                                                         | 모든 자막을 실제 렌더러로 배치해 넘침 확인                                                                                             |
 | `sentences <script> [--json]`                                                                                                                            | 문장 id 목록(`tts --retry`용). `--json`: 문장마다 lock 키, 연기 속성, 고른 테이크, lock 상태(ASR이 들었는지)                           |
 | `say "<text>" --script <script>`                                                                                                                         | 한 문장을 합성해 재생(발음 확인)                                                                                                       |
@@ -197,6 +197,12 @@ sha256)이 들어가고, 그림이 없는 face가 있으면 `null`입니다. 단
 느린 Ken Burns 이동), `:::bullets`, `:::code`(줄 강조), `:::table`(행 강조), `:::chart`(막대),
 `:::compare`(2–3열), `:::gallery`, `:::quote`, `:::markdown`, `:::split`(이미지 + 텍스트),
 `:::diagram`(mermaid), `::video`.
+내레이션이 있는데 첫 비주얼이 없거나 라벨 없는 `::title`인 장면(내레이션이 빈 배경 위에서 시작)에는
+스크립트를 읽는 모든 명령이 `no-visual` 경고를 냅니다. 종료 코드는 바뀌지 않습니다. 화면을 다 채우지 않는
+이미지(16:9 안의 세로·정사각 그림)는 Ken Burns 이동까지 포함해 아래쪽 자막 위에 그립니다. `::video`와
+`:::split` / `:::gallery` 안의 그림은 아직 맞추지 않습니다. 0.13.0부터 이런 이미지는 전보다 작아지므로, 이전
+버전에서 승인한 스틸은 다시 렌더한 결과와 다릅니다. `::thumbnail`이 없으면 썸네일은 비주얼이 있는 첫 장면의
+첫 비주얼 가운데입니다(캐릭터가 있으면 첫 장면).
 소리: 말할 때 자동으로 작아지는 배경 음악, 합성 효과음(`sfx: auto`), 장면 페이드.
 모양: `theme: light | dark`, 모서리 로고, `subtitleStyle`(크기, 위치, 색, 폰트).
 

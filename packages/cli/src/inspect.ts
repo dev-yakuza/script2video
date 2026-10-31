@@ -14,6 +14,7 @@ import {
   bgmOf,
   canonical,
   castsIn,
+  characterModeFor,
   closedWorldErrors,
   contentOf,
   gainFor,
@@ -419,7 +420,7 @@ export function inspectScript(
     const why: string[] = [];
     // characters (S4b): drawn only when every cast member of the output has one (dialogueShape)
     const castKeys = new Set(cast.map((c) => c.key));
-    const characterMode = cast.length > 0 && cast.every((c) => meta.cast[c.key]!.character);
+    const characterMode = characterModeFor(script, name);
     const characters = characterArt(script, name, castResolved, scriptDir, files, why);
     const lookOf = (looks: Record<string, string>) => {
       const kept = Object.fromEntries(Object.entries(looks).filter(([c]) => castKeys.has(c)));

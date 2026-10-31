@@ -194,6 +194,7 @@ const SceneComp: React.FC<SceneProps> = ({
                       )}
                       duration={to - from}
                       kenBurns={visual.attrs.kenburns !== 'off'}
+                      subtitle={m}
                     />
                   ) : visual.type === 'bullets' ? (
                     <BulletsVisual

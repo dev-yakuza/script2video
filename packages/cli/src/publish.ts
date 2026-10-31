@@ -4,12 +4,14 @@ import { execFile } from 'node:child_process';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { renderStills, type RenderOptions } from '@script2video/renderer-remotion';
+import { FADE_FRAMES, renderStills, type RenderOptions } from '@script2video/renderer-remotion';
 import {
   chapters,
   chaptersText,
+  characterModeFor,
   descriptionDraft,
   formatDiagnostic,
+  sceneHasVisual,
   subtitleCues,
   toSrt,
   toVtt,
@@ -58,9 +60,44 @@ export function dropThumbnail(path: string): void {
 const run = promisify(execFile);
 
 /**
+ * The still a thumbnail without `::thumbnail` is taken from (pilot-1 P1): the first scene that
+ * shows a visual, in the middle of that visual's span (the scene's middle with characters, who
+ * are on screen throughout). Kept out of fades like `snapshot`'s stills; scene 0's middle when no
+ * scene shows anything. Each visual's span is judged on its own, so a scene the `no-visual` lint
+ * flags for an empty first `::title` can still give its later image.
+ */
+export function thumbnailTarget(
+  timeline: Timeline,
+  characterMode: boolean,
+  transition: 'none' | 'fade' = 'none',
+): { sceneId: string; frame: number } {
+  for (const scene of timeline.scenes) {
+    const dur = scene.durationFrames;
+    // Visual i shows from its start (the first from frame 0) until the next one starts.
+    const spans = scene.visuals.map((v, i) => ({
+      v: v.visual,
+      from: i === 0 ? 0 : v.startFrame,
+      to: scene.visuals[i + 1]?.startFrame ?? dur,
+    }));
+    const span = characterMode
+      ? { from: 0, to: dur }
+      : spans.find((s) => sceneHasVisual([s.v], false));
+    if (!span) continue;
+    const mid = Math.floor((span.from + span.to) / 2);
+    const fade = transition === 'fade' ? FADE_FRAMES : 0;
+    const lo = Math.max(span.from, fade);
+    const hi = Math.min(span.to - 1, dur - 1 - fade);
+    // a span too short to clear the fades keeps its middle
+    return { sceneId: scene.id, frame: lo <= hi ? Math.min(hi, Math.max(lo, mid)) : mid };
+  }
+  const first = timeline.scenes[0]!;
+  return { sceneId: first.id, frame: Math.floor(first.durationFrames / 2) };
+}
+
+/**
  * YouTube thumbnail (1280×720) for 16:9 outputs: the script's `::thumbnail{src=...}` image
- * (scaled and letterboxed), otherwise a still of the first scene's middle (usually the title
- * card), rendered by the same components.
+ * (scaled and letterboxed), otherwise a still at `thumbnailTarget` (usually the title card),
+ * rendered by the same components.
  */
 export async function writeThumbnail(
   script: Script,
@@ -80,18 +117,24 @@ export async function writeThumbnail(
     await fitThumbnail(resolve(scriptDir, thumb.attrs.src), out, fit, mark);
     return out;
   }
-  const first = opts.timeline.scenes[0]!;
+  // The still renders with opts.transition (render passes none: no fades are drawn), so the fade
+  // clamp only matters for a caller that passes `transition: 'fade'`.
+  const target = thumbnailTarget(
+    opts.timeline,
+    characterModeFor(script, opts.timeline.output),
+    opts.transition,
+  );
   const dir = join(opts.workDir, 'thumbnail');
   mkdirSync(dir, { recursive: true });
   const still = join(dir, 'still.png');
   // No subtitles on a thumbnail.
   const timeline = {
     ...opts.timeline,
-    scenes: opts.timeline.scenes.map((sc) => (sc === first ? { ...sc, subtitles: [] } : sc)),
+    scenes: opts.timeline.scenes.map((sc) =>
+      sc.id === target.sceneId ? { ...sc, subtitles: [] } : sc,
+    ),
   };
-  await renderStills({ ...opts, timeline, scale: 1 }, [
-    { sceneId: first.id, frame: Math.floor(first.durationFrames / 2), output: still },
-  ]);
+  await renderStills({ ...opts, timeline, scale: 1 }, [{ ...target, output: still }]);
   await fitThumbnail(still, out, fit, mark);
   return out;
 }

@@ -171,6 +171,7 @@ export {
   type Engine,
 } from './acting.js';
 export { lintActing, sidesOf } from './lint-acting.js';
+export { characterModeFor, lintVisuals, sceneHasVisual } from './lint-visual.js';
 export {
   FACE_HOLD_S,
   FADE_S,

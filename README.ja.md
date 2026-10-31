@@ -56,7 +56,7 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 | `doctor`                                                                                                                                                 | Node、ffmpeg、uv、Python 環境、モデル、フォントをチェック                                                                                       |
 | `--version [--json]`                                                                                                                                     | 固定するバージョン: semver とコードのハッシュ（ツールは `--json`）                                                                              |
 | `new <dir> [--lang ko]`                                                                                                                                  | 最初の台本が入った新しい動画フォルダを作る                                                                                                      |
-| `lint <script>`                                                                                                                                          | 静的チェック: 文法、素材（画像はバイト列で PNG/JPEG、`::video` は mp4/webm/mov/m4v）、読み、字幕の分量、長さ                                    |
+| `lint <script>`                                                                                                                                          | 静的チェック: 文法、素材（画像はバイト列で PNG/JPEG、`::video` は mp4/webm/mov/m4v）、読み、字幕の分量、長さ、`no-visual`（空のシーン）         |
 | `check <script>`                                                                                                                                         | すべての字幕を実際のレンダラーで配置し、はみ出しを確認                                                                                          |
 | `sentences <script> [--json]`                                                                                                                            | 文の id 一覧（`tts --retry` 用）。`--json`: 文ごとの lock キー、演技の属性、選んだテイク、lock の状態（ASR が聞いたか）                         |
 | `say "<text>" --script <script>`                                                                                                                         | 1 文を合成して再生（読みの確認）                                                                                                                |
@@ -203,6 +203,12 @@ sha256）が入り、絵がない face があると `null` になります。1 �
 ゆっくりした Ken Burns の動き）、`:::bullets`、`:::code`（行の強調）、`:::table`（行の強調）、`:::chart`（棒グラフ）、
 `:::compare`（2–3 列）、`:::gallery`、`:::quote`、`:::markdown`、`:::split`（画像 + テキスト）、
 `:::diagram`（mermaid）、`::video`。
+ナレーションがあるのに最初のビジュアルがない、またはラベルのない `::title` のシーン（ナレーションが何もない背景で始まる）には、
+スクリプトを読むすべてのコマンドが `no-visual` 警告を出します。終了コードは変わりません。
+画面を埋めない画像（16:9 の中の縦長・正方形の絵）は、Ken Burns の動きも含めて下の字幕より上に描きます。
+`::video` と `:::split` / `:::gallery` の中の画像はまだ合わせません。0.13.0 からこうした画像は以前より小さくなるため、
+以前のバージョンで承認したスチルは再レンダーの結果と異なります。
+`::thumbnail` がないとき、サムネイルはビジュアルのある最初のシーンの最初のビジュアルの中ほどです（キャラクターがいれば最初のシーン）。
 音: 話している間は自動で小さくなる BGM、合成した効果音（`sfx: auto`）、シーンのフェード。
 見た目: `theme: light | dark`、隅のロゴ、`subtitleStyle`（サイズ、位置、色、フォント）。
 
