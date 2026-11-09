@@ -20,7 +20,9 @@ cast:                                     # speakers, in order (the first is the
     side: left                            # left | right (dialogue / characters)
     avatar: assets/sohee.png              # circle avatar when there is no character art
 outputs:
-  youtube: { aspect: "16:9", layout: presenter }        # presenter | dialogue | shorts
+  youtube: { aspect: "16:9" }                           # layout: presenter (default) | fullscreen | dialogue | shorts
+  # presenter and fullscreen currently render the same; character art shows in any layout when every speaker has it;
+  # dialogue adds circle avatars for 2–4 speakers without art
   shorts: { aspect: "9:16", layout: shorts, scenes: [problem], maxDuration: 60 }   # shot: full ignores ::shot here
   # subtitles: sentence | word   (word is the default for the shorts layout)
 pronounce:                                # display text → what TTS reads (ko/ja)

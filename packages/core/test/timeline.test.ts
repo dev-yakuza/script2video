@@ -149,8 +149,8 @@ describe('groupSubtitles', () => {
     const groups = groupSubtitles(text, spans, 'ko', 20).map((g) => text.slice(g.start, g.end));
     expect(groups).toEqual([
       '오른쪽 위의 설정 버튼을 누르면,',
-      '새 프로젝트를 만들 수 있는 화면이',
-      '나타납니다.',
+      '새 프로젝트를 만들 수 있는',
+      '화면이 나타납니다.',
     ]);
   });
 });
@@ -172,6 +172,316 @@ describe('groupSubtitles with cue phrases', () => {
       text.slice(g.start, g.end),
     );
     expect(kept).toEqual(['가장 큰 원인은', '렌더링을 막는 리소스였는데요.']);
+  });
+});
+
+/** Spans for the given words, in order; words not in `words` stay unaligned (like the aligner). */
+function spansOf(text: string, words: string[]) {
+  let cursor = 0;
+  return words.map((w, i) => {
+    const start = text.indexOf(w, cursor);
+    if (start < 0) throw new Error(`no "${w}" in "${text}"`);
+    cursor = start + w.length;
+    return { start, end: cursor, t0: i, t1: i + 1 };
+  });
+}
+const cut = (
+  text: string,
+  words: string[],
+  lang: 'ko' | 'en' | 'ja',
+  max?: number,
+  keep: { start: number; end: number }[] = [],
+) =>
+  groupSubtitles(text, spansOf(text, words), lang, max, keep).map((g) =>
+    text.slice(g.start, g.end),
+  );
+/** The greedy grouping before P18: the oracle for groups whose tail was long enough. */
+function greedy(text: string, spans: { start: number; end: number }[], max: number) {
+  const out: { first: number; last: number }[] = [];
+  for (let i = 0; i < spans.length; i++) {
+    const open = out[out.length - 1];
+    if (!open) {
+      out.push({ first: i, last: i });
+      continue;
+    }
+    const gap = text.slice(spans[i - 1]!.end, spans[i]!.start);
+    const ok = /\s/.test(gap) && !/[\p{L}\p{N}]/u.test(gap);
+    const comma = gap.includes(',');
+    if (ok && (spans[i]!.end - spans[open.first]!.start > max || comma))
+      out.push({ first: i, last: i });
+    else open.last = i;
+  }
+  return out;
+}
+
+describe('groupSubtitles: short tails (P18)', () => {
+  it('moves a lone predicate back to the group before it', () => {
+    const text = '이 단어는 공항 안내 방송에서 자주 들을 수 있으니 꼭 기억해 두면 좋습니다.';
+    const words = text.replace('.', '').split(' ');
+    // greedy: '… 꼭 기억해 두면' / '좋습니다.' (4 < 7)
+    expect(cut(text, words, 'ko')).toEqual([
+      '이 단어는 공항 안내 방송에서 자주',
+      '들을 수 있으니 꼭 기억해',
+      '두면 좋습니다.',
+    ]);
+    const groups = cut(text, words, 'ko');
+    expect(groups.join(' ')).toBe(text);
+  });
+
+  it('repairs the tail to the latest boundary and keeps the group count', () => {
+    const text = '출국 심사를 마친 뒤에는 면세 구역에서 쇼핑을 씁니다.';
+    const words = text.replace('.', '').split(' ');
+    // greedy tail '구역에서 쇼핑을 씁니다.' is long enough: unchanged
+    expect(cut(text, words, 'ko')).toEqual([
+      '출국 심사를 마친 뒤에는 면세',
+      '구역에서 쇼핑을 씁니다.',
+    ]);
+    const text2 = '여권과 탑승권을 함께 보여 주시면 됩니다.';
+    // greedy (20): '여권과 탑승권을 함께 보여 주시면' (18) / '됩니다.' (3) → '…함께 보여' / '주시면 됩니다.'
+    expect(cut(text2, text2.replace('.', '').split(' '), 'ko')).toEqual([
+      '여권과 탑승권을 함께 보여',
+      '주시면 됩니다.',
+    ]);
+  });
+
+  it('leaves the tail when every move would make the group before it short', () => {
+    // moving the break before the long word would leave '네' (1 < 7) alone
+    expect(
+      cut(
+        '네 가나다라마바사아자차카타파하파 됩니다.',
+        ['네', '가나다라마바사아자차카타파하파', '됩니다'],
+        'ko',
+      ),
+    ).toEqual(['네 가나다라마바사아자차카타파하파', '됩니다.']);
+  });
+
+  it('pins each rule of the repair', () => {
+    // no break in a gap that holds an unaligned word (it would drop 'Node.js')
+    expect(
+      cut(
+        '설정 화면에서 Node.js 버전을 확인합니다.',
+        ['설정', '화면에서', '버전을', '확인합니다'],
+        'ko',
+        8,
+      ),
+    ).toEqual(['설정 화면에서 Node.js 버전을', '확인합니다.']);
+    // a tail before a comma break is repaired too
+    expect(
+      cut(
+        '이번 영상에서는 설정 화면을 함께 열어 봐요, 그럼 시작합니다.',
+        ['이번', '영상에서는', '설정', '화면을', '함께', '열어', '봐요', '그럼', '시작합니다'],
+        'ko',
+      ),
+    ).toEqual(['이번 영상에서는 설정 화면을', '함께 열어 봐요,', '그럼 시작합니다.']);
+    // text-mode spans include the period; the length check ignores it (tail '확인해보아요' = 6 < 7)
+    const t = '이번 영상에서는 설정 화면을 함께 확인해보아요.';
+    const textSpans = [...t.matchAll(/\S+/gu)].map((m) => ({
+      start: m.index,
+      end: m.index + m[0].length,
+      t0: 0,
+      t1: 0,
+    }));
+    expect(groupSubtitles(t, textSpans, 'ko').map((g) => t.slice(g.start, g.end))).toEqual([
+      '이번 영상에서는 설정 화면을',
+      '함께 확인해보아요.',
+    ]);
+    // ja: a greedy break after a particle stays, even with a short tail
+    expect(
+      cut(
+        '右上にある歯車ボタンから設定画面を確認します。',
+        [
+          '右上',
+          'に',
+          'ある',
+          '歯車',
+          'ボタン',
+          'から',
+          '設定',
+          '画面',
+          'を',
+          '確認',
+          'し',
+          'ます',
+        ],
+        'ja',
+      ),
+    ).toEqual(['右上にある歯車ボタンから設定画面を', '確認します。']);
+    // ja: a gap of openers only is a repair boundary; 「 starts the tail
+    expect(
+      cut(
+        '新しいバージョンのアプリをインストールしたら「設定」画面を開きます。',
+        [
+          '新しい',
+          'バージョン',
+          'の',
+          'アプリ',
+          'を',
+          'インストール',
+          'し',
+          'たら',
+          '設定',
+          '画面',
+          'を',
+          '開き',
+          'ます',
+        ],
+        'ja',
+      ),
+    ).toEqual(['新しいバージョンのアプリを', 'インストールしたら', '「設定」画面を開きます。']);
+  });
+
+  it('does not repair a group after a comma', () => {
+    // '네' is short, but its break is the comma: moving it would put the comma mid-group
+    expect(
+      cut(
+        '오늘은 설정 화면을 같이 볼게요, 네.',
+        ['오늘은', '설정', '화면을', '같이', '볼게요', '네'],
+        'ko',
+      ),
+    ).toEqual(['오늘은 설정 화면을 같이 볼게요,', '네.']);
+  });
+
+  it('never cuts a cue phrase when repairing', () => {
+    const text = '여권과 탑승권을 함께 보여 주시면 됩니다.';
+    const cue = { start: text.indexOf('보여'), end: text.indexOf('주시면') + 3 };
+    // the latest boundary ('주시면') is inside the phrase: the break moves to the phrase start
+    expect(cut(text, text.replace('.', '').split(' '), 'ko', 20, [cue])).toEqual([
+      '여권과 탑승권을 함께',
+      '보여 주시면 됩니다.',
+    ]);
+  });
+
+  it('keeps words the aligner did not match', () => {
+    const text =
+      'Node.js makes this easy, and a re-render reuses every finished scene, open localhost:3000.';
+    const words = [
+      'makes',
+      'this',
+      'easy',
+      'and',
+      'a',
+      'reuses',
+      'every',
+      'finished',
+      'scene',
+      'open',
+    ];
+    const groups = cut(text, words, 'en', 20);
+    const joined = groups.join(' ');
+    for (const w of ['Node.js', 're-render', 'localhost:3000.']) expect(joined).toContain(w);
+    expect(joined).toBe(text);
+  });
+
+  it('keeps quotes with their words', () => {
+    const text = '원하는 항목을 고른 다음 "저장"을 눌러요.';
+    expect(cut(text, ['원하는', '항목을', '고른', '다음', '저장', '을', '눌러요'], 'ko')).toEqual([
+      '원하는 항목을 고른',
+      '다음 "저장"을 눌러요.',
+    ]);
+    const t2 = '화면 오른쪽 위 모서리에 있는 "저장" 버튼을 누릅니다.';
+    // a greedy break before ' "저장"': the quote starts the next group (it used to be dropped)
+    expect(
+      cut(t2, ['화면', '오른쪽', '위', '모서리에', '있는', '저장', '버튼을', '누릅니다'], 'ko', 16),
+    ).toEqual(['화면 오른쪽 위 모서리에 있는', '"저장" 버튼을 누릅니다.']);
+  });
+
+  it('ja: phrase-start repairs, digits, and 「 with its word', () => {
+    const a = 'アプリを開いて上の設定画面を確認します。';
+    expect(
+      cut(
+        a,
+        ['アプリ', 'を', '開いて', '上', 'の', '設定', '画面', 'を', '確認', 'します'],
+        'ja',
+        14,
+      ),
+    ).toEqual(['アプリを開いて上の設定画面を', '確認します。']);
+    const b = 'アプリを入れてからインストールしたら「設定」画面を開きます。';
+    const wb = [
+      'アプリ',
+      'を',
+      '入れて',
+      'から',
+      'インストール',
+      'したら',
+      '設定',
+      '画面',
+      'を',
+      '開き',
+      'ます',
+    ];
+    expect(cut(b, wb, 'ja')).toEqual([
+      'アプリを入れてからインストールしたら',
+      '「設定」画面を開きます。',
+    ]);
+    // greedy tail 'ます' (2 < 6) moves back to the phrase that starts with a digit
+    const c = 'まずはアプリの設定を3回押します。';
+    const wc = ['まずは', 'アプリ', 'の', '設定', 'を', '3', '回', '押し', 'ます'];
+    expect(cut(c, wc, 'ja', 15)).toEqual(['まずはアプリの設定を', '3回押します。']);
+  });
+
+  it('property: same count as greedy, tails repaired, nothing dropped, phrases whole', () => {
+    let seed = 7;
+    const rnd = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    const syl = '가나다라마바사아자차카타파하';
+    const max = 20;
+    const tailMin = 7;
+    for (let n = 0; n < 3000; n++) {
+      const count = 3 + rnd(14);
+      const words = Array.from({ length: count }, () =>
+        Array.from({ length: 1 + rnd(6) }, () => syl[rnd(syl.length)]).join(''),
+      );
+      const commaAt = rnd(3) === 0 ? rnd(count - 1) : -1;
+      const text = words.map((w, i) => (i === commaAt ? `${w},` : w)).join(' ') + '.';
+      // multi-token eojeols (split a word in two spans) and unaligned words (no span), first/last included
+      let cursor = 0;
+      const spans: { start: number; end: number; t0: number; t1: number }[] = [];
+      words.forEach((w, i) => {
+        const start = text.indexOf(w, cursor);
+        cursor = start + w.length;
+        if (rnd(20) === 0) return;
+        if (w.length > 2 && rnd(4) === 0) {
+          const mid = start + 1 + rnd(w.length - 1);
+          spans.push(
+            { start, end: mid, t0: i, t1: i + 0.5 },
+            { start: mid, end: cursor, t0: i + 0.5, t1: i + 1 },
+          );
+        } else spans.push({ start, end: cursor, t0: i, t1: i + 1 });
+      });
+      if (spans.length === 0) continue;
+      const a = rnd(spans.length);
+      const b = Math.min(spans.length - 1, a + rnd(3));
+      const keep = rnd(2) ? [{ start: spans[a]!.start, end: spans[b]!.end }] : [];
+      const got = groupSubtitles(text, spans, 'ko', max, keep);
+      const texts = got.map((g) => text.slice(g.start, g.end));
+      // nothing dropped: the groups joined by spaces are the sentence
+      expect(texts.join(' ')).toBe(text);
+      for (const r of keep)
+        expect(got.some((g) => g.start <= r.start && g.end >= r.end)).toBe(true);
+      // no break in a gap that holds a letter (an unaligned word)
+      for (let k = 1; k < got.length; k++)
+        expect(/[\p{L}\p{N}]/u.test(text.slice(got[k - 1]!.end, got[k]!.start))).toBe(false);
+      if (keep.length > 0) continue;
+      const old = greedy(text, spans, max);
+      expect(got.length).toBe(old.length);
+      // aligned-span lengths: no group longer than greedy's longest; a repaired tail is at least T
+      const firstSpan = (g: { start: number }) => spans.findIndex((s) => s.start >= g.start);
+      const lastSpan = (g: { end: number }) => spans.findLastIndex((s) => s.end <= g.end);
+      const alen = (i: number, j: number) =>
+        spans[j]!.end -
+        /[^\p{L}\p{N}]*$/u.exec(text.slice(spans[j]!.start, spans[j]!.end))![0].length -
+        spans[i]!.start;
+      const longest = Math.max(...old.map((g) => alen(g.first, g.last)));
+      for (const g of got) expect(alen(firstSpan(g), lastSpan(g))).toBeLessThanOrEqual(longest);
+      const oldLast = old[old.length - 1]!;
+      const newLast = got[got.length - 1]!;
+      const before = alen(oldLast.first, oldLast.last);
+      const after = alen(firstSpan(newLast), lastSpan(newLast));
+      if (before >= tailMin && commaAt < 0) expect(after).toBe(before);
+      else if (after !== before) expect(after).toBeGreaterThanOrEqual(tailMin);
+    }
   });
 });
 

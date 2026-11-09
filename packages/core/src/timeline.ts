@@ -217,6 +217,23 @@ export function displayWordSpans(
   return spans;
 }
 
+/**
+ * Opening quotes and brackets: they start the next subtitle group instead of ending the previous one.
+ * Straight quotes are not listed: after a word they close (`"Save,"`), and after a space the space
+ * already sends them to the next group.
+ */
+const OPENERS = new Set(['“', '‘', '(', '[', '{', '「', '『', '（', '【', '〈', '《', '［', '｛']);
+/** ja characters that cannot start a phrase: hiragana, the long-vowel mark and small katakana. */
+const JA_NO_START =
+  /[\u3041-\u309F\u30FC\u30A1\u30A3\u30A5\u30A7\u30A9\u30C3\u30E3\u30E5\u30E7\u30EE\u30F5\u30F6]/u;
+
+/**
+ * Subtitle groups for one sentence. Greedy: a group grows until the next word would pass
+ * `maxChars`, a comma ends it, and a cue phrase is never cut. A short tail (under a third of
+ * `maxChars`, e.g. a lone Korean predicate) then takes words from the group before it, moving the
+ * break back to the latest boundary that leaves both groups at least that long. Words the aligner
+ * did not match never sit at a break, so they stay in the text.
+ */
 export function groupSubtitles(
   text: string,
   spans: WordSpan[],
@@ -225,36 +242,96 @@ export function groupSubtitles(
   /** Character ranges that must stay in one subtitle group (cue phrases). */
   keepTogether: { start: number; end: number }[] = [],
 ): WordSpan[] {
-  const groups: WordSpan[] = [];
-  let cur: WordSpan | null = null;
-  for (const s of spans) {
-    const open: WordSpan | null = cur;
-    if (open) {
-      const gap = text.slice(open.end, s.start);
-      const insidePhrase = keepTogether.some((r) => s.start > r.start && s.start < r.end);
-      const breakable = !insidePhrase && (lang === 'ja' || /\s/.test(gap));
-      const afterComma = [...gap.trim()].some((ch) => COMMAS.has(ch));
-      // A phrase that starts here and would not fit in the open group starts a new group.
-      const phrase = keepTogether.find((r) => r.start === s.start);
-      const phraseOverflows = phrase !== undefined && phrase.end - open.start > maxChars;
-      if (breakable && (s.end - open.start > maxChars || afterComma || phraseOverflows)) {
-        groups.push(open);
-        cur = { ...s };
-        continue;
-      }
-      cur = { ...open, end: s.end, t1: s.t1 };
-    } else {
-      cur = { ...s };
+  if (spans.length === 0) return [];
+  const gapBefore = (i: number) => text.slice(spans[i - 1]!.end, spans[i]!.start);
+  // a word the aligner did not match: breaking here would drop it from the subtitle
+  const unaligned = (i: number) => /[\p{L}\p{N}]/u.test(gapBefore(i));
+  const cutsPhrase = (i: number) =>
+    keepTogether.some((r) => r.start < spans[i]!.start && r.end > spans[i - 1]!.end);
+
+  // 1. greedy groups, as span index ranges
+  type Group = { first: number; last: number; after: 'start' | 'comma' | 'width' };
+  const groups: Group[] = [{ first: 0, last: 0, after: 'start' }];
+  for (let i = 1; i < spans.length; i++) {
+    const open = groups[groups.length - 1]!;
+    const s = spans[i]!;
+    const from = spans[open.first]!.start;
+    const gap = gapBefore(i);
+    const insidePhrase = keepTogether.some((r) => s.start > r.start && s.start < r.end);
+    const breakable = !insidePhrase && !unaligned(i) && (lang === 'ja' || /\s/.test(gap));
+    const afterComma = [...gap.trim()].some((ch) => COMMAS.has(ch));
+    // A phrase that starts here and would not fit in the open group starts a new group.
+    const phrase = keepTogether.find((r) => r.start === s.start);
+    const phraseOverflows = phrase !== undefined && phrase.end - from > maxChars;
+    if (breakable && (s.end - from > maxChars || afterComma || phraseOverflows)) {
+      groups.push({ first: i, last: i, after: afterComma ? 'comma' : 'width' });
+    } else open.last = i;
+  }
+
+  // 2. short tails: the last group of a sentence or before a comma, after a width break
+  const tailMin = Math.ceil(maxChars / 3);
+  const len = (first: number, last: number) => {
+    const end = spans[last]!;
+    const word = text.slice(end.start, end.end);
+    const trail = /[^\p{L}\p{N}]*$/u.exec(word)![0].length;
+    return Math.max(end.start, end.end - trail) - spans[first]!.start;
+  };
+  const jaBoundary = (i: number) => {
+    const before = text.slice(spans[i - 1]!.start, spans[i - 1]!.end);
+    const after = text.slice(spans[i]!.start, spans[i]!.end);
+    return (
+      /[\u3041-\u309F]$/u.test(before) &&
+      /^[\p{L}\p{N}]/u.test(after) &&
+      !JA_NO_START.test(after[0]!)
+    );
+  };
+  const quietGap = (i: number) => {
+    const gap = gapBefore(i);
+    return lang === 'ja' ? [...gap].every((ch) => OPENERS.has(ch)) : /^\s+$/.test(gap);
+  };
+  for (let k = 1; k < groups.length; k++) {
+    const g = groups[k]!;
+    const prev = groups[k - 1]!;
+    const isTail = k === groups.length - 1 || groups[k + 1]!.after === 'comma';
+    if (g.after !== 'width' || !isTail || len(g.first, g.last) >= tailMin) continue;
+    if (lang === 'ja' && jaBoundary(g.first)) continue;
+    for (let c = g.first - 1; c > prev.first; c--) {
+      if (!quietGap(c) || cutsPhrase(c) || (lang === 'ja' && !jaBoundary(c))) continue;
+      const tail = len(c, g.last);
+      // (tail > maxChars only when the group before was already over the limit: one long word)
+      if (tail < tailMin || tail > maxChars || len(prev.first, c - 1) < tailMin) continue;
+      prev.last = c - 1;
+      g.first = c;
+      break;
     }
   }
-  if (cur) groups.push(cur);
-  // Attach trailing punctuation (up to the next group) to each group.
-  return groups.map((g, k) => {
-    const next = groups[k + 1]?.start ?? text.length;
-    const tail = text.slice(g.end, next);
-    const punct = /^[^\p{L}\p{N}\s]+/u.exec(tail);
-    return punct ? { ...g, end: g.end + punct[0].length } : g;
+
+  // 3. display ranges: closing punctuation stays with the group before a break, openers go to
+  // the next one; the first and last groups reach the sentence ends.
+  const starts: number[] = [];
+  const ends: number[] = [];
+  groups.forEach((g, k) => {
+    if (k === 0) starts.push(text.length - text.trimStart().length);
+    const end = spans[g.last]!.end;
+    if (k === groups.length - 1) {
+      ends.push(text.trimEnd().length);
+      return;
+    }
+    const next = spans[groups[k + 1]!.first]!.start;
+    let attach = end;
+    while (attach < next && !/[\p{L}\p{N}\s]/u.test(text[attach]!) && !OPENERS.has(text[attach]!))
+      attach++;
+    ends.push(attach);
+    let start = attach;
+    while (start < next && /\s/.test(text[start]!)) start++;
+    starts.push(start);
   });
+  return groups.map((g, k) => ({
+    start: starts[k]!,
+    end: ends[k]!,
+    t0: spans[g.first]!.t0,
+    t1: spans[g.last]!.t1,
+  }));
 }
 
 /** Highlight units for word-level subtitles: ko/en merge tokens up to whitespace (eojeol / word). */
