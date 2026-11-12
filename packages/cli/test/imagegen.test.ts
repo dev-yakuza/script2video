@@ -1,19 +1,25 @@
 import { mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { imagegenCheck } from '../src/doctor.js';
 import { DUP_WINDOW_MS, resetShutdownForTests } from '../src/shutdown.js';
 import {
   defaultMemoryLimitGb,
   EXIT_MEMORY,
   imagegenSupported,
+  MIN_RAM_GB,
   modelsDir,
   modelStates,
+  oldModelsDir,
+  oldModelsHint,
   planSetup,
   readImagegenLock,
   runRound,
   runWatched,
+  setupStop,
+  type ModelState,
+  type SetupPlan,
 } from '../src/imagegen.js';
 
 const REPO = resolve(import.meta.dirname, '..', '..', '..');
@@ -230,11 +236,89 @@ describe('imagegen setup plan', () => {
     expect(imagegenCheck(REPO, false)).toMatchObject({ ok: true, optional: true });
     const c = imagegenCheck(REPO, true);
     expect(c.optional).toBe(true);
+    // a stale environment (doctor's uv dry run) is a warning that names setup
+    const stale = imagegenCheck(REPO, true, true, MIN_RAM_GB);
+    expect(stale).toMatchObject({ ok: false, optional: true, fix: 's2v character setup' });
+    expect(stale.detail).toContain('environment out of date');
+    expect(imagegenCheck(REPO, true, true, MIN_RAM_GB - 1).detail).toContain(
+      'not supported on this Mac',
+    );
   });
 
   it('runRound asks for setup when the environment is missing (or the platform is wrong)', async () => {
     await expect(
       runRound(tempDir('s2v-repo-'), ['--smoke', tmpdir()], { maxGb: 24 }),
     ).rejects.toThrow(imagegenSupported() ? /s2v character setup/ : /Apple silicon/);
+  });
+});
+
+describe('models folder (default ~/.cache/models, old-folder hint)', () => {
+  const saved = { HOME: process.env.HOME, S2V_MODELS_DIR: process.env.S2V_MODELS_DIR };
+  const temps: string[] = [];
+  let home: string;
+  beforeEach(() => {
+    // homedir() follows HOME: the real ~/.cache is never looked at
+    home = mkdtempSync(join(tmpdir(), 's2v-home-'));
+    temps.push(home);
+    process.env.HOME = home;
+    delete process.env.S2V_MODELS_DIR;
+  });
+  afterEach(() => {
+    for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true });
+    for (const [k, v] of Object.entries(saved))
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+  });
+  const old = () => join(home, '.cache', 'script2video', 'models');
+  const NEST = 'mv ~/.cache/script2video/models ~/.cache/models`';
+  const INTO =
+    'mv ~/.cache/script2video/models/* ~/.cache/models/ && rmdir ~/.cache/script2video/models`';
+
+  it('defaults to ~/.cache/models when S2V_MODELS_DIR is unset', () => {
+    expect(modelsDir()).toBe(join(home, '.cache', 'models'));
+    expect(oldModelsDir()).toBe(old());
+  });
+
+  it('hints only when a needed model is in the old folder', () => {
+    expect(oldModelsHint(['a__1'])).toBeUndefined(); // no old folder
+    mkdirSync(old(), { recursive: true });
+    expect(oldModelsHint(['a__1'])).toBeUndefined(); // emptied
+    mkdirSync(join(old(), 'unrelated__2'));
+    expect(oldModelsHint(['a__1'])).toBeUndefined(); // unrelated
+    mkdirSync(join(old(), 'a__1'));
+    const h = oldModelsHint(['b__3', 'a__1'])!;
+    expect(h).toMatch(/^models are in the old folder ~\/\.cache\/script2video\/models: /);
+    expect(h).toContain(NEST);
+    expect(h).toMatch(/or set S2V_MODELS_DIR$/);
+    // the new folder exists: mv would nest the old one inside it
+    mkdirSync(modelsDir(), { recursive: true });
+    expect(oldModelsHint(['a__1'])).toContain(INTO);
+    // a set S2V_MODELS_DIR is the user's choice: no hint
+    process.env.S2V_MODELS_DIR = join(home, 'elsewhere');
+    expect(oldModelsHint(['a__1'])).toBeUndefined();
+  });
+
+  it('setupStop: stops before a download or quantize step whose folder is in the old folder', () => {
+    const lock = readImagegenLock(REPO);
+    const s = modelStates(lock);
+    const plan = (steps: SetupPlan['steps']): SetupPlan => ({ steps, needGb: 0, freeGb: 0 });
+    const all = plan(['sync', 'download-source', 'download-lora', 'quantize', 'smoke']);
+    const base = (m: ModelState) => m.path.split('/').at(-1)!;
+    expect(setupStop(all, s, old())).toBeUndefined(); // no old folder
+    mkdirSync(join(old(), 'unrelated__2'), { recursive: true });
+    expect(setupStop(all, s, old())).toBeUndefined();
+    mkdirSync(join(old(), base(s.lora)));
+    expect(setupStop(all, s, old())).toContain(NEST);
+    // not passed (S2V_MODELS_DIR set): never stops
+    expect(setupStop(all, s)).toBeUndefined();
+    // a step that is done does not look
+    expect(
+      setupStop(plan(['sync', 'download-source', 'quantize', 'smoke']), s, old()),
+    ).toBeUndefined();
+    mkdirSync(join(old(), base(s.quantized)));
+    expect(setupStop(plan(['sync', 'quantize', 'smoke']), s, old())).toContain(NEST);
+    mkdirSync(modelsDir(), { recursive: true });
+    expect(setupStop(plan(['sync', 'quantize', 'smoke']), s, old())).toContain(INTO);
+    expect(setupStop(plan(['sync', 'smoke']), s, old())).toBeUndefined();
   });
 });

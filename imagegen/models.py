@@ -34,7 +34,7 @@ def exit_with_parent() -> None:
 
 
 def models_dir() -> Path:
-    return Path(os.environ.get("S2V_MODELS_DIR", Path.home() / ".cache" / "script2video" / "models"))
+    return Path(os.environ.get("S2V_MODELS_DIR", Path.home() / ".cache" / "models"))
 
 
 def load_lock() -> dict:

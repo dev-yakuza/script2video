@@ -4,7 +4,7 @@ Usage:
     uv run python scripts/fetch_models.py qwen3-tts-1.7b-customvoice supertonic-3
     uv run python scripts/fetch_models.py --all
 
-Snapshots are stored under $S2V_MODELS_DIR (default: ~/.cache/script2video/models)
+Snapshots are stored under $S2V_MODELS_DIR (default: ~/.cache/models, shared with other projects)
 as <name>__<revision[:12]> with non-identifier characters replaced by "_" (transformers
 derives Python module names from the directory name), so a revision bump never overwrites
 an older snapshot.
@@ -25,7 +25,7 @@ LOCK_PATH = REPO_ROOT / "models.lock.json"
 
 
 def models_dir() -> Path:
-    return Path(os.environ.get("S2V_MODELS_DIR", Path.home() / ".cache" / "script2video" / "models"))
+    return Path(os.environ.get("S2V_MODELS_DIR", Path.home() / ".cache" / "models"))
 
 
 def snapshot_path(name: str, revision: str) -> Path:

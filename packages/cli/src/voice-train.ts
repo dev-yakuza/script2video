@@ -36,7 +36,7 @@ import {
   type TrainMeasure,
 } from '@script2video/core';
 import { ExitError } from './errors.js';
-import { defaultMemoryLimitGb, modelsDir, runWatched } from './imagegen.js';
+import { defaultMemoryLimitGb, modelsDir, oldModelsHint, runWatched } from './imagegen.js';
 import { checkVoice, resolvePersona, vectorShaOf, type PersonaRef } from './persona.js';
 import { ALIGNER, Service, TTS_SERVER } from './services.js';
 import { measureTrainClip, TRAIN_MEASURE_VERSION } from './train-data.js';
@@ -152,10 +152,12 @@ export async function trainVoice(
     [MODEL, 'speech_tokenizer'],
     ['qwen3-tts-1.7b-base', ''],
   ] as const)
-    if (!custom && !existsSync(join(snapshot(name), inside)))
+    if (!custom && !existsSync(join(snapshot(name), inside))) {
+      const hint = oldModelsHint([basename(snapshot(name))]);
       throw new Error(
-        `model ${name} is not installed: (cd tts-server && uv run --frozen python scripts/fetch_models.py ${name})`,
+        `model ${name} is not installed: (cd tts-server && uv run --frozen python scripts/fetch_models.py ${name})${hint ? `\n${hint}` : ''}`,
       );
+    }
   const trainer = trainerCommand(repoRoot, custom);
   if (!custom && !existsSync(trainer.cmd))
     throw new Error(`${trainer.cmd} not found: (cd tts-server && uv sync --frozen)`);

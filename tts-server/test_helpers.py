@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "scripts"))
 
-from fetch_models import snapshot_path  # noqa: E402
+from fetch_models import models_dir, snapshot_path  # noqa: E402
 import json  # noqa: E402
 import tempfile  # noqa: E402
 
@@ -34,6 +36,11 @@ class HelpersTest(unittest.TestCase):
         # packages/cli/src/doctor.ts builds the same name; both must agree.
         p = snapshot_path("qwen3-tts-1.7b-customvoice", "0c0e3051f131929182e2c023b9537f8b1c68adfe")
         self.assertEqual(p.name, "qwen3_tts_1_7b_customvoice__0c0e3051f131")
+
+    def test_models_default_to_the_shared_cache_folder(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "S2V_MODELS_DIR"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(models_dir(), Path.home() / ".cache" / "models")
 
 
 # the same vector and sha as packages/cli/test/trained.test.ts (TS vectorShaOf)

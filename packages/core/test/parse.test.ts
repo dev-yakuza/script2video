@@ -191,6 +191,27 @@ a: 1
     expect(bad.diagnostics.items[0]!.code).toBe('frontmatter-schema');
   });
 
+  it('says a missing aspect or lang is required (zod 4 says only "Invalid option")', () => {
+    const messages = (src: string) => parseScript(src).diagnostics.items.map((d) => d.message);
+    expect(
+      messages('---\nlang: ko\noutputs:\n  youtube: { layout: presenter }\n---\n\n# x\n\n본문.'),
+    ).toEqual(['outputs.youtube.aspect: required: one of 16:9, 9:16, 1:1']);
+    // an empty YAML value is null: also missing
+    expect(
+      messages('---\nlang: ko\noutputs:\n  youtube: { aspect: }\n---\n\n# x\n\n본문.'),
+    ).toEqual(['outputs.youtube.aspect: required: one of 16:9, 9:16, 1:1']);
+    expect(messages('---\ntitle: x\n---\n\n# x\n\n본문.')).toEqual([
+      'lang: required: one of ko, en, ja',
+    ]);
+    // a wrong value keeps zod's own message
+    const wrong = messages(
+      '---\nlang: ko\noutputs:\n  youtube: { aspect: "4:3" }\n---\n\n# x\n\n본문.',
+    );
+    expect(wrong).toHaveLength(1);
+    expect(wrong[0]).toMatch(/^outputs\.youtube\.aspect: Invalid option/);
+    expect(wrong[0]).not.toContain('required');
+  });
+
   it('parses a code visual from a fenced block inside :::code', () => {
     const src = fm(`# 코드 {#hook}
 

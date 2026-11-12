@@ -50,6 +50,24 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 #   out/sample-ko/shorts.ko.mp4
 ```
 
+### Where models are stored
+
+Models go in `~/.cache/models` (shared with other projects); set `S2V_MODELS_DIR` to use another
+folder. Before 0.13.2 the default was `~/.cache/script2video/models`, and s2v no longer looks
+there (`doctor` says when a missing model is still in it). Only the models moved: fonts stay in
+`~/.cache/script2video/fonts`. To move them:
+
+```sh
+# ~/.cache/models does not exist yet
+mv ~/.cache/script2video/models ~/.cache/models
+# ~/.cache/models exists: move what is inside
+mv ~/.cache/script2video/models/* ~/.cache/models/
+rm -f ~/.cache/script2video/models/.DS_Store && rmdir ~/.cache/script2video/models
+```
+
+If `mv` stops with "Directory not empty", the same model is in both folders: compare them, delete
+one, and run the command again.
+
 ## Commands
 
 | command                                                                                                                                                  | what it does                                                                                                                                                   |

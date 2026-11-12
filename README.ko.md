@@ -49,6 +49,24 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 #   out/sample-ko/shorts.ko.mp4
 ```
 
+### 모델 저장 위치
+
+모델은 `~/.cache/models`에 둡니다(다른 프로젝트와 함께 씁니다). 다른 폴더를 쓰려면
+`S2V_MODELS_DIR`를 설정합니다. 0.13.2 전의 기본값은 `~/.cache/script2video/models`였고, 이제
+s2v는 그 폴더를 보지 않습니다(없는 모델이 아직 그곳에 있으면 `doctor`가 알려 줍니다). 옮겨진 것은
+모델뿐이고 폰트는 `~/.cache/script2video/fonts`에 그대로 있습니다. 옮기는 방법:
+
+```sh
+# ~/.cache/models가 아직 없을 때
+mv ~/.cache/script2video/models ~/.cache/models
+# ~/.cache/models가 이미 있을 때: 안의 것을 옮김
+mv ~/.cache/script2video/models/* ~/.cache/models/
+rm -f ~/.cache/script2video/models/.DS_Store && rmdir ~/.cache/script2video/models
+```
+
+`mv`가 "Directory not empty"로 멈추면 같은 모델이 두 폴더에 다 있는 것입니다. 둘을 비교해 하나를
+지우고 명령을 다시 실행합니다.
+
 ## 명령어
 
 | 명령어                                                                                                                                                   | 하는 일                                                                                                                                |

@@ -20,7 +20,7 @@ import {
   statfsSync,
 } from 'node:fs';
 import { constants, homedir, tmpdir, totalmem } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { ExitError } from './errors.js';
 import { acquireHeavy } from './heavy-lock.js';
@@ -59,9 +59,35 @@ export function readImagegenLock(repoRoot: string): ImagegenLock {
   return JSON.parse(readFileSync(join(repoRoot, IMAGEGEN_LOCK), 'utf8')) as ImagegenLock;
 }
 
-/** Absolute: the Python steps run in imagegen/ and get it through the environment. */
+/**
+ * Absolute: the Python steps run in imagegen/ and get it through the environment. Shared with
+ * other projects (0.13.2); the old default is never read.
+ */
 export const modelsDir = () =>
-  resolve(process.env.S2V_MODELS_DIR ?? join(homedir(), '.cache', 'script2video', 'models'));
+  resolve(process.env.S2V_MODELS_DIR ?? join(homedir(), '.cache', 'models'));
+
+/** The default before 0.13.2. */
+export const oldModelsDir = () => join(homedir(), '.cache', 'script2video', 'models');
+
+/** How to move them: mv into an existing folder would nest the old one inside it. */
+const moveHint = (newExists: boolean) =>
+  `models are in the old folder ~/.cache/script2video/models: move them with \`${
+    newExists
+      ? 'mv ~/.cache/script2video/models/* ~/.cache/models/ && rmdir ~/.cache/script2video/models'
+      : 'mv ~/.cache/script2video/models ~/.cache/models'
+  }\` or set S2V_MODELS_DIR`;
+
+/**
+ * A hint when S2V_MODELS_DIR is unset and one of `needed` (folder names of the caller's missing
+ * models) is in the old default folder; an emptied or unrelated old folder gives none.
+ */
+export function oldModelsHint(needed: string[]): string | undefined {
+  if (process.env.S2V_MODELS_DIR !== undefined) return undefined;
+  const old = oldModelsDir();
+  return needed.some((n) => existsSync(join(old, n)))
+    ? moveHint(existsSync(modelsDir()))
+    : undefined;
+}
 
 /** Environment for the Python steps: the same models folder, unbuffered output, the lifeline. */
 const pythonEnv = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
@@ -405,6 +431,28 @@ export function planSetup(_repoRoot: string, lock: ImagegenLock): SetupPlan {
 }
 
 /**
+ * Why `setup` stops before downloading: a model a download or quantize step would make is already
+ * in `oldDir` (the old default; the caller passes it only when S2V_MODELS_DIR is unset).
+ */
+export function setupStop(
+  plan: SetupPlan,
+  states: ReturnType<typeof modelStates>,
+  oldDir?: string,
+): string | undefined {
+  if (oldDir === undefined) return undefined;
+  const made = {
+    'download-source': states.source,
+    'download-lora': states.lora,
+    quantize: states.quantized,
+  } as Partial<Record<SetupPlan['steps'][number], ModelState>>;
+  const found = plan.steps.some((step) => {
+    const m = made[step];
+    return m !== undefined && existsSync(join(oldDir, basename(m.path)));
+  });
+  return found ? moveHint(existsSync(dirname(states.source.path))) : undefined;
+}
+
+/**
  * Run a step with the terminal's output. With `lifeline` (Python steps; pythonEnv sets
  * S2V_LIFELINE), stdin is a pipe kept open by this process, never the terminal: the Python side
  * exits when it closes.
@@ -466,6 +514,13 @@ export async function setupImagegen(
   log('setup holds the machine lock until it ends: TTS commands wait (exit 73) meanwhile');
   const lock = readImagegenLock(repoRoot);
   const plan = planSetup(repoRoot, lock);
+  // models left in the old default folder: stop rather than download them again
+  const stop = setupStop(
+    plan,
+    modelStates(lock),
+    process.env.S2V_MODELS_DIR === undefined ? oldModelsDir() : undefined,
+  );
+  if (stop) throw new Error(stop);
   if (opts.explicit && plan.steps.includes('quantize') && opts.maxGb < QUANTIZE_PEAK_GB)
     throw new Error(
       `quantization needs about ${QUANTIZE_PEAK_GB} GB: --max-memory-gb ${opts.maxGb} would stop it every time`,

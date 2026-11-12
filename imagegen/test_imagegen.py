@@ -91,6 +91,11 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(p.wait(10), 1)
         self.assertLess(time.time() - t, 5)
 
+    def test_models_default_to_the_shared_cache_folder(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "S2V_MODELS_DIR"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(models.models_dir(), Path.home() / ".cache" / "models")
+
     def test_folders_keep_the_lock_name_and_count_only_with_a_marker(self) -> None:
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"S2V_MODELS_DIR": d}):
             lock = models.load_lock()

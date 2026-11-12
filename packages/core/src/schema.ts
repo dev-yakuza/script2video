@@ -3,6 +3,15 @@ import { z } from 'zod';
 export const LANGS = ['ko', 'en', 'ja'] as const;
 export type Lang = (typeof LANGS)[number];
 
+/**
+ * A required enum: a missing value (or an empty YAML value, null) says so and lists the choices;
+ * a wrong value keeps zod's message. zod 4 ignores `required_error`.
+ */
+const requiredOneOf = (values: readonly string[]) => ({
+  error: (iss: { input?: unknown }) =>
+    iss.input == null ? `required: one of ${values.join(', ')}` : undefined,
+});
+
 /** `qwen:<speaker>` | `persona:<id>` | `supertonic:<F1-F5|M1-M5>` */
 export const voiceSpecSchema = z
   .string()
@@ -157,7 +166,7 @@ export const rhythmValuesSchema = z.strictObject({
 });
 
 export const outputProfileSchema = z.object({
-  aspect: z.enum(ASPECTS),
+  aspect: z.enum(ASPECTS, requiredOneOf(ASPECTS)),
   layout: z.enum(LAYOUTS).default('presenter'),
   scenes: z.array(z.string()).optional(),
   maxDuration: z.number().positive().optional(),
@@ -210,7 +219,7 @@ export type Pacing = z.infer<typeof pacingSchema>;
 
 export const frontmatterSchema = z.object({
   title: z.string().optional(),
-  lang: z.enum(LANGS),
+  lang: z.enum(LANGS, requiredOneOf(LANGS)),
   cast: z.record(z.string().regex(/^[A-Za-z_][\w-]*$/), castMemberSchema).default({
     host: { voice: 'qwen:Sohee', speed: 1, face: 'neutral', motion: 'auto' },
   }),

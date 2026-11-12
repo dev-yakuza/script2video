@@ -49,6 +49,24 @@ node packages/cli/dist/main.js render videos/sample-ko/script.ko.md --output sho
 #   out/sample-ko/shorts.ko.mp4
 ```
 
+### モデルの保存場所
+
+モデルは `~/.cache/models` に置きます（ほかのプロジェクトと共用）。別のフォルダーを使うには
+`S2V_MODELS_DIR` を設定します。0.13.2 より前の既定は `~/.cache/script2video/models` で、s2v は
+もうそこを見ません（足りないモデルがまだそこにあれば `doctor` が知らせます）。移ったのはモデルだけで、
+フォントは `~/.cache/script2video/fonts` のままです。移し方:
+
+```sh
+# ~/.cache/models がまだないとき
+mv ~/.cache/script2video/models ~/.cache/models
+# ~/.cache/models がもうあるとき: 中身を移す
+mv ~/.cache/script2video/models/* ~/.cache/models/
+rm -f ~/.cache/script2video/models/.DS_Store && rmdir ~/.cache/script2video/models
+```
+
+`mv` が "Directory not empty" で止まったら、同じモデルが両方のフォルダーにあります。比べて片方を
+消し、コマンドをもう一度実行します。
+
 ## コマンド
 
 | コマンド                                                                                                                                                 | 内容                                                                                                                                            |

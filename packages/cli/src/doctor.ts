@@ -6,7 +6,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, statfsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import {
   imagegenPython,
@@ -14,6 +14,7 @@ import {
   MIN_RAM_GB,
   modelsDir,
   modelStates,
+  oldModelsHint,
   ramGb,
   readImagegenLock,
 } from './imagegen.js';
@@ -53,6 +54,54 @@ async function version(cmd: string, args: string[]): Promise<string | null> {
   }
 }
 
+export interface EnvSync {
+  state: 'ok' | 'stale' | 'missing' | 'error';
+  detail: string;
+}
+
+/**
+ * Is the uv environment in `dir` usable offline? A Python patch upgrade makes uv see the venv as
+ * stale: `uv run --frozen --offline` then removes it and cannot reinstall it. A dry run changes
+ * nothing and needs no network; `--inexact` because `uv run` accepts extra packages, `--color
+ * never` because FORCE_COLOR puts ANSI codes before `Would`. The `Would` lines go to stderr.
+ */
+export function envSyncCheck(dir: string, uvCmd = 'uv', timeoutMs = 20_000): Promise<EnvSync> {
+  const args = ['sync', '--frozen', '--offline', '--inexact', '--dry-run', '--color', 'never'];
+  return new Promise((done) =>
+    execFile(uvCmd, args, { cwd: dir, timeout: timeoutMs }, (err, stdout, stderr) => {
+      const lines = `${stdout}\n${stderr}`.split('\n').map((l) => l.trimEnd());
+      if (err) {
+        const e = err as NodeJS.ErrnoException & { killed?: boolean };
+        if (e.code === 'ENOENT') return done({ state: 'error', detail: `${uvCmd} not found` });
+        if (e.killed)
+          return done({
+            state: 'error',
+            detail: `uv sync --dry-run took over ${timeoutMs / 1000} s`,
+          });
+        const at = lines.findIndex((l) => /^error:/.test(l));
+        const cause = at < 0 ? undefined : lines.slice(at + 1).find((l) => /^\s*cause:/.test(l));
+        const detail =
+          at < 0
+            ? (lines.filter((l) => l.trim()).at(-1) ?? `exit ${String(e.code)}`)
+            : [lines[at]!, ...(cause ? [cause.trim()] : [])].join(' ');
+        return done({ state: 'error', detail });
+      }
+      // "Would make no changes" is printed even with these: it describes the packages only
+      if (lines.some((l) => /^Would create project environment/.test(l)))
+        return done({ state: 'missing', detail: 'not created' });
+      const changed = lines.find((l) =>
+        /^Would (replace project environment|install|uninstall|download)/.test(l),
+      );
+      if (changed)
+        return done({
+          state: 'stale',
+          detail: `${changed}: Python or the lock changed since the environment was made`,
+        });
+      done({ state: 'ok', detail: 'in sync' });
+    }),
+  );
+}
+
 export async function doctor(repoRoot: string): Promise<Check[]> {
   const checks: Check[] = [];
   const add = (c: Check) => checks.push(c);
@@ -87,13 +136,17 @@ export async function doctor(repoRoot: string): Promise<Check[]> {
     detail: uv ?? 'not found',
     ...(uv ? {} : { fix: 'curl -LsSf https://astral.sh/uv/install.sh | sh' }),
   });
+  // in sync, not only present: a stale venv cannot be rebuilt offline
   for (const dir of ['tts-server', 'aligner']) {
-    const venv = existsSync(join(repoRoot, dir, '.venv'));
+    const r: EnvSync = uv
+      ? await envSyncCheck(join(repoRoot, dir))
+      : { state: 'error', detail: 'uv not found' };
+    const ok = r.state === 'ok';
     add({
       name: `${dir} environment`,
-      ok: venv,
-      detail: venv ? `${dir}/.venv` : 'not created',
-      ...(venv ? {} : { fix: `(cd ${dir} && uv sync --frozen)` }),
+      ok,
+      detail: ok ? `${dir}/.venv` : r.detail,
+      ...(ok || !uv ? {} : { fix: `(cd ${dir} && uv sync --frozen)  # needs the network` }),
     });
   }
 
@@ -102,12 +155,14 @@ export async function doctor(repoRoot: string): Promise<Check[]> {
       models: Record<string, { revision: string }>;
     }
   ).models;
+  const notFound: string[] = [];
   for (const [name, { revision }] of Object.entries(models)) {
     const dir = join(
       modelsDir(),
       `${name.replace(/[^0-9A-Za-z_]/g, '_')}__${revision.slice(0, 12)}`,
     );
     const ok = existsSync(dir);
+    if (!ok) notFound.push(basename(dir));
     const required = REQUIRED_MODELS.has(name);
     add({
       name: `model ${name}`,
@@ -124,7 +179,25 @@ export async function doctor(repoRoot: string): Promise<Check[]> {
     });
   }
 
-  checks.push(imagegenCheck(repoRoot));
+  const supported = imagegenSupported();
+  if (supported) {
+    // the image models too; the bf16 source only while the 4-bit model is not made
+    const s = modelStates(readImagegenLock(repoRoot));
+    for (const m of s.quantized.complete ? [s.lora] : [s.quantized, s.source, s.lora])
+      if (!m.complete) notFound.push(basename(m.path));
+  }
+  const hint = oldModelsHint(notFound);
+  if (hint) add({ name: 'models folder', ok: false, optional: true, detail: hint });
+
+  // imagegen runs .venv/bin/python directly: a stale environment still works, so only a warning
+  let stale: boolean | undefined;
+  if (uv && supported && ramGb() >= MIN_RAM_GB - 0.5 && existsSync(imagegenPython(repoRoot))) {
+    const r = await envSyncCheck(join(repoRoot, 'imagegen'));
+    stale = r.state === 'stale';
+    if (r.state === 'error')
+      add({ name: 'imagegen environment', ok: false, optional: true, detail: r.detail });
+  }
+  checks.push(imagegenCheck(repoRoot, supported, stale));
 
   const fontLock = JSON.parse(readFileSync(join(repoRoot, 'fonts.lock.json'), 'utf8')) as {
     fonts: Record<string, unknown>;
@@ -162,7 +235,13 @@ export async function doctor(repoRoot: string): Promise<Check[]> {
 }
 
 /** Character generation is optional: never a failure, only "not installed" or "not supported". */
-export function imagegenCheck(repoRoot: string, supported = imagegenSupported()): Check {
+export function imagegenCheck(
+  repoRoot: string,
+  supported = imagegenSupported(),
+  /** `uv sync --dry-run` would change imagegen/.venv (doctor's envSyncCheck). */
+  stale?: boolean,
+  ram = ramGb(),
+): Check {
   const name = 'character generation (optional)';
   if (!supported)
     return {
@@ -171,7 +250,6 @@ export function imagegenCheck(repoRoot: string, supported = imagegenSupported())
       optional: true,
       detail: 'not supported on this platform (macOS on Apple silicon only)',
     };
-  const ram = ramGb();
   if (ram < MIN_RAM_GB - 0.5)
     return {
       name,
@@ -186,13 +264,17 @@ export function imagegenCheck(repoRoot: string, supported = imagegenSupported())
     ...(s.quantized.complete ? [] : [s.quantized.name]),
     ...(s.lora.complete && existsSync(join(s.lora.path, lock.lora.file)) ? [] : [s.lora.name]),
   ];
-  return missing.length === 0
-    ? { name, ok: true, optional: true, detail: 'installed' }
-    : {
-        name,
-        ok: false,
-        optional: true,
-        detail: `not installed: ${missing.join(', ')}`,
-        fix: 's2v character setup',
-      };
+  const outdated = 'environment out of date: `s2v character setup` rebuilds it (network)';
+  if (missing.length === 0 && !stale)
+    return { name, ok: true, optional: true, detail: 'installed' };
+  return {
+    name,
+    ok: false,
+    optional: true,
+    detail: [
+      ...(missing.length ? [`not installed: ${missing.join(', ')}`] : []),
+      ...(stale ? [outdated] : []),
+    ].join('; '),
+    fix: 's2v character setup',
+  };
 }

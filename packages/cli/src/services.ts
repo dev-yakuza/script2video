@@ -140,7 +140,7 @@ export class Service {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (this.child.exitCode !== null) {
-        throw new Error(`${this.spec.id} exited early:\n${stderr}`);
+        throw new Error(`${this.spec.id} exited early (run s2v doctor):\n${stderr}`);
       }
       const h = await this.health();
       if (h) return h;
